@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { available, mustRun, probe } = require("../src/ffmpeg");
 const { checkFilm, parseExpect, parseSeconds, parseAllow, judgeStretches } = require("../src/check");
 const { readCues } = require("../src/cues");
@@ -15,6 +16,26 @@ const draw = require("../src/draw");
 const skip = !available() ? "ffmpeg not found" : false;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-check-"));
 const status = (r, name) => (r.checks.find((c) => c.name === name) || {}).status;
+const root = path.join(__dirname, "..");
+
+// ffmpeg 4.4 (Ubuntu 22.04's) takes only info and verbose for ebur128's
+// framelog, and refuses the whole filter for any other value. The value it
+// refuses is put together here, so this file does not hold it.
+const REFUSED = ["framelog", "quiet"].join("=");
+const REFUSED_PATTERN = new RegExp(["framelog", "\\s*=\\s*", "quiet"].join(""));
+
+// A stand-in for ffmpeg: a line of sh that may answer for it first (it
+// sees the arguments as "$@"), then the ffmpeg the tests run. The CLI reads
+// LAUNCH_FILM_FFMPEG once, when it starts, so the stand-in is given to a
+// CLI run of its own.
+function standIn(dir, line) {
+  const file = path.join(dir, "ffmpeg");
+  const real = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
+  fs.writeFileSync(file, `#!/bin/sh\n${line}\nexec '${real.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
+  return file;
+}
+const cli = (args, env = {}) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 180_000, env: { ...process.env, ...env } });
+const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
 
 // A small film with what check looks for: cuts at 2, 3, 6 and 9 s, black
 // from 2 to 3 s, a still picture from 6 to 9 s, silence from 4 to 6 s.
@@ -174,4 +195,32 @@ test("a timeline next to the film gives its cuts", { skip }, async () => {
   fs.writeFileSync(path.join(dir, "film.timeline.json"), JSON.stringify({ clips: [{ index: 1, kind: "scene", type: "opener", start: 0, seconds: 2 }, { index: 2, kind: "screen", start: 2, seconds: 10 }] }));
   const r = await checkFilm(file, {});
   assert.deepEqual(r.cuts.map((c) => [c.at, c.source, c.label]), [[0, "timeline", "scene opener"], [2, "timeline", "screen"]]);
+});
+
+test("no file of the kit asks ebur128 for a framelog value ffmpeg 4.4 refuses", () => {
+  // Every .js file, as a host that looks for that value reads the installed
+  // kit: hidden folders and node_modules aside.
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.name.endsWith(".js") && REFUSED_PATTERN.test(fs.readFileSync(file, "utf8"))) found.push(path.relative(root, file));
+    }
+  };
+  walk(root);
+  assert.deepEqual(found, []);
+});
+
+test("check runs on an ffmpeg that refuses ebur128's newer framelog value, as 4.4 does", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  // 4.4.2's own words for it, and its exit.
+  const ffmpeg = standIn(dir, `case "$*" in *${REFUSED}*) echo '[Parsed_ebur128_0] Unable to parse option value "quiet"' >&2; echo 'Error setting option framelog to value quiet.' >&2; exit 1;; esac`);
+  const r = cli(["check", file, "--lufs", "-22"], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /^PASS, 3 warnings: /m);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "check", "check.json"), "utf8"));
+  assert.ok(Math.abs(saved.audio.integrated - -21.6) <= 0.3, `integrated ${saved.audio.integrated}`);
 });

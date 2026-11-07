@@ -71,12 +71,14 @@ function parseAllow(text) {
 
 // The sound, measured: ebur128's loudness every 100 ms and its summary
 // (integrated loudness, range, sample and true peak), and silencedetect's
-// stretches.
+// stretches. framelog=verbose keeps ebur128's line for every 100 ms below
+// the info level its summary is read at, and every ffmpeg from 4.4 on takes
+// it.
 async function scanAudio(film, { work, duration }) {
   const notes = path.join(work, `.scan-audio-${process.pid}.txt`);
   try {
     const r = await run(["-i", film, "-vn", "-af",
-      `ebur128=metadata=1:peak=true+sample:framelog=quiet,silencedetect=n=-50dB:d=0.5,astats=measure_overall=Peak_count+Flat_factor:measure_perchannel=none,ametadata=mode=print:file=${frames.filterPath(notes)}`,
+      `ebur128=metadata=1:peak=true+sample:framelog=verbose,silencedetect=n=-50dB:d=0.5,astats=measure_overall=Peak_count+Flat_factor:measure_perchannel=none,ametadata=mode=print:file=${frames.filterPath(notes)}`,
       "-f", "null", "-"], { loglevel: "info" });
     if (r.code !== 0) throw new Error(`reading the sound: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-2).join(" | ")}`);
     const num = (re) => {

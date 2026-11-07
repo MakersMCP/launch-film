@@ -16,3 +16,18 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm test
+
+  # Ubuntu 22.04's ffmpeg 4.4.2, the oldest ffmpeg the kit runs on. There is
+  # no Chrome here, so the tests that render pages are skipped.
+  ffmpeg-4-4:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm test
