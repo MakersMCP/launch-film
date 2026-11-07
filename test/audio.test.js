@@ -54,3 +54,25 @@ test("the mix is limited and written as a float WAV", () => {
   assert.equal(head.readUInt32LE(24), 48000);
   assert.equal(head.readUInt32LE(40), seconds * 48000 * 8);
 });
+
+test("a track takes the bed's place at the bed's level", () => {
+  const seconds = 3;
+  // A track longer than the film: a steady level, the right side inverted.
+  const left = new Float32Array(4 * audio.SR).fill(0.5);
+  const right = new Float32Array(4 * audio.SR).fill(-0.5);
+  const bus = audio.trackBus({ left, right, seconds, gain: 0.8 });
+  assert.equal(bus.length, seconds * audio.SR);
+  // From the first frame, faded in over 10 ms.
+  assert.ok(bus.L[0] > 0 && bus.L[0] < 0.01, `${bus.L[0]}`);
+  assert.ok(Math.abs(bus.L[0.01 * audio.SR] - 0.4) < 1e-6);
+  // At its gain a second before the end, faded out over the last second.
+  const before = (seconds - 1) * audio.SR - 1;
+  assert.ok(Math.abs(bus.L[before] - 0.4) < 1e-6 && Math.abs(bus.R[before] + 0.4) < 1e-6);
+  assert.ok(Math.abs(bus.L[bus.length - audio.SR / 2] - 0.2) < 1e-3);
+  assert.ok(bus.L[bus.length - 1] === 0 && bus.R[bus.length - 1] === 0, "the last sample is silent");
+  // A track at -20 LUFS comes up to the beds' -14, unless its peaks would
+  // pass -1 dBFS: one peaking at -3 dBFS comes up 2 dB.
+  assert.equal(audio.TRACK_LUFS, -14);
+  assert.ok(Math.abs(20 * Math.log10(audio.trackGain({ integrated: -20, peak: -10 })) - 6) < 1e-9);
+  assert.ok(Math.abs(20 * Math.log10(audio.trackGain({ integrated: -20, peak: -3 })) - 2) < 1e-9);
+});

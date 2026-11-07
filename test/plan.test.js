@@ -3,10 +3,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { readBrand, pickLook } = require("../src/brand");
 const { planFilm, copyFrom, markEnd, findNumber, withoutName, fit } = require("../src/plan");
-const { loadFilm } = require("../src/film");
-const { MOODS } = require("../src/audio");
+const { loadFilm, checkMusic } = require("../src/film");
+const { MOODS, Bus, SR, writeWav } = require("../src/audio");
+const { available } = require("../src/ffmpeg");
 
 const fixture = path.join(__dirname, "fixtures", "acme");
 const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
@@ -99,4 +101,58 @@ test("easybrandkit's headings come first, with the page's line under each", () =
     { level: 2, text: "Intake and integrations", after: "Turn feedback into issues." }, { level: 2, text: "Planning and monitoring", after: "Plan from idea to launch." }] };
   const c = copy(brand, read);
   assert.deepEqual(c.features.map((f) => [f.title, f.text]), [["Intake and integrations", "Turn feedback into issues"], ["Planning and monitoring", "Plan from idea to launch"]]);
+});
+
+// A film of two clips, 5 s long, its last clip at 2.5 s, in a folder of its
+// own with the test brand: loadFilm's answer for each "music" value given.
+function filmWithMusic() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-music-"));
+  fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
+  const file = path.join(dir, "film.json");
+  const load = (music) => {
+    fs.writeFileSync(file, JSON.stringify({ brand: "brand/brand.json", look: "launch", ...(music === undefined ? {} : { music }), clips: [
+      { kind: "scene", seconds: 2.5, scene: { type: "opener", title: "Acme Notes" } },
+      { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png", site: "acme-notes.example" }] }));
+    return loadFilm(file);
+  };
+  return { dir, load };
+}
+
+test("film.json's music is checked before anything renders", async () => {
+  const { load } = filmWithMusic();
+  for (const value of [undefined, true, false, { volume: 0.4 }, { volume: 2 }, {}]) assert.deepEqual(load(value).problems, [], JSON.stringify(value));
+  const kinds = '"music" must be true, false, { "volume": 0.55 } or the path of an audio file';
+  for (const value of [3, "", ["a.wav"], { file: "a.wav" }]) assert.deepEqual(load(value).problems, [kinds], JSON.stringify(value));
+  assert.deepEqual(load({ volume: "loud" }).problems, ['"music" "volume" must be a number from 0 to 2 (it is "loud")']);
+  assert.deepEqual(load({ volume: 3 }).problems, ['"music" "volume" must be a number from 0 to 2 (it is 3)']);
+  // The track's file is read when the film renders, so stills of a film
+  // whose track has moved are still made.
+  const missing = load("nope.wav");
+  assert.deepEqual(missing.problems, []);
+  assert.deepEqual((await checkMusic(missing)).problems, ['"music" "nope.wav" is not a file']);
+  assert.deepEqual((await checkMusic(load(true))).problems, []);
+});
+
+test("a track with no sound, a silent one and one shorter than the film are refused", { skip: !available() && "ffmpeg not found" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const wav = (name, seconds, level) => {
+    const bus = new Bus(seconds);
+    for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = level * Math.sin((2 * Math.PI * 440 * i) / SR);
+    writeWav(path.join(dir, name), bus);
+    return name;
+  };
+  assert.deepEqual((await checkMusic(load("brand/brand.json"))).problems, ['"music" "brand/brand.json" has no sound ffmpeg can read']);
+  const [short] = (await checkMusic(load(wav("short.wav", 1, 0.3)))).problems;
+  assert.match(short, /^"music" "short\.wav" lasts 1\.00 s and the film 5\.00 s: give a track at least as long as the film\. musicfit makes one/);
+  assert.match(short, /npx musicfit@latest <track> --length 5 --hit 2\.5 --fps 25$/);
+  assert.deepEqual((await checkMusic(load(wav("silent.wav", 6, 0)))).problems, ['"music" "silent.wav" is silent over the film\'s 5.00 s']);
+  // A track as long as the film, give or take half a frame, is taken.
+  for (const seconds of [6, 4.99]) {
+    const { track, problems } = await checkMusic(load(wav("tone.wav", seconds, 0.3)));
+    assert.deepEqual(problems, []);
+    assert.ok(track.seconds >= 4.98 && track.left.length === track.right.length, `${track.seconds} s`);
+    assert.ok(track.integrated > -30 && track.integrated < -5 && track.peak < 0, `${track.integrated} LUFS, peak ${track.peak}`);
+  }
+  // Its path may be absolute.
+  assert.deepEqual((await checkMusic(load(path.join(dir, "tone.wav")))).problems, []);
 });

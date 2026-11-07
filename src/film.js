@@ -2,8 +2,8 @@
 // ─── the film ──────────────────────────────────────────────────────────────
 // film.json in, an MP4 out: each clip is a page rendered on its own (two at a
 // time), the clips are joined with short crossfades that start on the cut,
-// and one sound track (the music bed and every clip's effects at their
-// times) is laid under the whole film.
+// and one sound track (the music bed, or the user's own track in its place,
+// and every clip's effects at their times) is laid under the whole film.
 
 const fs = require("fs");
 const os = require("os");
@@ -11,7 +11,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage } = require("./chrome");
-const { run, mustRun, probe, readPixels } = require("./ffmpeg");
+const { run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -81,7 +81,56 @@ function loadFilm(file) {
   });
   const total = out.reduce((s, c) => s + c.seconds, 0);
   if (total > 90) problems.push(`the film would last ${total.toFixed(1)} s; keep it under 90`);
-  return { film, dir, brand, clips: out, bar, problems };
+  const music = musicOf(film.music, dir, problems);
+  return { film, dir, brand, clips: out, bar, music, seconds: total, problems };
+}
+
+// What film.json's "music" asks for: the look's bed (true, or left out), no
+// music (false), the bed at another level ({ "volume": 0.55 }, from 0 to
+// 2), or the user's own track (the path of a sound file, from film.json's
+// folder or absolute), which checkMusic reads when the film renders.
+function musicOf(value, dir, problems) {
+  if (value === undefined || value === null || value === true) return { bed: true };
+  if (value === false) return { bed: false };
+  if (typeof value === "string" && value.trim()) return { bed: false, track: path.resolve(dir, value), name: value };
+  if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((k) => k === "volume")) {
+    const v = value.volume;
+    const n = typeof v === "number" || (typeof v === "string" && v.trim()) ? Number(v) : NaN;
+    if (v !== undefined && !(n >= 0 && n <= 2)) problems.push(`"music" "volume" must be a number from 0 to 2 (it is ${JSON.stringify(v)})`);
+    return { bed: true };
+  }
+  problems.push('"music" must be true, false, { "volume": 0.55 } or the path of an audio file');
+  return { bed: true };
+}
+
+// The user's own track, when film.json names one, read before anything
+// renders: its sound for the film's length, decoded, and its loudness over
+// it. Returns { track, problems }: a file that is missing, has no sound
+// ffmpeg can read, is shorter than the film or is silent is a problem.
+async function checkMusic(loaded) {
+  const { music, seconds: total, clips } = loaded;
+  if (!music || !music.track) return { track: null, problems: [] };
+  const at = `"music" ${JSON.stringify(music.name)}`;
+  let isFile = false;
+  try {
+    isFile = fs.statSync(music.track).isFile();
+  } catch {
+    // Not there.
+  }
+  if (!isFile) return { track: null, problems: [`${at} is not a file`] };
+  // A second past the film's end, so a track as long as the film shows it.
+  const sound = readSound(music.track, { seconds: total + 1 });
+  if (!sound) return { track: null, problems: [`${at} has no sound ffmpeg can read`] };
+  // musicfit gives a length to the millisecond: half a frame short is whole.
+  if (sound.seconds < total - 0.5 / FPS) {
+    const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
+    return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ` +
+      `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
+      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS}`] };
+  }
+  const level = await loudnessOf(music.track, { seconds: total });
+  if (!(level.integrated > -70)) return { track: null, problems: [`${at} is silent over the film's ${total.toFixed(2)} s`] };
+  return { track: { ...sound, ...level, name: music.name }, problems: [] };
 }
 
 // The colours a brand gives the looks: its accent, a second colour, and a
@@ -203,6 +252,8 @@ async function pool(items, jobs, fn) {
 async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep = false, offline = false } = {}) {
   const loaded = loadFilm(file);
   if (loaded.problems.length) throw new Error(`film.json has problems:\n  - ${loaded.problems.join("\n  - ")}`);
+  const { track, problems } = await checkMusic(loaded);
+  if (problems.length) throw new Error(`film.json has problems:\n  - ${problems.join("\n  - ")}`);
   const { film, dir, brand, clips } = loaded;
   const look = film.look;
   const port = film.aspect === "9:16";
@@ -247,9 +298,16 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
     const map = clips.length > 1 ? ["-filter_complex", graph.replace(/;$/, ""), "-map", "[v]"] : ["-map", "0:v"];
     await mustRun([...inputs, ...map, "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(FPS),
       "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-t", total.toFixed(3), "-movflags", "+faststart", video], "joining the clips");
-    // The sound: the bed for these cuts and every clip's effects.
+    // The sound: the bed for these cuts, or the user's own track in its
+    // place, and every clip's effects.
     const cues = film.sfx === false ? [] : rendered.flatMap((r) => r.cues);
-    const bed = film.music === false ? null : audio.music({ look, seconds: total, cuts: clips.map((c) => c.start), seed: clips.length }).bus;
+    if (track) {
+      const gain = audio.trackGain(track);
+      const under = (audio.TRACK_LUFS - track.integrated) - 20 * Math.log10(gain);
+      notes.push(`The music is ${track.name}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, from the film's first frame to its end at ${total.toFixed(2)} s, faded out over the last second.`);
+    }
+    const bed = film.music === false ? null : track ? audio.trackBus({ left: track.left, right: track.right, seconds: total, gain: audio.trackGain(track) })
+      : audio.music({ look, seconds: total, cuts: clips.map((c) => c.start), seed: clips.length }).bus;
     const wav = path.join(work, "sound.wav");
     audio.writeWav(wav, audio.mixFilm({ seconds: total, music: bed, cues, musicGain: film.music && film.music.volume !== undefined ? Number(film.music.volume) : 0.55 }));
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -265,4 +323,4 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
   }
 }
 
-module.exports = { loadFilm, renderFilm, buildClip, markFor, brandColours, FPS, FADE };
+module.exports = { loadFilm, checkMusic, renderFilm, buildClip, markFor, brandColours, FPS, FADE };

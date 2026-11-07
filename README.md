@@ -159,7 +159,7 @@ The cuts come from the timeline launch-film writes next to its film. For a film 
 2. **Words.** The page's title, description, headline and section titles are read, with the line under each section title. Every word in the film comes from there.
 3. **Plan.** A first film is planned without a brief: the name and its promise, the real screen in a browser window, the page's own sentence as a headline, three sections as feature cards, a number the page states (or an app's store rating), the app's store screenshots, and the logo close with the site's address. It is written to `film.json`.
 4. **Render.** Each clip is an HTML page with one paused timeline. A virtual clock steps it frame by frame in headless Chrome, so every frame is drawn for its time however long drawing takes, and the frames go to ffmpeg. Two clips render at a time.
-5. **Sound.** The music and every sound effect are synthesised in code for this film: the groove starts on the second clip, each clip lasts whole bars so cuts land on the beat, and the logo lands on a hit. There are no samples.
+5. **Sound.** The music and every sound effect are synthesised in code for this film: the groove starts on the second clip, each clip lasts whole bars so cuts land on the beat, and the logo lands on a hit. There are no samples. A track of your own named in film.json takes the music's place.
 6. **Check.** Stills from each clip and a contact sheet are saved, so you (or your agent) can look before sharing. `launch-film check` measures the film as well: its size, length, black or still stretches, silence, loudness, peaks, and whether the cuts land on the beat.
 
 ## film.json
@@ -190,6 +190,8 @@ The cuts come from the timeline launch-film writes next to its film. For a film 
 
 Words between asterisks are set in the brand's accent color. A bar is one bar of the look's music, about two seconds; give `seconds` instead if you prefer.
 
+`music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track of your own, from film.json's folder or absolute. A track plays from the first frame in place of the bed: it is brought to about the bed's level (lower when its peaks would clip), cut at the end of the film and faded out over its last second, and the sound effects play over it as they do over the bed. A track that is missing, has no sound, is silent or is shorter than the film is refused before anything renders. [musicfit](https://github.com/EminBudak/musicfit) makes a track exactly the film's length with its hit on the beat you choose, such as the logo close: `npx musicfit@latest track.mp3 --length 29.333 --hit 24 --fps 25`, with the film's length and the last clip's start from film.timeline.json. The message that refuses a short track gives both.
+
 ## Looks
 
 | look | | suits |
@@ -215,7 +217,7 @@ Run `npx launch-film@latest doctor` to check. It has been tested on macOS with C
 - A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which.
 - easybrandkit needs a site that opens in a headless browser. A bot check or a login wall gets no kit, and a social profile is not a brand's site.
 - A 30 second film takes one to three minutes to render on a laptop.
-- The music is simple by design. To use your own track: `ffmpeg -i film.mp4 -i track.mp3 -map 0:v -map 1:a -c:v copy -shortest out.mp4`.
+- The music is simple by design. To use your own track, give its path as `music` in film.json and render again. The cuts still fall on the bars of the look's own tempo (launch 112 BPM, aurora 96, gridline 120, pop 124, journal 90), so a track's beats meet every cut only at that tempo, or half or twice it, with its hit on a cut such as the logo close.
 
 ## License
 

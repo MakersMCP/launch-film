@@ -79,6 +79,39 @@ function probe(file) {
   }
 }
 
+// A sound file's first `seconds`, decoded as 48 kHz stereo floats ({ left,
+// right, seconds }), or null when ffmpeg finds no sound in it. A mono file
+// plays on both sides. The length is the decoded one: a file's header can
+// be wrong about it (a VBR MP3 without a Xing header).
+function readSound(file, { seconds }) {
+  const r = spawnSync(FFMPEG, ["-v", "error", "-i", file, "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
+    { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
+  if (r.error) throw new Error(`reading ${file}: ${r.error.message}`);
+  if (r.status !== 0 || !r.stdout || r.stdout.length < 8) return null;
+  const n = Math.floor(r.stdout.length / 8);
+  const left = new Float32Array(n);
+  const right = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    left[i] = r.stdout.readFloatLE(8 * i);
+    right[i] = r.stdout.readFloatLE(8 * i + 4);
+  }
+  return { left, right, seconds: n / 48000 };
+}
+
+// The loudness of a sound file's first `seconds`, by ebur128: { integrated
+// (LUFS), peak (the sample peak, dBFS) }. Digital silence measures -70 LUFS
+// and a peak of -inf. framelog=verbose keeps the line for every 100 ms out
+// of the info level the summary is read at.
+async function loudnessOf(file, { seconds }) {
+  const r = await run(["-i", file, "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
+  if (r.code !== 0) throw new Error(`measuring ${file}: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-2).join(" | ")}`);
+  const num = (re) => {
+    const m = re.exec(r.stderr);
+    return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : null;
+  };
+  return { integrated: num(/Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+|-inf) LUFS/), peak: num(/Sample peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/) };
+}
+
 // A picture made exactly W x H: scaled to cover the size and cut to it from
 // the middle, as an opaque PNG (stores refuse transparency).
 function coverPng(input, output, W, H) {
@@ -128,4 +161,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, run, mustRun, probe, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };

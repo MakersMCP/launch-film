@@ -4,6 +4,7 @@
 // recordings and no licences beyond its own: the effects (whooshes, pops,
 // clicks, hits, sparkles) and a music bed made for the film's own cuts.
 // Everything is drawn into float buffers at 48 kHz and written as one WAV.
+// A track of the user's own, named in film.json, takes the bed's place.
 //
 // The music follows the film: the first clip gets only pads, the groove
 // starts on the second clip's downbeat, and the logo clip lands on a hit with
@@ -522,6 +523,34 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
   return { bus: out, beat, bar, bpm: mood.bpm };
 }
 
+// ─── the user's own track ──────────────────────────────────────────────────
+// The level the looks' beds are drawn at, so a track takes the bed's place
+// in the mix and the effects sit over it as they sit over a bed.
+const TRACK_LUFS = -14;
+
+// The gain that brings a track ({ integrated, peak }, as ebur128 measures
+// it) to the beds' level, held down so its peaks stay at -1 dBFS or under.
+function trackGain({ integrated, peak }) {
+  const level = 10 ** ((TRACK_LUFS - integrated) / 20);
+  return Number.isFinite(peak) ? Math.min(level, 10 ** ((-1 - peak) / 20)) : level;
+}
+
+// A track in the bed's place: the film's length at `gain`, from the film's
+// first frame, faded in over 10 ms so a track cut mid-wave does not click,
+// and out over the last second as the bed is.
+function trackBus({ left, right, seconds, gain = 1 }) {
+  const bus = new Bus(seconds);
+  const total = Math.min(bus.length, Math.round(seconds * SR));
+  const rise = Math.round(0.01 * SR);
+  const n = Math.min(total, left.length, right.length);
+  for (let i = 0; i < n; i++) {
+    const g = gain * Math.min(1, (i + 1) / rise) * Math.min(1, (total - 1 - i) / (SR - 1));
+    bus.L[i] = left[i] * g;
+    bus.R[i] = right[i] * g;
+  }
+  return bus;
+}
+
 // ─── the mix ───────────────────────────────────────────────────────────────
 // Music and effects into one buffer of the film's length; a soft limiter
 // keeps the peaks under full scale. cues: [{ sfx, at, volume }].
@@ -562,4 +591,4 @@ function writeWav(file, bus) {
   fs.writeFileSync(file, Buffer.concat([head, data]));
 }
 
-module.exports = { SR, Bus, MOODS, EFFECTS, effect, music, mixFilm, writeWav };
+module.exports = { SR, Bus, MOODS, EFFECTS, TRACK_LUFS, effect, music, trackGain, trackBus, mixFilm, writeWav };

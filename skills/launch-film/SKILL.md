@@ -125,4 +125,5 @@ Read `stills/STILLS.md` and look at every picture with the same list as the fram
 - `--look <name>`, `--seconds <20-40>`, `--aspect 9:16` on `plan` or the one-go command.
 - `--brand <folder>` uses an easybrandkit folder you already have; `--words <file>` a words.json you already have.
 - `--no-music`, `--no-sfx` on the one-go command; or set `"music": false` and `"sfx": false` in film.json.
+- For the user's own track, set `"music"` in film.json to its path (from film.json's folder, or absolute) and render again. It plays in place of the bed at about the bed's level, cut at the film's end and faded over the last second, under the sound effects. A track shorter than the film is refused: fit it first with musicfit, giving it the film's length and the logo close's start from film.timeline.json (`npx musicfit@latest <track> --length 29.333 --hit 24 --fps 25`); the message that refuses it gives both.
 - `--jobs 1` renders one clip at a time on a slow machine.

@@ -5,9 +5,11 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { findChrome, launch, openPage, evaluate } = require("../src/chrome");
-const { available, probe, readPixels, mustRun } = require("../src/ffmpeg");
+const { FFMPEG, available, probe, readPixels, mustRun } = require("../src/ffmpeg");
 const { renderFilm } = require("../src/film");
+const audio = require("../src/audio");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const fixture = path.join(__dirname, "fixtures", "acme");
@@ -86,17 +88,33 @@ test("eases, yoyo and an inline transform the element already has", { skip }, as
   });
 });
 
-test("a short film renders with picture and sound", { skip, timeout: 240_000 }, async () => {
+// A film of two clips, 5 s long, with the test brand.
+const FILM = {
+  version: 1, brand: "brand/brand.json", look: "launch", aspect: "16:9", music: true, sfx: true,
+  clips: [
+    { kind: "scene", seconds: 2.5, scene: { type: "opener", title: "Acme Notes", text: "Notes that think with you" } },
+    { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png", site: "acme-notes.example" },
+  ],
+};
+// A folder holding the test brand and film.json, with `change` made to it.
+function filmFolder(change = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
-  const film = {
-    version: 1, brand: "brand/brand.json", look: "launch", aspect: "16:9", music: true, sfx: true,
-    clips: [
-      { kind: "scene", seconds: 2.5, scene: { type: "opener", title: "Acme Notes", text: "Notes that think with you" } },
-      { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png", site: "acme-notes.example" },
-    ],
-  };
-  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify(film));
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...FILM, ...change }));
+  return dir;
+}
+
+// A film's sound, decoded to mono floats at 48 kHz.
+function soundOf(file) {
+  const r = spawnSync(FFMPEG, ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "-"], { maxBuffer: 64 << 20 });
+  assert.equal(r.status, 0, String(r.stderr));
+  const out = new Float32Array(r.stdout.length / 4);
+  for (let i = 0; i < out.length; i++) out[i] = r.stdout.readFloatLE(4 * i);
+  return out;
+}
+
+test("a short film renders with picture and sound", { skip, timeout: 240_000 }, async () => {
+  const dir = filmFolder();
   const result = await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
   const info = probe(result.output);
   assert.equal(info.width, 1920);
@@ -116,4 +134,24 @@ test("a short film renders with picture and sound", { skip, timeout: 240_000 }, 
     const spread = Math.sqrt(lum.reduce((a, b) => a + (b - mean) ** 2, 0) / lum.length);
     assert.ok(spread > 20, `the still at ${at} s has something on it (spread ${spread.toFixed(1)})`);
   }
+});
+
+test("a film plays the track film.json names, in place of the bed", { skip, timeout: 240_000 }, async () => {
+  const dir = filmFolder({ music: "music/tone.wav", sfx: false });
+  // 6 s of a 440 Hz tone: the beds hold nothing like it.
+  const tone = new audio.Bus(6);
+  for (let i = 0; i < tone.length; i++) tone.L[i] = tone.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / audio.SR);
+  fs.mkdirSync(path.join(dir, "music"));
+  audio.writeWav(path.join(dir, "music", "tone.wav"), tone);
+  const result = await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
+  assert.ok(result.notes.some((n) => /^The music is music\/tone\.wav, at the bed's level, from the film's first frame to its end at 5\.00 s/.test(n)), result.notes.join(" | "));
+  const sound = soundOf(result.output);
+  // A 440 Hz tone crosses zero 880 times a second; a bed many times more.
+  let crossings = 0;
+  for (let i = audio.SR + 1; i < 4 * audio.SR; i++) if ((sound[i - 1] < 0) !== (sound[i] < 0)) crossings++;
+  assert.ok(Math.abs(crossings / 3 - 880) < 20, `${(crossings / 3).toFixed(0)} zero crossings a second`);
+  // Faded out at the end.
+  const peak = (from, to) => sound.subarray(Math.round(from * audio.SR), Math.round(to * audio.SR)).reduce((p, v) => Math.max(p, Math.abs(v)), 0);
+  const end = sound.length / audio.SR;
+  assert.ok(peak(end - 0.05, end) < 0.1 * peak(1, 4), `the last 50 ms peak at ${peak(end - 0.05, end).toFixed(3)} against ${peak(1, 4).toFixed(3)}`);
 });
