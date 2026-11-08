@@ -292,3 +292,39 @@ test("an ffmpeg killed outright says so", { skip: noShell }, async () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^launch-film: reading the picture: ffmpeg was stopped by SIGKILL, most often because the system ran out of memory\n/);
 });
+
+// ffmpeg 4.4 on a full disk writes as much of a picture as fits and exits
+// with 0. This stand-in writes each picture, then cuts it to half.
+const CUTS_PICTURES = `case "$*" in *"-update 1"*) for last; do :; done; '${(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''")}' "$@" || exit $?; ` +
+  `size=$(wc -c < "$last"); head -c $((size / 2)) "$last" > "$last.cut" && mv "$last.cut" "$last"; exit 0;; esac`;
+
+test("frames and check on a full disk say so and keep the earlier pictures", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  await saveFrames(file);
+  assert.equal(cli(["check", file]).status, 0);
+  const before = snap(dir);
+  const ffmpeg = standIn(tmp(), CUTS_PICTURES);
+  const frames = cli(["frames", file], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(frames.status, 1);
+  assert.equal(frames.stderr, `launch-film: saving a still: the picture was cut short, most often because the disk is full\nlaunch-film: ${path.join(dir, "frames")} is as it was.\n`);
+  const check = cli(["check", file], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(check.status, 1);
+  assert.equal(check.stderr, `launch-film: saving a still: the picture was cut short, most often because the disk is full\nlaunch-film: ${path.join(dir, "check")} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
+});
+
+test("a failure that names a picture the run made calls it the new one", { skip: noShell }, async () => {
+  // Each still comes out whole but is no picture, so the contact sheet
+  // cannot read it back: the message names the new still, not the earlier
+  // one of that name, which is as it was.
+  const dir = tmp();
+  const file = await film(dir);
+  await saveFrames(file);
+  const before = snap(dir);
+  const ffmpeg = standIn(tmp(), `case "$*" in *"-update 1"*.jpg) for last; do :; done; printf 'no picture\\377\\331' > "$last"; exit 0;; esac`);
+  const r = cli(["frames", file], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(r.status, 1);
+  assert.equal(r.stderr, `launch-film: the new ${path.join(dir, "frames", "clip-1-a.jpg")} could not be read as a picture\nlaunch-film: ${path.join(dir, "frames")} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
+});

@@ -12,7 +12,13 @@
 // name is read that way, since it makes ffmpeg pick the decoder by the
 // name's extension where it otherwise reads what the file holds: a JPEG
 // saved as .png still reads.
+//
+// ffmpeg 4.4 that cannot write the whole of a picture, as on a full disk,
+// leaves it cut short and still exits with 0, so every picture written is
+// read back to its end (writePicture).
 
+const fs = require("fs");
+const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { track } = require("./out");
 
@@ -35,6 +41,34 @@ function input(file) {
 
 // The arguments that write one picture to `file` (see above).
 const picture = (file) => ["-update", "1", file];
+
+// Whether a picture ffmpeg wrote is whole: a PNG ends with its IEND chunk
+// and a JPEG with its end marker. Another kind only has to be there.
+function whole(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    const tail = Buffer.alloc(Math.min(12, size));
+    fs.readSync(fd, tail, 0, tail.length, size - tail.length);
+    const ext = path.extname(file).toLowerCase();
+    if (ext === ".png") return tail.length === 12 && tail.toString("latin1", 4, 8) === "IEND";
+    if (ext === ".jpg" || ext === ".jpeg") return tail.length >= 2 && tail[tail.length - 2] === 0xff && tail[tail.length - 1] === 0xd9;
+    return size > 0;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+// Writes one picture to `file` with ffmpeg (`args` up to the output), and
+// fails, after `what` it was doing, when it is not whole.
+async function writePicture(args, file, what, opts) {
+  const r = await mustRun([...args, ...picture(file)], what, opts);
+  if (!whole(file)) throw new Error(`${what}: the picture was cut short, most often because the disk is full`);
+  return r;
+}
 
 // Why a run of ffmpeg or ffprobe ({ code, signal, stderr }) failed: the end
 // of its own words, else the signal that ended it, else its exit code. One
@@ -162,8 +196,8 @@ async function loudnessOf(file, { seconds }) {
 // A picture made exactly W x H: scaled to cover the size and cut to it from
 // the middle, as an opaque PNG (stores refuse transparency).
 function coverPng(from, output, W, H) {
-  return mustRun([...input(from), "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1`,
-    "-frames:v", "1", "-pix_fmt", "rgb24", ...picture(output)], `making ${output}`);
+  return writePicture([...input(from), "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1`,
+    "-frames:v", "1", "-pix_fmt", "rgb24"], output, `making ${output}`);
 }
 
 // A picture's pixels as RGBA, at most `max` px on its long side when given:
@@ -184,7 +218,7 @@ function readPixels(file, max = 0) {
 
 // RGBA pixels written as a PNG.
 function writePng(file, { data, width, height }) {
-  return mustRun(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${width}x${height}`, "-i", "-", "-frames:v", "1", ...picture(file)], "writing a picture", { input: data });
+  return writePicture(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${width}x${height}`, "-i", "-", "-frames:v", "1"], file, "writing a picture", { input: data });
 }
 
 // A frame encoder: JPEG frames in, an H.264 MP4 out.
@@ -215,4 +249,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, input, picture, why, stoppedSync, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };

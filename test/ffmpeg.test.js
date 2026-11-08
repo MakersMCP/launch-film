@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { available, why, probe, readPixels, writePng, coverPng, mustRun } = require("../src/ffmpeg");
+const { available, why, probe, readPixels, writePng, coverPng, mustRun, whole } = require("../src/ffmpeg");
 
 const skip = !available() ? "ffmpeg not found" : false;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-ffmpeg-"));
@@ -41,4 +41,19 @@ test("a failed run of ffmpeg says why: its words, the signal that ended it, or i
   assert.equal(why({ code: null, signal: "SIGKILL", stderr: "" }), "ffmpeg was stopped by SIGKILL, most often because the system ran out of memory");
   assert.equal(why({ code: null, signal: "SIGTERM", stderr: "" }, { name: "ffprobe" }), "ffprobe was stopped by SIGTERM");
   assert.equal(why({ code: 1, signal: null, stderr: "" }), "ffmpeg failed with exit code 1");
+});
+
+test("a picture cut short is told from a whole one", { skip }, async () => {
+  const dir = tmp();
+  const png = path.join(dir, "a.png");
+  await writePng(png, { data: Buffer.alloc(16 * 16 * 4, 255), width: 16, height: 16 });
+  const jpg = path.join(dir, "a.jpg");
+  await mustRun(["-f", "lavfi", "-i", "color=c=red:s=40x30", "-frames:v", "1", "-update", "1", jpg], "a test picture");
+  assert.ok(whole(png) && whole(jpg));
+  for (const file of [png, jpg]) {
+    const data = fs.readFileSync(file);
+    fs.writeFileSync(file, data.subarray(0, data.length - 3));
+    assert.ok(!whole(file), `${path.basename(file)} cut short`);
+  }
+  assert.ok(!whole(path.join(dir, "missing.png")));
 });

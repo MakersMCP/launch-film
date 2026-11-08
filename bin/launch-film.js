@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, aftermath, noticed, stopping, exit } = require("../src/out");
+const { listen, within, shown, said, aftermath, noticed, stopping, exit } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -88,7 +88,7 @@ const say = (text) => process.stderr.write(text);
 function fail(message) {
   // A stop ends the process by its own signal once it has cleaned up.
   if (stopping()) return;
-  say(`launch-film: ${shown(message)}\n`);
+  say(`launch-film: ${said(message)}\n`);
   // At once, or once the Chrome and ffmpeg still running have stopped.
   exit(1);
 }
@@ -102,7 +102,7 @@ function failed(err) {
   setImmediate(() => setImmediate(() => {
     if (stopping()) return;
     const folders = aftermath();
-    say(`launch-film: ${shown(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
+    say(`launch-film: ${said(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
     exit(1);
   }));
 }

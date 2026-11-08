@@ -11,7 +11,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { input, picture, mustRun, probe, readPixels, writePng } = require("./ffmpeg");
+const { input, writePicture, mustRun, probe, readPixels, writePng } = require("./ffmpeg");
 const draw = require("./draw");
 const { within } = require("./out");
 
@@ -187,7 +187,7 @@ async function grabFrames(film, moments, dir, { duration, ext = "jpg" }) {
   for (const m of moments) {
     const at = Math.max(0, Math.min(duration - 0.05, m.at));
     const file = path.join(dir, `${m.name}.${ext}`);
-    await mustRun(["-ss", at.toFixed(3), ...input(film), "-frames:v", "1", "-q:v", "3", ...picture(file)], "saving a still");
+    await writePicture(["-ss", at.toFixed(3), ...input(film), "-frames:v", "1", "-q:v", "3"], file, "saving a still");
     stills.push({ file, at: +at.toFixed(2), label: m.label || "" });
   }
   return stills;

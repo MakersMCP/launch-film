@@ -110,6 +110,19 @@ function shown(text) {
   return s;
 }
 
+// A failure's message, as shown(), with a file in a part folder named as
+// the new one: the run made it, and the earlier file of that name, which
+// it does not touch, is as it was. A path in quotes is only shown().
+function said(text) {
+  const mark = "\u0001";
+  let s = String(text);
+  for (let i = places.length - 1; i >= 0; i--) {
+    const [part, target] = places[i];
+    s = s.split(part + path.sep).join(`${mark}${target}${path.sep}`).split(part).join(target);
+  }
+  return s.replace(/\u0001+/g, mark).replace(/(^|[\s(])\u0001/g, "$1the new ").split(mark).join("");
+}
+
 // However the process ends, no part folder of a run that has not ended is
 // left behind, no temp folder, and no process the runs started.
 function hook() {
@@ -690,4 +703,4 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE, LOCK };
+module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE, LOCK };

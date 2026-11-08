@@ -11,7 +11,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage } = require("./chrome");
-const { input, picture, run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
+const { input, picture, whole, writePicture, run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -188,10 +188,12 @@ async function buildClip(clip, ctx) {
     const ext = path.extname(clip.imageFile).toLowerCase() === ".png" ? ".png" : ".jpg";
     const soft = path.join(work, `soft-${clip.index}.jpg`);
     const blurred = await run([...input(clip.imageFile), "-vf", "scale='min(1400,iw)':-2,gblur=sigma=12", "-q:v", "5", ...picture(soft)]);
+    // The blurred ground is left out when it could not be made whole.
+    const hasSoft = blurred.code === 0 && whole(soft);
     const page = motion.screenHtml({ mode: clip.mode === "zoom" ? "zoom" : "pan", look, port, seconds, accent: brandAccent, brand: colours,
-      image: { file: `capture${ext}`, w: info.width, h: info.height }, soft: blurred.code === 0 ? "soft.jpg" : null, box: clip.box || null,
+      image: { file: `capture${ext}`, w: info.width, h: info.height }, soft: hasSoft ? "soft.jpg" : null, box: clip.box || null,
       side: clip.side || "center", phone: info.height > info.width, fonts });
-    const files = { [`capture${ext}`]: fs.readFileSync(clip.imageFile), ...(blurred.code === 0 ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
+    const files = { [`capture${ext}`]: fs.readFileSync(clip.imageFile), ...(hasSoft ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "shots") {
@@ -211,7 +213,7 @@ async function buildClip(clip, ctx) {
     const keepH = Math.min(info.height, Math.ceil(info.height * page.use) + 2);
     const width = 2 * Math.round(Math.min(info.width, Math.ceil(page.drawnW * 1.25)) / 2);
     const prepared = path.join(work, `device-${clip.index}.png`);
-    await mustRun([...input(clip.imageFile), "-vf", `crop=${info.width}:${keepH}:0:0,scale=${width}:-2:flags=lanczos`, "-frames:v", "1", ...picture(prepared)], `clip ${clip.index + 1}`);
+    await writePicture([...input(clip.imageFile), "-vf", `crop=${info.width}:${keepH}:0:0,scale=${width}:-2:flags=lanczos`, "-frames:v", "1"], prepared, `clip ${clip.index + 1}`);
     return { html: page.html, files: { "screen.png": fs.readFileSync(prepared) }, cues: page.cues, W: page.W, H: page.H };
   }
   // The logo close.
