@@ -327,3 +327,60 @@ test("a temp folder is named for its process and goes with release", () => {
   out.release(dir);
   assert.ok(!fs.existsSync(dir));
 });
+
+test("a temp folder's own clean-up runs before it goes, on a stop too", { skip: noSignals }, async () => {
+  // As Chrome's profile takes the socket folder Chrome links from it: the
+  // clean-up reads what is in the folder, so it runs before the folder goes.
+  const base = tmp();
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+out.listen();
+const outside = path.join(process.argv[1], "outside");
+fs.mkdirSync(outside);
+const dir = out.tempDir("launch-film-out-test-", (d) => fs.rmSync(fs.readFileSync(path.join(d, "points-to"), "utf8"), { recursive: true }));
+fs.writeFileSync(path.join(dir, "points-to"), outside);
+process.stdout.write(dir);
+setInterval(() => {}, 1000);
+`;
+  const child = spawn(process.execPath, ["-e", script, base], { stdio: ["ignore", "pipe", "pipe"] });
+  const dir = await new Promise((resolve) => child.stdout.once("data", (d) => resolve(String(d))));
+  assert.ok(fs.existsSync(path.join(base, "outside")));
+  child.kill("SIGTERM");
+  await new Promise((resolve) => child.on("exit", resolve));
+  assert.ok(!fs.existsSync(dir), "the temp folder is gone");
+  assert.deepEqual(fs.readdirSync(base), [], "and what its clean-up removes");
+});
+
+test("a stop removes the socket folder Chrome links from its profile", { skip: noSignals }, async () => {
+  // A stand-in Chrome that makes its socket folder in the temp folder, as
+  // Chrome does, and lets SIGTERM go, so the stop has to kill it.
+  const temp = tmp();
+  const bin = tmp();
+  const fake = path.join(bin, "chrome");
+  fs.writeFileSync(fake, `#!/bin/sh
+trap '' TERM INT HUP
+for a in "$@"; do case "$a" in --user-data-dir=*) profile="\${a#--user-data-dir=}";; esac; done
+sock=$(mktemp -d "$TMPDIR/com.google.Chrome.XXXXXX")
+: > "$sock/SingletonSocket"
+ln -s "$sock/SingletonSocket" "$profile/SingletonSocket"
+while :; do sleep 1; done
+`, { mode: 0o755 });
+  const script = `
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
+out.listen();
+launch({ W: 100, H: 100 }).catch(() => {});
+`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: "ignore", env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: fake } });
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));
+  const socket = () => fs.readdirSync(temp).filter((n) => n.startsWith("com.google.Chrome."));
+  for (let i = 0; i < 500 && !(socket().length && fs.readdirSync(temp).some((n) => n.startsWith("launch-film-chrome-") && fs.existsSync(path.join(temp, n, "SingletonSocket")))); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(socket().length, 1, "the stand-in made its socket folder");
+  child.kill("SIGTERM");
+  assert.equal(await ended, "SIGTERM");
+  assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
+});

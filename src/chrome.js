@@ -58,7 +58,8 @@ function findChrome() {
 
 // Chrome links SingletonSocket in its profile to a socket in a temp folder
 // of its own (com.google.Chrome.XXXXXX); one killed outright leaves that
-// folder behind, so it goes with the profile.
+// folder behind, so it goes with the profile, read from the link before the
+// profile is removed.
 function forgetSocket(profile) {
   try {
     const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
@@ -74,7 +75,9 @@ function forgetSocket(profile) {
 async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome was not found. Install Google Chrome or Chromium, or set LAUNCH_FILM_CHROME to its path.");
-  const profile = tempDir("launch-film-chrome-");
+  // Removed with the socket folder Chrome links from it, however the run
+  // ends: Chrome killed by a stop leaves that folder in the temp folder.
+  const profile = tempDir("launch-film-chrome-", forgetSocket);
   const args = [
     "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
     "--disable-extensions", "--disable-sync", "--disable-default-apps", "--disable-background-networking",
@@ -146,10 +149,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     close() {
       if (closing) return;
       closing = true;
-      const gone = () => {
-        forgetSocket(profile);
-        release(profile);
-      };
+      const gone = () => release(profile);
       if (dead) return gone();
       child.once("exit", gone);
       const timer = setTimeout(() => child.kill("SIGKILL"), 3000);

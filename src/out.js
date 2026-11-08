@@ -37,10 +37,11 @@ const STALE = 15 * 60 * 1000;
 const STOP_WAIT = 400;
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
 
-// The runs begun and not ended, the temp folders and the processes to stop
-// with them, and every part folder with the folder its files go to.
+// The runs begun and not ended, the temp folders (each with what to do
+// before it is removed) and the processes to stop with them, and every part
+// folder with the folder its files go to.
 const open = new Set();
-const temps = new Set();
+const temps = new Map();
 const children = new Set();
 const places = [];
 // What became of the folders of the runs a stop or a failure ended.
@@ -306,16 +307,30 @@ function aftermath() {
 // ─── temp folders and processes ────────────────────────────────────────────
 // A folder in the system's temp folder, named for the process that made it
 // (<prefix><pid>-<random>), removed with release(), and on a stop or at
-// exit when it has not been (or could not be).
-function tempDir(prefix) {
+// exit when it has not been (or could not be). before(dir), when given,
+// runs each time just before it is removed: Chrome's profile takes the
+// socket folder Chrome links from it along (chrome.js).
+function tempDir(prefix, before = null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}${process.pid}-`));
-  temps.add(dir);
+  temps.set(dir, before);
   hook();
   return dir;
 }
 
+function clear(dir) {
+  const before = temps.get(dir);
+  if (before) {
+    try {
+      before(dir);
+    } catch {
+      // The folder goes all the same.
+    }
+  }
+  return remove(dir);
+}
+
 function release(dir) {
-  if (remove(dir)) temps.delete(dir);
+  if (clear(dir)) temps.delete(dir);
 }
 
 function signal(child, name) {
@@ -354,7 +369,7 @@ function settle(name, then) {
 function endAll() {
   for (const child of children) signal(child, "SIGKILL");
   for (const run of [...open].reverse()) discard(run);
-  for (const dir of temps) remove(dir);
+  for (const dir of temps.keys()) clear(dir);
   temps.clear();
 }
 
