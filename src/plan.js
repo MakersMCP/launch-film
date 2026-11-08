@@ -263,8 +263,14 @@ function planFilm(brand, words, { look = null, seconds = 30, aspect = "16:9", fi
   const bar = 240 / mood.bpm;
   const copy = copyFrom(brand, words);
   const clips = [];
-  // Paths in film.json are relative to its own folder.
-  const rel = (file) => path.relative(filmDir, file).split(path.sep).join("/");
+  // Paths in film.json are relative to its own folder. A file outside it,
+  // which a kit can name by an absolute path, keeps its absolute path: the
+  // plan is made in a part folder inside the film's folder and put in place
+  // once it has ended well, and only that path holds from both.
+  const rel = (file) => {
+    const r = path.relative(filmDir, file);
+    return (r === ".." || r.startsWith(`..${path.sep}`) || path.isAbsolute(r) ? path.resolve(file) : r).split(path.sep).join("/");
+  };
   const scene = (spec, bars = 2) => clips.push({ kind: "scene", bars, scene: spec });
   // The name opens the film, its promise under it in the accent.
   scene({ type: "opener", title: fit(copy.name, 60), ...(copy.promise ? { text: fit(copy.promise, 60) } : {}) }, 2);

@@ -157,3 +157,21 @@ test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop
   const { code, signal } = await ended;
   assert.deepEqual({ code, signal, stderr }, { code: null, signal: "SIGINT", stderr: "launch-film: stopped\n" });
 });
+
+test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
+  // A kit whose brand.json names its screen by an absolute path outside it.
+  const kit = otherKit();
+  const shared = path.join(path.dirname(kit), "shared");
+  fs.mkdirSync(shared);
+  fs.renameSync(path.join(kit, "screenshot-1.png"), path.join(shared, "screen.png"));
+  const brand = JSON.parse(fs.readFileSync(path.join(kit, "brand.json"), "utf8"));
+  brand.screenshots[0].file = path.join(shared, "screen.png");
+  fs.writeFileSync(path.join(kit, "brand.json"), JSON.stringify(brand));
+  const dir = filmFolder();
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--brand", kit, "--words", path.join(kit, "words.json"));
+  assert.equal(r.status, 0, r.stderr);
+  const film = JSON.parse(fs.readFileSync(path.join(dir, "film.json"), "utf8"));
+  assert.ok(film.clips.some((c) => c.image && path.resolve(dir, c.image) === path.join(shared, "screen.png")), JSON.stringify(film.clips.map((c) => c.image || c.logo || c.icon).filter(Boolean)));
+  const { loadFilm } = require("../src/film");
+  assert.deepEqual(loadFilm(path.join(dir, "film.json")).problems, []);
+});
