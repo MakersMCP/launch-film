@@ -122,7 +122,7 @@ test("film.json's music is checked before anything renders", async () => {
   const { dir, load } = filmWithMusic();
   for (const value of [undefined, true, false, { volume: 0.4 }, { volume: 2 }, {}]) assert.deepEqual(load(value).problems, [], JSON.stringify(value));
   const kinds = '"music" must be true, false, { "volume": 0.55 } or the path of an audio file';
-  for (const value of [3, "", ["a.wav"], { file: "a.wav" }]) assert.deepEqual(load(value).problems, [kinds], JSON.stringify(value));
+  for (const value of [3, "", ["a.wav"], { file: "a.wav" }]) assert.deepEqual(load(value).problems, [`${kinds} (it is ${JSON.stringify(value)})`], JSON.stringify(value));
   assert.deepEqual(load({ volume: "loud" }).problems, ['"music" "volume" must be a number from 0 to 2 (it is "loud")']);
   assert.deepEqual(load({ volume: 3 }).problems, ['"music" "volume" must be a number from 0 to 2 (it is 3)']);
   // The track's file is read when the film renders, so stills of a film

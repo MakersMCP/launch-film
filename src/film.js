@@ -100,7 +100,7 @@ function musicOf(value, dir, problems) {
     if (v !== undefined && !(n >= 0 && n <= 2)) problems.push(`"music" "volume" must be a number from 0 to 2 (it is ${JSON.stringify(v)})`);
     return { bed: true };
   }
-  problems.push('"music" must be true, false, { "volume": 0.55 } or the path of an audio file');
+  problems.push(`"music" must be true, false, { "volume": 0.55 } or the path of an audio file (it is ${JSON.stringify(value)})`);
   return { bed: true };
 }
 
