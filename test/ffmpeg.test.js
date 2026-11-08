@@ -1,12 +1,13 @@
 "use strict";
 // The ffmpeg helpers: pictures whose names ffmpeg could read as a numbered
-// sequence. Skipped where ffmpeg is missing.
+// sequence, and what a run of ffmpeg that failed says. Skipped where ffmpeg
+// is missing.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { available, probe, readPixels, writePng, coverPng, mustRun } = require("../src/ffmpeg");
+const { available, why, probe, readPixels, writePng, coverPng, mustRun } = require("../src/ffmpeg");
 
 const skip = !available() ? "ffmpeg not found" : false;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-ffmpeg-"));
@@ -33,4 +34,11 @@ test("a picture in a folder named like a numbered sequence is read and written a
   await mustRun(["-f", "lavfi", "-i", "color=c=red:s=40x30", "-frames:v", "1", jpeg], "a test picture");
   fs.renameSync(jpeg, path.join(base, "photo.png"));
   assert.equal(readPixels(path.join(base, "photo.png")).width, 40);
+});
+
+test("a failed run of ffmpeg says why: its words, the signal that ended it, or its exit code", () => {
+  assert.equal(why({ code: 1, signal: null, stderr: "a\nb\nc\nNo space left on device\n" }), "ffmpeg failed: b | c | No space left on device");
+  assert.equal(why({ code: null, signal: "SIGKILL", stderr: "" }), "ffmpeg was stopped by SIGKILL, most often because the system ran out of memory");
+  assert.equal(why({ code: null, signal: "SIGTERM", stderr: "" }, { name: "ffprobe" }), "ffprobe was stopped by SIGTERM");
+  assert.equal(why({ code: 1, signal: null, stderr: "" }), "ffmpeg failed with exit code 1");
 });

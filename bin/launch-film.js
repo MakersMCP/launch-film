@@ -84,12 +84,26 @@ function parseArgs(argv) {
 }
 
 const say = (text) => process.stderr.write(text);
+// A command given wrong: said, and the process ends.
 function fail(message) {
   // A stop ends the process by its own signal once it has cleaned up.
   if (stopping()) return;
   say(`launch-film: ${shown(message)}\n`);
   // At once, or once the Chrome and ffmpeg still running have stopped.
   exit(1);
+}
+// A run that failed. A Ctrl-C reaches ffmpeg or ffprobe as well, and one
+// that ends them while launch-film waits on them fails the run before
+// launch-film's own handler for the signal has run: that comes once the
+// event loop polls again, so the failure waits that long and, when it was a
+// stop, the stop is told of instead.
+function failed(err) {
+  const message = err && err.message ? err.message : String(err);
+  setImmediate(() => setImmediate(() => {
+    if (stopping()) return;
+    say(`launch-film: ${shown(message)}\n`);
+    exit(1);
+  }));
 }
 // A path as it is once the run that makes it has ended, from here.
 const where = (file) => path.relative(process.cwd(), shown(file)) || shown(file);
@@ -315,4 +329,4 @@ async function main() {
   });
 }
 
-main().catch((err) => fail(err && err.message ? err.message : String(err)));
+main().catch(failed);

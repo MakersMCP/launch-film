@@ -280,3 +280,13 @@ test("a check that cannot read the sound adds nothing and keeps an earlier repor
   assert.equal(again.status, 1);
   assert.deepEqual(snap(dir), before);
 });
+
+test("an ffmpeg killed outright says so", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  // As the system kills it when it runs out of memory.
+  const ffmpeg = standIn(tmp(), `case "$*" in *scdet*) kill -9 $$;; esac`);
+  const r = cli(["check", file], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^launch-film: reading the picture: ffmpeg was stopped by SIGKILL, most often because the system ran out of memory\n/);
+});

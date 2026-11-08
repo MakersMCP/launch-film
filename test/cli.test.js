@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const root = path.join(__dirname, "..");
 const cli = (...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 30_000 });
@@ -134,4 +134,21 @@ test("a plan that fails makes no folder", () => {
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));
   assert.equal(r.status, 1, r.stderr);
   assert.deepEqual(fs.readdirSync(base), ["easybrandkit.js"]);
+});
+
+test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop", { skip: process.platform === "win32" && "POSIX signals" }, async () => {
+  // frames reads the film with ffprobe first. Ctrl-C reaches every process
+  // of the group at once, so it ends ffprobe while launch-film waits on it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const ffprobe = path.join(dir, "ffprobe");
+  fs.writeFileSync(ffprobe, `#!/bin/sh\n: > "${path.join(dir, "started")}"\nsleep 20\nexec ffprobe "$@"\n`, { mode: 0o755 });
+  const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "frames", path.join(dir, "film.mp4")], {
+    detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, LAUNCH_FILM_FFPROBE: ffprobe } });
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 1000 && !fs.existsSync(path.join(dir, "started")); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  process.kill(-child.pid, "SIGINT");
+  const { code, signal } = await ended;
+  assert.deepEqual({ code, signal, stderr }, { code: null, signal: "SIGINT", stderr: "launch-film: stopped\n" });
 });

@@ -36,23 +36,46 @@ function input(file) {
 // The arguments that write one picture to `file` (see above).
 const picture = (file) => ["-update", "1", file];
 
-// Runs ffmpeg and resolves { code, stderr } (the end of it). A filter's own
-// report (ebur128's summary) needs loglevel "info".
+// Why a run of ffmpeg or ffprobe ({ code, signal, stderr }) failed: the end
+// of its own words, else the signal that ended it, else its exit code. One
+// killed outright with no word was most often ended by the system running
+// out of memory.
+function why(r, { lines = 3, name = "ffmpeg" } = {}) {
+  const said = String(r.stderr || "").trim().split("\n").slice(-lines).join(" | ");
+  if (said) return `${name} failed: ${said}`;
+  if (r.signal) return `${name} was stopped by ${r.signal}${r.signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`;
+  return `${name} failed with exit code ${r.code}`;
+}
+
+// A synchronous run (spawnSync's result) that a signal ended: an error that
+// says so, after `what` it was doing. Its own timeout's is not one; the
+// caller tells of that.
+function stoppedSync(r, name, what) {
+  if (!r.signal || (r.error && r.error.code === "ETIMEDOUT")) return null;
+  return Object.assign(new Error(`${what}: ${why({ signal: r.signal }, { name })}`), { signal: r.signal });
+}
+
+// Runs ffmpeg and resolves { code, signal, stderr } (the end of it). A
+// filter's own report (ebur128's summary) needs loglevel "info".
 function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
   return new Promise((resolve) => {
     const child = track(spawn(FFMPEG, ["-hide_banner", "-nostats", "-loglevel", loglevel, "-y", ...args], { stdio: [input ? "pipe" : "ignore", "ignore", "pipe"] }));
     let stderr = "";
     child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-6000)));
     let timer = null;
+    let late = false;
     if (timeout) {
-      timer = setTimeout(() => child.kill("SIGKILL"), timeout);
+      timer = setTimeout(() => {
+        late = true;
+        child.kill("SIGKILL");
+      }, timeout);
       timer.unref();
     }
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (timer) clearTimeout(timer);
-      resolve({ code, stderr });
+      resolve({ code, signal, stderr: late ? `${stderr}\nit took longer than ${Math.round(timeout / 1000)} s` : stderr });
     });
-    child.on("error", (err) => resolve({ code: -1, stderr: err.message }));
+    child.on("error", (err) => resolve({ code: -1, signal: null, stderr: err.message }));
     if (input) {
       child.stdin.on("error", () => {});
       child.stdin.end(input);
@@ -62,7 +85,7 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
 
 async function mustRun(args, what, opts) {
   const r = await run(args, opts);
-  if (r.code !== 0) throw new Error(`${what}: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-3).join(" | ")}`);
+  if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
   return r;
 }
 
@@ -76,6 +99,8 @@ function probe(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-show_entries",
     "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels",
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
+  const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
+  if (stopped) throw stopped;
   try {
     const info = JSON.parse(r.stdout);
     const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
@@ -106,6 +131,8 @@ function probe(file) {
 function readSound(file, { seconds }) {
   const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
     { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
+  const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
+  if (stopped) throw stopped;
   if (r.error) throw new Error(`reading ${file}: ${r.error.message}`);
   if (r.status !== 0 || !r.stdout || r.stdout.length < 8) return null;
   const n = Math.floor(r.stdout.length / 8);
@@ -124,7 +151,7 @@ function readSound(file, { seconds }) {
 // of the info level the summary is read at.
 async function loudnessOf(file, { seconds }) {
   const r = await run([...input(file), "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
-  if (r.code !== 0) throw new Error(`measuring ${file}: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-2).join(" | ")}`);
+  if (r.code !== 0) throw new Error(`measuring ${file}: ${why(r, { lines: 2 })}`);
   const num = (re) => {
     const m = re.exec(r.stderr);
     return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : null;
@@ -149,6 +176,8 @@ function readPixels(file, max = 0) {
   const height = Math.max(1, Math.round(info.height * k));
   const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-frames:v", "1", "-vf", `scale=${width}:${height}:flags=area,format=rgba`, "-f", "rawvideo", "-"],
     { timeout: 30_000, maxBuffer: width * height * 4 + 1024 });
+  const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
+  if (stopped) throw stopped;
   if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture`);
   return { data: r.stdout, width, height, scale: k, sourceWidth: info.width, sourceHeight: info.height };
 }
@@ -169,7 +198,7 @@ function encoder({ output, fps = 25, crf = 15 }) {
   child.stdin.on("error", () => {});
   let ended = null;
   const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
-  const failed = () => new Error(`ffmpeg failed: ${err.trim().split("\n").slice(-2).join(" | ") || (ended.signal ? `stopped by ${ended.signal}` : `exit ${ended.code}`)}`);
+  const failed = () => new Error(why({ ...ended, stderr: err }, { lines: 2 }));
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)
     // takes no more frames: its error, not a wait for room in the pipe.
@@ -186,4 +215,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, input, picture, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, why, stoppedSync, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
