@@ -22,7 +22,8 @@ Usage:
   launch-film looks                    List the looks.
   launch-film types                    List the scene types and their fields.
   launch-film icons <word>             Find icon names for a scene.
-  launch-film doctor                   Check that Chrome and ffmpeg are found.
+  launch-film doctor                   Check that Chrome and ffmpeg 4.4 or newer
+                                       are found.
 
 Options:
   --out <dir>          Folder for the brand, film.json and the film
@@ -273,8 +274,13 @@ async function main() {
     const chrome = findChrome();
     const ffmpeg = available();
     const node = Number(process.versions.node.split(".")[0]);
-    process.stdout.write(`node    ${process.versions.node}${node >= 22 ? "" : " (22 or newer is needed)"}\nchrome  ${chrome || "not found: install Chrome or set LAUNCH_FILM_CHROME"}\nffmpeg  ${ffmpeg || "not found: install ffmpeg or set LAUNCH_FILM_FFMPEG"}\n`);
-    if (!chrome || !ffmpeg || node < 22) process.exitCode = 1;
+    // ffmpeg 4.3 has no scdet for check and frames, 4.2 no xfade for the
+    // render. A version it does not say plainly (a build from git) passes.
+    const v = /^n?(\d+)\.(\d+)/.exec(ffmpeg || "");
+    const oldFfmpeg = Boolean(v) && Number(v[1]) * 100 + Number(v[2]) < 404;
+    process.stdout.write(`node    ${process.versions.node}${node >= 22 ? "" : " (22 or newer is needed)"}\nchrome  ${chrome || "not found: install Chrome or set LAUNCH_FILM_CHROME"}\n` +
+      `ffmpeg  ${ffmpeg ? `${ffmpeg}${oldFfmpeg ? " (4.4 or newer is needed)" : ""}` : "not found: install ffmpeg or set LAUNCH_FILM_FFMPEG"}\n`);
+    if (!chrome || !ffmpeg || oldFfmpeg || node < 22) process.exitCode = 1;
     return;
   }
   if (command === "render") {

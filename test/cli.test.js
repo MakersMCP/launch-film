@@ -175,3 +175,16 @@ test("a plan into a folder already there writes the path of a file outside the k
   const { loadFilm } = require("../src/film");
   assert.deepEqual(loadFilm(path.join(dir, "film.json")).problems, []);
 });
+
+test("doctor says when ffmpeg is older than 4.4, and passes a version it cannot read", { skip: process.platform === "win32" && "the stand-in ffmpeg is a shell script" }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const doctor = (version) => {
+    const ffmpeg = path.join(dir, `ffmpeg-${version}`);
+    fs.writeFileSync(ffmpeg, `#!/bin/sh\necho 'ffmpeg version ${version} Copyright (c) 2000-2022 the FFmpeg developers'\n`, { mode: 0o755 });
+    return spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "doctor"], { encoding: "utf8", timeout: 30_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  };
+  const old = doctor("4.2.7-0ubuntu0.1");
+  assert.match(old.stdout, /^ffmpeg {2}4\.2\.7-0ubuntu0\.1 \(4\.4 or newer is needed\)$/m);
+  assert.equal(old.status, 1);
+  for (const version of ["4.4.2-0ubuntu0.22.04.1", "n7.1", "N-112233-gabcdef0"]) assert.match(doctor(version).stdout, new RegExp(`^ffmpeg {2}${escape(version)}$`, "m"));
+});
