@@ -12,6 +12,7 @@ const out = require("../src/out");
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-out-"));
 const noSignals = process.platform === "win32" && "POSIX signals";
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Files and folders as { "a/b.txt": content, "a/": "folder" }, hidden ones too.
 function write(dir, files) {
@@ -125,11 +126,109 @@ test("a commit whose undo fails too keeps the earlier files in a folder of its o
   assert.match(err.message, new RegExp(`Some of the earlier files could not be put back; they are in .*${kept[0]}\\.$`));
   const inKept = snap(path.join(dir, kept[0]));
   assert.equal(inKept[".old/film.mp4"], "old film");
-  assert.match(inKept["launch-film-kept.txt"], /could not put these earlier files back.*\n {2}\.old\/film\.mp4\n/s);
+  assert.match(inKept["launch-film-kept.txt"], new RegExp(`^launch-film could not put these earlier files back in ${escape(dir)}:\n {2}film\.mp4\nThey are in \.old here, each by its path from ${escape(dir)}\.`));
   // The rest is as it was.
   assert.ok(!fs.existsSync(path.join(dir, "film.mp4")));
   assert.equal(fs.readFileSync(path.join(dir, "frames", "clip-1-a.jpg"), "utf8"), "old 1");
   assert.equal(fs.readFileSync(path.join(dir, "brand", "brand.json"), "utf8"), "old kit");
+});
+
+test("a commit whose undo fails and whose folder cannot be kept by name says where the earlier files really are", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  // As above, and renaming the part folder to keep it fails too (the sixth).
+  const err = await withRenameFailing([3, 5, 6], () => out.within(dir, async (run) => make(run)).catch((e) => e));
+  const parts = fs.readdirSync(dir).filter((n) => n.startsWith(".launch-film-part-"));
+  assert.equal(parts.length, 1);
+  assert.ok(err.message.endsWith(`Some of the earlier files could not be put back; they are in ${path.join(dir, parts[0])}.`), err.message);
+  assert.equal(fs.readFileSync(path.join(dir, parts[0], ".old", "film.mp4"), "utf8"), "old film");
+  // A later run that ends well there keeps that folder for them.
+  age(path.join(dir, parts[0]));
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a later check"));
+  const kept = fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1);
+  assert.equal(fs.readFileSync(path.join(dir, kept[0], ".old", "film.mp4"), "utf8"), "old film");
+  out.noticed();
+});
+
+// Every file and folder in `at` made `minutes` older, as a part folder left
+// that long ago.
+function age(at, minutes = 20) {
+  const when = Date.now() / 1000 - minutes * 60;
+  for (const e of fs.readdirSync(at, { withFileTypes: true })) {
+    if (e.isDirectory()) age(path.join(at, e.name), minutes);
+    else fs.utimesSync(path.join(at, e.name), when, when);
+  }
+  fs.utimesSync(at, when, when);
+}
+
+// A run killed outright (SIGKILL) as it makes its `kill`th move while it
+// puts a new film.mp4 in `dir`; with `made`, `dir` is made, with an earlier
+// film in it, while the run works, as by another run.
+function killedInCommit(dir, kill, made = false) {
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const [dir, kill, made] = process.argv.slice(1);
+const real = fs.renameSync;
+let n = 0;
+fs.renameSync = (from, to) => {
+  if (++n === Number(kill)) process.kill(process.pid, "SIGKILL");
+  return real(from, to);
+};
+out.within(dir, async (run) => {
+  fs.writeFileSync(run.out("film.mp4"), "new film");
+  if (made === "made") {
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "film.mp4"), "old film");
+  }
+});
+`;
+  const r = spawnSync(process.execPath, ["-e", script, dir, String(kill), made ? "made" : ""], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.signal, "SIGKILL", r.stderr);
+}
+
+test("a part folder left by a run killed while it put its files in place keeps the earlier files it had moved aside", async () => {
+  // Killed between moving the earlier film.mp4 aside (the first move) and
+  // moving the new one in (the second).
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  killedInCommit(dir, 2);
+  const left = fs.readdirSync(dir).filter((n) => n.startsWith(".launch-film-part-"));
+  assert.equal(left.length, 1);
+  assert.ok(!fs.existsSync(path.join(dir, "film.mp4")));
+  age(path.join(dir, left[0]));
+  // A later run that ends well there, 20 minutes on, keeps it for them.
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a later check"));
+  const kept = fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1, fs.readdirSync(dir).join(", "));
+  assert.equal(fs.readFileSync(path.join(dir, kept[0], ".old", "film.mp4"), "utf8"), "old film");
+  const note = fs.readFileSync(path.join(dir, kept[0], "launch-film-kept.txt"), "utf8");
+  assert.match(note, new RegExp(`^A launch-film run \\(process \\d+\\) was killed while it put its files in place in ${escape(dir)}, and left these earlier files it had moved aside:\n {2}film\.mp4\n`));
+  assert.deepEqual(out.noticed(), [`a launch-film run killed while it put its files in ${dir} left earlier files in ${path.join(dir, kept[0])}; launch-film-kept.txt there lists them`]);
+  assert.equal(fs.readFileSync(path.join(dir, "CHECK.md"), "utf8"), "a later check");
+  assert.ok(!fs.readdirSync(dir).some((n) => n.startsWith(".launch-film-")), "no part folder or lock is left");
+});
+
+test("a run whose folder was made while it worked puts the earlier files aside in that folder", async () => {
+  // Its part folder is next to the folder; the earlier film, which another
+  // run put there meanwhile, goes aside in a part folder in the folder, so a
+  // kill between the two moves leaves it where a later run there finds it.
+  const base = tmp();
+  const dir = path.join(base, "film");
+  killedInCommit(dir, 2, true);
+  const inside = fs.readdirSync(dir).filter((n) => n.startsWith(".launch-film-part-"));
+  assert.equal(inside.length, 1, fs.readdirSync(dir).join(", "));
+  assert.equal(fs.readFileSync(path.join(dir, inside[0], ".old", "film.mp4"), "utf8"), "old film");
+  for (const n of fs.readdirSync(base)) if (n.startsWith(".launch-film-part-")) age(path.join(base, n));
+  age(path.join(dir, inside[0]));
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a later check"));
+  const kept = fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1);
+  assert.match(fs.readFileSync(path.join(dir, kept[0], "launch-film-kept.txt"), "utf8"), new RegExp(`in place in ${escape(dir)}, and left`));
+  assert.deepEqual(fs.readdirSync(base), ["film"], "the run's own part folder next to it is gone");
+  out.noticed();
 });
 
 test("a run inside another's part folder goes in with it, or not at all", async () => {

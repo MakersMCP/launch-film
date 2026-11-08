@@ -23,7 +23,9 @@
 // folder's lock as well, so it takes turns with a run that puts its files in
 // that folder alone. A folder the files go into that is on another disk (one
 // a link leads to) takes them through a part folder of its own, so every
-// move is a rename on one disk.
+// move is a rename on one disk. The earlier files a run moves aside go in
+// the .old of a part folder that is in the folder they come from, by their
+// paths from it.
 //
 // A stop (Ctrl-C, SIGTERM, SIGHUP) passes its signal on to the Chrome,
 // ffmpeg and easybrandkit the runs started, kills those still running after
@@ -33,7 +35,9 @@
 // says which folder was left as it was (told). A run killed outright
 // (SIGKILL) cannot remove its part folder: a later run that ends well in the
 // same place removes it, once its process is gone and nothing in it has
-// changed for STALE.
+// changed for STALE. One killed while it put its files in place can hold
+// earlier files in its .old: that part folder is never removed, but kept
+// under a name no run removes, with a note of what is in it (sweep).
 
 const fs = require("fs");
 const os = require("os");
@@ -58,8 +62,10 @@ const open = new Set();
 const temps = new Map();
 const children = new Set();
 const places = [];
-// What became of the folders of the runs a stop or a failure ended.
+// What became of the folders of the runs a stop or a failure ended, and
+// what the runs that ended well found left by runs killed outright.
 const told = [];
+const found = [];
 let stopping = null;
 // A failed run is ending the process (exit).
 let ending = false;
@@ -204,10 +210,11 @@ function move(from, to, moved, rel) {
 }
 
 // Puts one output in place: a file, or a folder named whole, replaces the
-// one there (moved aside into the `old` folder of ctx); another folder takes
-// its files in one by one, so the files there that this run does not make
-// stay. A folder on another disk than the new files gets them through a
-// part folder of its own in it, the earlier files aside there too.
+// one there (moved aside into the `old` folder of ctx, by its path from
+// ctx.home); another folder takes its files in one by one, so the files
+// there that this run does not make stay. A folder on another disk than the
+// new files gets them through a part folder of its own in it, the earlier
+// files aside there too.
 function place(ctx, from, to, rel, whole) {
   const isFolder = fs.lstatSync(from).isDirectory();
   const there = lstat(to);
@@ -224,13 +231,13 @@ function place(ctx, from, to, rel, whole) {
       fs.mkdirSync(source);
       ctx.run.stages.push(source);
       for (const name of fs.readdirSync(from)) if (!name.startsWith(".")) fs.cpSync(path.join(from, name), path.join(source, name), { recursive: true });
-      into = { ...ctx, old: path.join(source, ".old") };
+      into = { ...ctx, old: path.join(source, ".old"), home: to };
     }
     for (const name of fs.readdirSync(source)) if (!name.startsWith(".")) place(into, path.join(source, name), path.join(to, name), path.join(rel, name), false);
     return;
   }
   if (there) {
-    const aside = path.join(ctx.old, rel);
+    const aside = path.join(ctx.old, path.relative(ctx.home, to));
     fs.mkdirSync(path.dirname(aside), { recursive: true });
     move(to, aside, ctx.moved, rel);
   }
@@ -340,9 +347,19 @@ function commit(run) {
   // held until the files are in place or put back.
   const unlocks = [];
   try {
-    const ctx = { run, old: path.join(part, ".old"), moved: [], unlocks };
-    fs.mkdirSync(ctx.old, { recursive: true });
+    const ctx = { run, old: null, home: dir, moved: [], unlocks };
     try {
+      // The earlier files go aside in a part folder in this folder: the
+      // run's own, or, when the run's is next to it (the folder was made
+      // meanwhile), one made here for them.
+      let aside = part;
+      if (path.dirname(part) !== dir) {
+        aside = path.join(dir, partName());
+        fs.mkdirSync(aside);
+        run.stages.push(aside);
+      }
+      ctx.old = path.join(aside, ".old");
+      fs.mkdirSync(ctx.old, { recursive: true });
       for (const name of names) place(ctx, path.join(part, name), path.join(dir, name), name, run.outputs.get(name));
     } catch (err) {
       // Undone in reverse: each new file back to where it came from, each
@@ -383,27 +400,38 @@ function failed(run, err, stuck, left) {
 
 // A part folder holding earlier files that could not be put back is kept,
 // under a name no run removes, with a note of what is in it: the run's own,
-// or one it made in a folder on another disk.
+// or one it made in the folder or in a folder on another disk.
 function keep(run, stuck) {
   ended(run);
   const kept = [];
   for (const folder of [run.part, ...run.stages]) {
-    const mine = stuck.filter((f) => inside(f, folder)).map((f) => path.relative(folder, f));
-    if (!mine.length) continue;
-    const name = path.join(path.dirname(folder), path.basename(folder).replace(/^\.launch-film-part-/, "launch-film-kept-"));
-    const home = folder === run.part ? run.dir : path.dirname(folder);
-    try {
-      fs.writeFileSync(path.join(folder, "launch-film-kept.txt"), `launch-film could not put these earlier files back in ${shown(home)}:\n${mine.map((f) => `  ${f}`).join("\n")}\n` +
-        "They are in .old here. Move them where they belong, then remove this folder: launch-film leaves it alone.\n");
-      fs.renameSync(folder, name);
-      kept.push(shown(name));
-    } catch {
-      kept.push(shown(folder));
-    }
+    const mine = stuck.filter((f) => inside(f, path.join(folder, ".old"))).map((f) => path.relative(path.join(folder, ".old"), f));
+    if (mine.length) kept.push(keepFolder(folder, mine, `launch-film could not put these earlier files back in ${shown(path.dirname(folder))}`));
   }
   // The rest of what the run made goes.
-  for (const folder of [run.part, ...run.stages]) if (lstat(folder) && !kept.includes(shown(folder))) remove(folder);
+  for (const folder of [run.part, ...run.stages]) if (lstat(folder) && !kept.includes(folder)) remove(folder);
   return kept.join(" and ");
+}
+
+// Keeps a part folder whose .old holds earlier files `files` (their paths
+// from the folder it is in), under a name no run removes, with a note that
+// starts with `what`. Returns where the files are: a folder that cannot be
+// renamed keeps its own name, and sweep never removes it either.
+function keepFolder(folder, files, what) {
+  const home = shown(path.dirname(folder));
+  try {
+    fs.writeFileSync(path.join(folder, "launch-film-kept.txt"), `${what}:\n${files.map((f) => `  ${f}`).join("\n")}\n` +
+      `They are in .old here, each by its path from ${home}. Put back the ones you want, then remove this folder: launch-film leaves it alone.\n`);
+  } catch {
+    // Kept all the same.
+  }
+  const name = path.join(path.dirname(folder), path.basename(folder).replace(/^\.launch-film-part-/, "launch-film-kept-"));
+  try {
+    fs.renameSync(folder, name);
+    return name;
+  } catch {
+    return folder;
+  }
 }
 
 function finish(run, names) {
@@ -596,6 +624,40 @@ function touched(folder) {
   return newest;
 }
 
+// What a part folder's .old holds: the paths of its entries, a folder's
+// with a / at its end.
+function earlier(part) {
+  const old = path.join(part, ".old");
+  const list = [];
+  const walk = (at, rel) => {
+    let names = [];
+    try {
+      names = fs.readdirSync(at, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of names) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      let inner = 0;
+      try {
+        inner = e.isDirectory() ? fs.readdirSync(path.join(at, e.name)).length : 0;
+      } catch {
+        // Listed as a folder.
+      }
+      if (inner) walk(path.join(at, e.name), r);
+      else list.push(e.isDirectory() ? `${r}/` : r);
+    }
+  };
+  walk(old, "");
+  return list;
+}
+
+// Removes the part folders in `folder` that runs killed outright left: not
+// a run's of this process that has not ended, nothing in them changed for
+// STALE, and their process gone, or its pid now this process's (in a
+// container every run can have the same pid). One whose .old holds earlier
+// files (the run was killed while it put its files in place) is kept for
+// them instead, and said once the run ends (noticed).
 function sweep(folder) {
   let entries = [];
   try {
@@ -603,13 +665,29 @@ function sweep(folder) {
   } catch {
     return;
   }
+  const ours = new Set([...open].flatMap((r) => [r.part, ...r.stages]));
   for (const entry of entries) {
     const m = PART.exec(entry.name);
-    if (!m || !entry.isDirectory() || Number(m[1]) === process.pid) continue;
     const at = path.join(folder, entry.name);
-    if (running(Number(m[1])) || Date.now() - touched(at) < STALE) continue;
-    remove(at);
+    if (!m || !entry.isDirectory() || ours.has(at)) continue;
+    const pid = Number(m[1]);
+    if (Date.now() - touched(at) < STALE || (pid !== process.pid && running(pid))) continue;
+    const files = earlier(at);
+    if (!files.length) {
+      remove(at);
+      continue;
+    }
+    const kept = keepFolder(at, files, `A launch-film run (process ${m[1]}) was killed while it put its files in place in ${shown(folder)}, and left these earlier files it had moved aside`);
+    found.push(`a launch-film run killed while it put its files in ${shown(folder)} left earlier files in ${shown(kept)}; launch-film-kept.txt there lists them`);
   }
 }
 
-module.exports = { begin, within, shown, aftermath, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE, LOCK };
+// What the runs that ended well found left by runs killed outright, said
+// once: the CLI ends with it.
+function noticed() {
+  const said = [...new Set(found)];
+  found.length = 0;
+  return said;
+}
+
+module.exports = { begin, within, shown, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE, LOCK };

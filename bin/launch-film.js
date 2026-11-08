@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, aftermath, stopping, exit } = require("../src/out");
+const { listen, within, shown, aftermath, noticed, stopping, exit } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -330,4 +330,8 @@ async function main() {
   });
 }
 
-main().catch(failed);
+// A run that ended well says last what it found left by runs killed
+// outright.
+main().then(() => {
+  for (const note of noticed()) say(`note: ${note}\n`);
+}, failed);
