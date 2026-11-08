@@ -4,7 +4,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { findChrome } = require("../src/chrome");
@@ -13,6 +12,7 @@ const { makeStills, parseTargets, galleryClips, TARGETS } = require("../src/stil
 const motion = require("../src/motion");
 const { readBrand } = require("../src/brand");
 const { planFilm } = require("../src/plan");
+const { tmp } = require("./tmp");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -60,7 +60,7 @@ test("every look lays out a hero, a hero with no words and a tile", () => {
 });
 
 test("stills come out at their exact sizes from a film's plan", { skip }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-stills-"));
+  const dir = tmp();
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   const brand = readBrand(path.join(dir, "brand", "brand.json"));
   const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
@@ -102,7 +102,7 @@ function snap(dir) {
 }
 
 test("a stills run that fails keeps the earlier pictures", { skip: noShell, timeout: 240_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-stills-"));
+  const dir = tmp();
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
   const film = planFilm(readBrand(path.join(dir, "brand", "brand.json")), words, { filmDir: dir });
@@ -114,7 +114,7 @@ test("a stills run that fails keeps the earlier pictures", { skip: noShell, time
   fs.writeFileSync(filmFile, JSON.stringify(film));
   const before = snap(dir);
   // og.png is made again, then x.png fails, emptied first as ffmpeg -y does.
-  const ffmpeg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-")), "ffmpeg");
+  const ffmpeg = path.join(tmp(), "ffmpeg");
   fs.writeFileSync(ffmpeg, `#!/bin/sh\ncase "$*" in *x.png*) for last; do :; done; : > "$last"; echo 'stand-in: no x today' >&2; exit 1;; esac\nexec '${(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
   const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "stills", filmFile, "--for", "og,x"],
     { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });

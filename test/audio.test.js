@@ -2,9 +2,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const audio = require("../src/audio");
+const { tmp } = require("./tmp");
 
 const peak = (bus) => {
   let p = 0;
@@ -45,7 +45,7 @@ test("the mix is limited and written as a float WAV", () => {
   const seconds = 3;
   const mix = audio.mixFilm({ seconds, music: null, cues: [{ sfx: "impact-bass-1", at: 0.2, volume: 2 }, { sfx: "impact-bass-2", at: 0.2, volume: 2 }, { sfx: "nope", at: 1, volume: 1 }] });
   assert.ok(peak(mix) < 1);
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-")), "a.wav");
+  const file = path.join(tmp(), "a.wav");
   audio.writeWav(file, mix);
   const head = fs.readFileSync(file).subarray(0, 44);
   assert.equal(head.toString("ascii", 0, 4), "RIFF");

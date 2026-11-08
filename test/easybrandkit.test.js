@@ -2,11 +2,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { easybrandkitCommands, runEasybrandkit } = require("../src/brand");
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+const { tmp } = require("./tmp");
 
 // Runs fn with PATH set to dir alone and LAUNCH_FILM_EASYBRANDKIT unset.
 async function withPath(dir, fn) {

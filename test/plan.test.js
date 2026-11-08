@@ -9,6 +9,7 @@ const { planFilm, copyFrom, markEnd, findNumber, withoutName, fit } = require(".
 const { loadFilm, checkMusic } = require("../src/film");
 const { MOODS, Bus, SR, writeWav } = require("../src/audio");
 const { available } = require("../src/ffmpeg");
+const { tmp } = require("./tmp");
 
 const fixture = path.join(__dirname, "fixtures", "acme");
 const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
@@ -106,7 +107,7 @@ test("easybrandkit's headings come first, with the page's line under each", () =
 // A film of two clips, 5 s long, its last clip at 2.5 s, in a folder of its
 // own with the test brand: loadFilm's answer for each "music" value given.
 function filmWithMusic() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-music-"));
+  const dir = tmp();
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   const file = path.join(dir, "film.json");
   const load = (music) => {

@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { tmp } = require("./tmp");
 
 const root = path.join(__dirname, "..");
 const cli = (...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 30_000 });
@@ -50,7 +51,7 @@ const os = require("os");
 const crypto = require("crypto");
 const fixture = path.join(root, "test", "fixtures", "acme");
 function filmFolder() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const dir = tmp();
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   fs.copyFileSync(path.join(fixture, "words.json"), path.join(dir, "words.json"));
   fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: "brand/brand.json", look: "launch", clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }));
@@ -87,7 +88,7 @@ function failingEasybrandkit(dir) {
 // A kit of its own: the test brand under another name, or with a brand.json
 // that cannot be read.
 function otherKit(text) {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")), "kit");
+  const dir = path.join(tmp(), "kit");
   fs.cpSync(fixture, dir, { recursive: true });
   const kit = JSON.parse(fs.readFileSync(path.join(dir, "brand.json"), "utf8"));
   fs.writeFileSync(path.join(dir, "brand.json"), text || JSON.stringify({ ...kit, name: "Other Notes" }));
@@ -113,17 +114,17 @@ test("a plan given another kit and a words.json that is not there leaves the fol
 });
 
 test("a plan whose easybrandkit fails leaves the folder's kit as it was", () => {
-  planFails(["--easybrandkit", failingEasybrandkit(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")))], /easybrandkit failed \(exit 1\): easybrandkit: Could not open the page/);
+  planFails(["--easybrandkit", failingEasybrandkit(tmp())], /easybrandkit failed \(exit 1\): easybrandkit: Could not open the page/);
 });
 
 test("a plan whose easybrandkit fails leaves a kit that brand/ links to as it was", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
   // brand/ links to a kit other films share.
   const dir = filmFolder();
-  const shared = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")), "shared-kit");
+  const shared = path.join(tmp(), "shared-kit");
   fs.renameSync(path.join(dir, "brand"), shared);
   fs.symlinkSync(shared, path.join(dir, "brand"));
   const [before, kit] = [snap(dir, { links: true }), snap(shared)];
-  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", failingEasybrandkit(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"))));
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", failingEasybrandkit(tmp()));
   assert.equal(r.status, 1, r.stderr);
   assert.deepEqual(snap(shared), kit);
   assert.deepEqual(snap(dir, { links: true }), before);
@@ -134,7 +135,7 @@ test("a plan given a kit that cannot be read leaves the folder's kit as it was",
 });
 
 test("a plan that fails makes no folder", () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const base = tmp();
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, new RegExp(`\\nlaunch-film: ${escape(path.join(base, "films", "acme"))} was not made\\.\\n$`));
@@ -144,7 +145,7 @@ test("a plan that fails makes no folder", () => {
 test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop", { skip: process.platform === "win32" && "POSIX signals" }, async () => {
   // frames reads the film with ffprobe first. Ctrl-C reaches every process
   // of the group at once, so it ends ffprobe while launch-film waits on it.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const dir = tmp();
   const ffprobe = path.join(dir, "ffprobe");
   fs.writeFileSync(ffprobe, `#!/bin/sh\n: > "${path.join(dir, "started")}"\nsleep 20\nexec ffprobe "$@"\n`, { mode: 0o755 });
   const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "frames", path.join(dir, "film.mp4")], {
@@ -177,7 +178,7 @@ test("a plan into a folder already there writes the path of a file outside the k
 });
 
 test("doctor says when ffmpeg is older than 4.4, and passes a version it cannot read", { skip: process.platform === "win32" && "the stand-in ffmpeg is a shell script" }, () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const dir = tmp();
   const doctor = (version) => {
     const ffmpeg = path.join(dir, `ffmpeg-${version}`);
     fs.writeFileSync(ffmpeg, `#!/bin/sh\necho 'ffmpeg version ${version} Copyright (c) 2000-2022 the FFmpeg developers'\n`, { mode: 0o755 });

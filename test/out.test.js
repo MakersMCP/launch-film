@@ -10,7 +10,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const out = require("../src/out");
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-out-"));
+const { tmp } = require("./tmp");
 const noSignals = process.platform === "win32" && "POSIX signals";
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

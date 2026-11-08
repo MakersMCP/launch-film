@@ -10,6 +10,7 @@ const { findChrome, launch, openPage, evaluate } = require("../src/chrome");
 const { FFMPEG, available, probe, readPixels, mustRun } = require("../src/ffmpeg");
 const { renderFilm } = require("../src/film");
 const audio = require("../src/audio");
+const { tmp } = require("./tmp");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -18,7 +19,7 @@ const fixture = path.join(__dirname, "fixtures", "acme");
 const TIMELINE = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "timeline.js"), "utf8");
 
 async function withPage(body, fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+  const dir = tmp();
   fs.writeFileSync(path.join(dir, "index.html"), `<!doctype html><html><head><meta charset="utf-8"><script>${TIMELINE}</script></head><body>${body}</body></html>`);
   const browser = await launch({ W: 800, H: 600 });
   try {
@@ -100,7 +101,7 @@ const FILM = {
 };
 // A folder holding the test brand and film.json, with `change` made to it.
 function filmFolder(change = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+  const dir = tmp();
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...FILM, ...change }));
   return dir;
@@ -124,7 +125,7 @@ async function renderedFolder() {
     await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
     rendered = dir;
   }
-  const copy = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+  const copy = tmp();
   fs.cpSync(rendered, copy, { recursive: true });
   return copy;
 }
@@ -191,7 +192,7 @@ const leftBy = (pid) => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("
 // A stand-in for ffmpeg: a line of sh that may answer for it first ("$@"
 // are the arguments), then the ffmpeg the tests run.
 function standIn(line) {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-")), "ffmpeg");
+  const file = path.join(tmp(), "ffmpeg");
   const real = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
   fs.writeFileSync(file, `#!/bin/sh\n${line}\nexec '${real.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
   return file;

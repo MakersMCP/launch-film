@@ -3,15 +3,15 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { loadFont, cacheDir } = require("../src/fonts");
+const { tmp } = require("./tmp");
 
 const CSS = "/* latin */\n@font-face {\n  font-family: 'Acme Sans';\n  font-weight: 400;\n  src: url(https://fonts.gstatic.com/s/acme.woff2) format('woff2');\n}\n";
 
 test("a family is cached whole, and a cached file cut short is fetched again", async () => {
   const saved = [process.env.LAUNCH_FILM_CACHE, global.fetch];
-  process.env.LAUNCH_FILM_CACHE = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-fonts-"));
+  process.env.LAUNCH_FILM_CACHE = tmp();
   let fetched = 0;
   global.fetch = async (url) => {
     fetched++;

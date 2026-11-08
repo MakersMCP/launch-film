@@ -4,7 +4,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { available, mustRun, probe } = require("../src/ffmpeg");
@@ -14,7 +13,7 @@ const { detectCuts, givenCuts, saveFrames } = require("../src/frames");
 const draw = require("../src/draw");
 
 const skip = !available() ? "ffmpeg not found" : false;
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-check-"));
+const { tmp } = require("./tmp");
 const status = (r, name) => (r.checks.find((c) => c.name === name) || {}).status;
 const root = path.join(__dirname, "..");
 

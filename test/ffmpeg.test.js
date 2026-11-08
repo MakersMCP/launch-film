@@ -5,12 +5,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { available, why, probe, readPixels, writePng, coverPng, mustRun, whole } = require("../src/ffmpeg");
 
 const skip = !available() ? "ffmpeg not found" : false;
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-ffmpeg-"));
+const { tmp } = require("./tmp");
 
 test("a picture in a folder named like a numbered sequence is read and written as it is", { skip }, async () => {
   const base = tmp();

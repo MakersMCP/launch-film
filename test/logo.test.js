@@ -2,14 +2,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { prepareLogo, prepareIcon } = require("../src/logo");
 const { available, readPixels, mustRun } = require("../src/ffmpeg");
 
 const fixture = path.join(__dirname, "fixtures", "acme");
 const noFfmpeg = !available();
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+const { tmp } = require("./tmp");
 
 test("a header logo is cut out and keyed off its ground", { skip: noFfmpeg && "ffmpeg not found" }, async () => {
   const out = path.join(tmp(), "mark.png");
