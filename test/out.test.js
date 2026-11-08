@@ -420,6 +420,95 @@ setTimeout(() => { fs.rmSync(process.argv[1], { recursive: true }); process.exit
   assert.deepEqual(snap(dir), { "film.mp4": "newer film" });
 });
 
+// A lock as a process killed outright leaves it: holding `pid`, made `age`
+// ms ago.
+function leftLock(dir, pid, age = 0) {
+  write(dir, { [`${out.LOCK}/pid`]: String(pid) });
+  const when = (Date.now() - age) / 1000;
+  fs.utimesSync(path.join(dir, out.LOCK), when, when);
+}
+
+test("a lock whose pid is in use again is taken over: this process's own, a process started after it, or a lock a minute old", async (t) => {
+  const quick = async (dir, what) => {
+    const started = Date.now();
+    await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"));
+    assert.ok(Date.now() - started < 2000, `${what}: waited ${Date.now() - started} ms`);
+    assert.deepEqual(snap(dir), { "film.mp4": "new film" }, what);
+  };
+  // In a container every run can have the same pid.
+  let dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  leftLock(dir, process.pid);
+  await quick(dir, "this process's pid");
+  // Its pid is that of a process that runs, but no commit takes a minute.
+  dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  leftLock(dir, process.ppid, 2 * 60 * 1000);
+  await quick(dir, "a lock two minutes old");
+  if (!fs.existsSync("/proc/self/stat")) return t.skip("no /proc to tell when a process started");
+  // A process started after the lock was made has the pid now.
+  const later = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  try {
+    dir = tmp();
+    write(dir, { "film.mp4": "old film" });
+    leftLock(dir, later.pid, 30 * 1000);
+    await quick(dir, "a process started after the lock");
+  } finally {
+    later.kill("SIGKILL");
+  }
+});
+
+test("a lock another run may still hold is waited for, and the refusal names it", async () => {
+  // The test runner started before the lock was made, and runs.
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  leftLock(dir, process.ppid);
+  const lock = path.join(dir, out.LOCK);
+  const err = await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film")).catch((e) => e);
+  assert.equal(err.message, `could not put the new files in ${dir}: another launch-film run has been putting its files in ${dir} for 10 s. ` +
+    `If no other launch-film run is at work there, remove ${lock} and run again. ${dir} is as it was.`);
+  assert.deepEqual(snap(dir), { "film.mp4": "old film", [`${out.LOCK}/`]: "folder", [`${out.LOCK}/pid`]: String(process.ppid) });
+});
+
+test("a lock that cannot get its pid, as on a full disk, is not left", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  const real = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).endsWith(path.join(out.LOCK, "pid"))) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    return real(file, ...rest);
+  };
+  try {
+    await assert.rejects(out.within(dir, async (run) => make(run)), new RegExp(`ENOSPC: no space left on device, write\\. ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is as it was\\.$`));
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.deepEqual(snap(dir), before);
+});
+
+test("a run that adds its files to a folder already there takes turns with a run that holds that folder", async () => {
+  // frames/ is there: a frames run on its own holds frames/'s lock, and the
+  // one-go command adds its frames to it.
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film", "frames/clip-1-a.jpg": "old 1" });
+  const holder = spawn(process.execPath, ["-e", `
+const fs = require("fs");
+fs.mkdirSync(process.argv[1]);
+fs.writeFileSync(process.argv[1] + "/pid", String(process.pid));
+process.stdout.write("held");
+setTimeout(() => { fs.rmSync(process.argv[1], { recursive: true }); process.exit(0); }, 700);`, path.join(dir, "frames", out.LOCK)], { stdio: ["ignore", "pipe", "ignore"] });
+  await new Promise((resolve) => holder.stdout.once("data", resolve));
+  const started = Date.now();
+  await out.within(dir, async (run) => {
+    fs.writeFileSync(run.out("film.mp4"), "new film");
+    fs.mkdirSync(run.out("frames"));
+    fs.writeFileSync(path.join(run.part, "frames", "clip-1-a.jpg"), "new 1");
+  });
+  assert.ok(Date.now() - started >= 400, `waited ${Date.now() - started} ms`);
+  assert.deepEqual(snap(dir), { "film.mp4": "new film", "frames/": "folder", "frames/clip-1-a.jpg": "new 1" });
+});
+
 // A folder on another disk than the temp folder, where the system has one.
 function otherDisk() {
   const dev = fs.statSync(os.tmpdir()).dev;

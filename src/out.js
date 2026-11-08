@@ -18,9 +18,12 @@
 // and they go in with the other run's when that one ends well.
 //
 // Two runs that put their files in one folder at once take turns (lock): the
-// one that ends later replaces the other's files whole. A folder the files
-// go into that is on another disk (one a link leads to) takes them through
-// a part folder of its own, so every move is a rename on one disk.
+// one that ends later replaces the other's files whole. A run that adds its
+// files to a folder already there (frames/, stills/, check/) takes that
+// folder's lock as well, so it takes turns with a run that puts its files in
+// that folder alone. A folder the files go into that is on another disk (one
+// a link leads to) takes them through a part folder of its own, so every
+// move is a rename on one disk.
 //
 // A stop (Ctrl-C, SIGTERM, SIGHUP) passes its signal on to the Chrome,
 // ffmpeg and easybrandkit the runs started, kills those still running after
@@ -41,10 +44,12 @@ const PART = /^\.launch-film-part-(\d+)-[0-9a-f]{8}$/;
 const STALE = 15 * 60 * 1000;
 const STOP_WAIT = 400;
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
-// The commit lock, and how long a run waits for another's commit to end: a
-// commit takes a moment.
+// The commit lock, how long a run waits for another's commit to end (a
+// commit takes a moment), and the age past which a lock was left by a run
+// killed outright, whatever process now has its pid.
 const LOCK = ".launch-film-commit";
 const LOCK_WAIT = 10 * 1000;
+const LOCK_STALE = 60 * 1000;
 
 // The runs begun and not ended, the temp folders (each with what to do
 // before it is removed) and the processes to stop with them, and every part
@@ -209,6 +214,9 @@ function place(ctx, from, to, rel, whole) {
   if (there && isFolder && !isDir(to)) throw Object.assign(new Error("a file is where this run puts a folder"), { at: rel });
   if (there && !isFolder && there.isDirectory()) throw Object.assign(new Error("a folder is where this run puts a file"), { at: rel });
   if (there && isFolder && !whole) {
+    // A run that puts its files in this folder alone (frames, stills or
+    // check on their own) takes turns with this one.
+    ctx.unlocks.push(lock(to, ctx.run.dir));
     let into = ctx;
     let source = from;
     if (fs.statSync(to).dev !== fs.statSync(from).dev) {
@@ -229,20 +237,50 @@ function place(ctx, from, to, rel, whole) {
   move(from, to, ctx.moved, rel);
 }
 
-// Takes the folder's commit lock: a folder named LOCK in it, holding the pid
-// of the process that has it. A lock whose process is gone, or one that
-// never got its pid and is older than a commit takes, was left by a process
-// killed outright and is taken over. Returns what lets it go.
-function lock(dir) {
+// When a process started, in ms, where /proc tells (Linux), else null.
+function startOf(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+    const boot = Number(/^btime (\d+)$/m.exec(fs.readFileSync("/proc/stat", "utf8"))[1]);
+    // The clock ticks a hundred times a second on Linux.
+    return Number.isFinite(ticks) && boot ? (boot + ticks / 100) * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether a lock made at `made` and holding `pid` (0 when it never got one)
+// was left by a process killed outright: its process is gone, or the pid is
+// this process's own or that of a process started after the lock was made
+// (a pid used again, as in a container where every run has the same one),
+// or the lock is older than a commit takes.
+function leftBehind(pid, made) {
+  if (Date.now() - made > LOCK_STALE) return true;
+  if (!pid) return Date.now() - made > 2000;
+  if (pid === process.pid || !running(pid)) return true;
+  const started = startOf(pid);
+  return started !== null && started > made + 2000;
+}
+
+// Takes the commit lock of `dir`: a folder named LOCK in it, holding the pid
+// of the process that has it. A lock left by a process killed outright is
+// taken over (leftBehind). Errors name the lock by its path from `base`, the
+// run's folder. Returns what lets it go.
+function lock(dir, base = dir) {
   const at = path.join(dir, LOCK);
   const since = Date.now();
   for (;;) {
+    let made = false;
     try {
       fs.mkdirSync(at);
+      made = true;
       fs.writeFileSync(path.join(at, "pid"), String(process.pid));
       return () => remove(at);
     } catch (err) {
-      if (err.code !== "EEXIST") throw Object.assign(err, { at: LOCK });
+      // One that could not get its pid, as on a full disk, is not left.
+      if (made) remove(at);
+      if (made || err.code !== "EEXIST") throw Object.assign(err, { at: path.relative(base, at) });
     }
     let pid = 0;
     try {
@@ -251,7 +289,7 @@ function lock(dir) {
       // Not written yet, or let go meanwhile.
     }
     const s = lstat(at);
-    if (s && (pid ? !running(pid) : Date.now() - s.mtimeMs > 2000)) {
+    if (s && leftBehind(pid, s.mtimeMs)) {
       // Moved aside before it is removed, so of two runs that find it left
       // only one takes it over.
       const aside = path.join(dir, `${LOCK}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
@@ -263,7 +301,10 @@ function lock(dir) {
       }
       continue;
     }
-    if (Date.now() - since > LOCK_WAIT) throw Object.assign(new Error(`another launch-film run has been putting its files there for ${LOCK_WAIT / 1000} s`), { at: "" });
+    if (Date.now() - since > LOCK_WAIT) {
+      throw Object.assign(new Error(`another launch-film run has been putting its files in ${shown(dir)} for ${LOCK_WAIT / 1000} s. ` +
+        `If no other launch-film run is at work there, remove ${shown(at)} and run again`), { at: null });
+    }
     pause(20);
   }
 }
@@ -295,8 +336,11 @@ function commit(run) {
   } catch (err) {
     throw failed(run, err, [], []);
   }
+  // The locks of the folders already there that take files one by one,
+  // held until the files are in place or put back.
+  const unlocks = [];
   try {
-    const ctx = { run, old: path.join(part, ".old"), moved: [] };
+    const ctx = { run, old: path.join(part, ".old"), moved: [], unlocks };
     fs.mkdirSync(ctx.old, { recursive: true });
     try {
       for (const name of names) place(ctx, path.join(part, name), path.join(dir, name), name, run.outputs.get(name));
@@ -317,6 +361,7 @@ function commit(run) {
       throw failed(run, err, stuck, left);
     }
   } finally {
+    for (const letGo of unlocks.reverse()) letGo();
     unlock();
   }
   finish(run, names);
@@ -327,7 +372,9 @@ function failed(run, err, stuck, left) {
   run.said = true;
   const at = shown(path.join(run.dir, err.at || ""));
   const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
-  const why = held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${err.message}`;
+  // A message that names its own paths (a lock another run holds) is said
+  // as it is.
+  const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${err.message}`;
   const start = `could not put the new files in ${shown(run.dir)}: ${why}.`;
   if (!stuck.length && !left.length) return new Error(`${start} ${shown(run.dir)} is as it was${held ? "; close the file and run again" : ""}.`);
   return new Error(`${start}${stuck.length ? ` Some of the earlier files could not be put back; they are in ${keep(run, stuck)}.` : ""}` +
