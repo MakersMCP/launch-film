@@ -41,8 +41,8 @@ const PART = /^\.launch-film-part-(\d+)-[0-9a-f]{8}$/;
 const STALE = 15 * 60 * 1000;
 const STOP_WAIT = 400;
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
-// The commit lock, and how long a run waits for another's commit: a commit
-// takes a moment, so a lock held longer is one a killed process left.
+// The commit lock, and how long a run waits for another's commit to end: a
+// commit takes a moment.
 const LOCK = ".launch-film-commit";
 const LOCK_WAIT = 10 * 1000;
 
