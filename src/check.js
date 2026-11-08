@@ -16,7 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { FFMPEG, run, probe, writePng } = require("./ffmpeg");
+const { FFMPEG, input, run, probe, writePng } = require("./ffmpeg");
 const frames = require("./frames");
 const { readCues } = require("./cues");
 const draw = require("./draw");
@@ -78,7 +78,7 @@ function parseAllow(text) {
 async function scanAudio(film, { work, duration }) {
   const notes = path.join(work, `.scan-audio-${process.pid}.txt`);
   try {
-    const r = await run(["-i", film, "-vn", "-af",
+    const r = await run([...input(film), "-vn", "-af",
       `ebur128=metadata=1:peak=true+sample:framelog=verbose,silencedetect=n=-50dB:d=0.5,astats=measure_overall=Peak_count+Flat_factor:measure_perchannel=none,ametadata=mode=print:file=${frames.filterPath(notes)}`,
       "-f", "null", "-"], { loglevel: "info" });
     if (r.code !== 0) throw new Error(`reading the sound: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-2).join(" | ")}`);
@@ -128,7 +128,7 @@ async function scanAudio(film, { work, duration }) {
 // The sound's outline: the loudest sample in each of `columns` slices, in
 // dBFS, from a mono copy at 4 kHz.
 function envelope(film, { duration, columns }) {
-  const r = spawnSync(FFMPEG, ["-v", "error", "-i", film, "-vn", "-ac", "1", "-ar", "4000", "-f", "f32le", "-"], { maxBuffer: Math.ceil(duration * 4000 * 4) + 1e6, timeout: 120_000 });
+  const r = spawnSync(FFMPEG, ["-v", "error", ...input(film), "-vn", "-ac", "1", "-ar", "4000", "-f", "f32le", "-"], { maxBuffer: Math.ceil(duration * 4000 * 4) + 1e6, timeout: 120_000 });
   if (r.status !== 0 || !r.stdout) return null;
   const n = Math.floor(r.stdout.length / 4);
   const peaks = new Array(columns).fill(0);

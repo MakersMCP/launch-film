@@ -11,12 +11,21 @@
 
 const fs = require("fs");
 const path = require("path");
-const { mustRun, probe, readPixels, writePng } = require("./ffmpeg");
+const { input, picture, mustRun, probe, readPixels, writePng } = require("./ffmpeg");
 const draw = require("./draw");
 const { within } = require("./out");
 
-// A path as one value inside an ffmpeg filter graph.
-const filterPath = (p) => `'${String(p).replace(/\\/g, "/").replace(/'/g, "\\'").replace(/:/g, "\\:")}'`;
+// A path as one value inside an ffmpeg filter graph. ffmpeg unquotes the
+// graph twice: once to split it into filters, where '...' is taken as it is
+// and \ outside quotes escapes the next character, and once more to split
+// each filter's options at ':', with the same rules. So the path's \, ' and
+// : are escaped for the second, and the whole is quoted for the first, each
+// ' in it closing the quote, coming in escaped and opening it again. On
+// Windows, where \ divides a path, / serves as well.
+function filterPath(p) {
+  const s = process.platform === "win32" ? String(p).replace(/\\/g, "/") : String(p);
+  return `'${s.replace(/[\\':]/g, (c) => `\\${c}`).replace(/'/g, "'\\''")}'`;
+}
 
 // The clips launch-film's render listed next to the film, or null.
 function readTimeline(film) {
@@ -45,7 +54,7 @@ function joinStretches(list, gap = 0.05) {
 async function scanVideo(film, { work, duration }) {
   const notes = path.join(work, `.scan-video-${process.pid}.txt`);
   try {
-    await mustRun(["-i", film, "-an", "-vf",
+    await mustRun([...input(film), "-an", "-vf",
       `scale=320:-2,scdet=threshold=100,blackdetect=d=0.04:pix_th=0.10:pic_th=0.98,freezedetect=n=-60dB:d=0.5,metadata=mode=print:file=${filterPath(notes)}`,
       "-f", "null", "-"], "reading the picture");
     const frames = [];
@@ -178,7 +187,7 @@ async function grabFrames(film, moments, dir, { duration, ext = "jpg" }) {
   for (const m of moments) {
     const at = Math.max(0, Math.min(duration - 0.05, m.at));
     const file = path.join(dir, `${m.name}.${ext}`);
-    await mustRun(["-ss", at.toFixed(3), "-i", film, "-frames:v", "1", "-q:v", "3", file], "saving a still");
+    await mustRun(["-ss", at.toFixed(3), ...input(film), "-frames:v", "1", "-q:v", "3", ...picture(file)], "saving a still");
     stills.push({ file, at: +at.toFixed(2), label: m.label || "" });
   }
   return stills;

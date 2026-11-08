@@ -3,6 +3,15 @@
 // ffmpeg encodes the frames, reads and writes pictures as raw pixels, joins
 // the clips and lays the sound under them. LAUNCH_FILM_FFMPEG and
 // LAUNCH_FILM_FFPROBE point at other builds.
+//
+// ffmpeg reads a picture's name with a % in it as a numbered sequence (in a
+// folder named take%d, logo.png is looked for as take1/logo.png), both when
+// it reads a picture and when it writes one. So a picture whose name has a %
+// is read with the pattern turned off, and every picture is written with
+// -update 1, which takes its name as it is; ffmpeg 4.4 has both. Only such a
+// name is read that way, since it makes ffmpeg pick the decoder by the
+// name's extension where it otherwise reads what the file holds: a JPEG
+// saved as .png still reads.
 
 const { spawn, spawnSync } = require("child_process");
 const { track } = require("./out");
@@ -16,6 +25,16 @@ function available() {
   const m = /ffmpeg version (\S+)/.exec(r.stdout || "");
   return m ? m[1] : "unknown";
 }
+
+const PICTURE = /\.(png|jpe?g|webp|bmp|tiff?)$/i;
+
+// The arguments that open `file` as an input (see above).
+function input(file) {
+  return String(file).includes("%") && PICTURE.test(file) ? ["-f", "image2", "-pattern_type", "none", "-i", file] : ["-i", file];
+}
+
+// The arguments that write one picture to `file` (see above).
+const picture = (file) => ["-update", "1", file];
 
 // Runs ffmpeg and resolves { code, stderr } (the end of it). A filter's own
 // report (ebur128's summary) needs loglevel "info".
@@ -56,7 +75,7 @@ const rate = (r) => {
 function probe(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-show_entries",
     "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels",
-    "-of", "json", file], { encoding: "utf8", timeout: 20_000 });
+    "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
   try {
     const info = JSON.parse(r.stdout);
     const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
@@ -85,7 +104,7 @@ function probe(file) {
 // plays on both sides. The length is the decoded one: a file's header can
 // be wrong about it (a VBR MP3 without a Xing header).
 function readSound(file, { seconds }) {
-  const r = spawnSync(FFMPEG, ["-v", "error", "-i", file, "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
+  const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
     { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
   if (r.error) throw new Error(`reading ${file}: ${r.error.message}`);
   if (r.status !== 0 || !r.stdout || r.stdout.length < 8) return null;
@@ -104,7 +123,7 @@ function readSound(file, { seconds }) {
 // and a peak of -inf. framelog=verbose keeps the line for every 100 ms out
 // of the info level the summary is read at.
 async function loudnessOf(file, { seconds }) {
-  const r = await run(["-i", file, "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
+  const r = await run([...input(file), "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
   if (r.code !== 0) throw new Error(`measuring ${file}: ffmpeg failed: ${r.stderr.trim().split("\n").slice(-2).join(" | ")}`);
   const num = (re) => {
     const m = re.exec(r.stderr);
@@ -115,9 +134,9 @@ async function loudnessOf(file, { seconds }) {
 
 // A picture made exactly W x H: scaled to cover the size and cut to it from
 // the middle, as an opaque PNG (stores refuse transparency).
-function coverPng(input, output, W, H) {
-  return mustRun(["-i", input, "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1`,
-    "-frames:v", "1", "-pix_fmt", "rgb24", output], `making ${output}`);
+function coverPng(from, output, W, H) {
+  return mustRun([...input(from), "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1`,
+    "-frames:v", "1", "-pix_fmt", "rgb24", ...picture(output)], `making ${output}`);
 }
 
 // A picture's pixels as RGBA, at most `max` px on its long side when given:
@@ -128,7 +147,7 @@ function readPixels(file, max = 0) {
   const k = max ? Math.min(1, max / Math.max(info.width, info.height)) : 1;
   const width = Math.max(1, Math.round(info.width * k));
   const height = Math.max(1, Math.round(info.height * k));
-  const r = spawnSync(FFMPEG, ["-v", "error", "-i", file, "-frames:v", "1", "-vf", `scale=${width}:${height}:flags=area,format=rgba`, "-f", "rawvideo", "-"],
+  const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-frames:v", "1", "-vf", `scale=${width}:${height}:flags=area,format=rgba`, "-f", "rawvideo", "-"],
     { timeout: 30_000, maxBuffer: width * height * 4 + 1024 });
   if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture`);
   return { data: r.stdout, width, height, scale: k, sourceWidth: info.width, sourceHeight: info.height };
@@ -136,7 +155,7 @@ function readPixels(file, max = 0) {
 
 // RGBA pixels written as a PNG.
 function writePng(file, { data, width, height }) {
-  return mustRun(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${width}x${height}`, "-i", "-", "-frames:v", "1", file], "writing a picture", { input: data });
+  return mustRun(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${width}x${height}`, "-i", "-", "-frames:v", "1", ...picture(file)], "writing a picture", { input: data });
 }
 
 // A frame encoder: JPEG frames in, an H.264 MP4 out.
@@ -167,4 +186,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };

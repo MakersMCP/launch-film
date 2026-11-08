@@ -11,7 +11,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage } = require("./chrome");
-const { run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
+const { input, picture, run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -177,7 +177,7 @@ async function buildClip(clip, ctx) {
     const info = probe(clip.imageFile);
     const ext = path.extname(clip.imageFile).toLowerCase() === ".png" ? ".png" : ".jpg";
     const soft = path.join(work, `soft-${clip.index}.jpg`);
-    const blurred = await run(["-i", clip.imageFile, "-vf", "scale='min(1400,iw)':-2,gblur=sigma=12", "-q:v", "5", soft]);
+    const blurred = await run([...input(clip.imageFile), "-vf", "scale='min(1400,iw)':-2,gblur=sigma=12", "-q:v", "5", ...picture(soft)]);
     const page = motion.screenHtml({ mode: clip.mode === "zoom" ? "zoom" : "pan", look, port, seconds, accent: brandAccent, brand: colours,
       image: { file: `capture${ext}`, w: info.width, h: info.height }, soft: blurred.code === 0 ? "soft.jpg" : null, box: clip.box || null,
       side: clip.side || "center", phone: info.height > info.width, fonts });
@@ -201,7 +201,7 @@ async function buildClip(clip, ctx) {
     const keepH = Math.min(info.height, Math.ceil(info.height * page.use) + 2);
     const width = 2 * Math.round(Math.min(info.width, Math.ceil(page.drawnW * 1.25)) / 2);
     const prepared = path.join(work, `device-${clip.index}.png`);
-    await mustRun(["-i", clip.imageFile, "-vf", `crop=${info.width}:${keepH}:0:0,scale=${width}:-2:flags=lanczos`, "-frames:v", "1", prepared], `clip ${clip.index + 1}`);
+    await mustRun([...input(clip.imageFile), "-vf", `crop=${info.width}:${keepH}:0:0,scale=${width}:-2:flags=lanczos`, "-frames:v", "1", ...picture(prepared)], `clip ${clip.index + 1}`);
     return { html: page.html, files: { "screen.png": fs.readFileSync(prepared) }, cues: page.cues, W: page.W, H: page.H };
   }
   // The logo close.

@@ -10,7 +10,7 @@ const { spawnSync } = require("child_process");
 const { available, mustRun, probe } = require("../src/ffmpeg");
 const { checkFilm, parseExpect, parseSeconds, parseAllow, judgeStretches } = require("../src/check");
 const { readCues } = require("../src/cues");
-const { detectCuts, givenCuts } = require("../src/frames");
+const { detectCuts, givenCuts, saveFrames } = require("../src/frames");
 const draw = require("../src/draw");
 
 const skip = !available() ? "ffmpeg not found" : false;
@@ -195,6 +195,31 @@ test("a timeline next to the film gives its cuts", { skip }, async () => {
   fs.writeFileSync(path.join(dir, "film.timeline.json"), JSON.stringify({ clips: [{ index: 1, kind: "scene", type: "opener", start: 0, seconds: 2 }, { index: 2, kind: "screen", start: 2, seconds: 10 }] }));
   const r = await checkFilm(file, {});
   assert.deepEqual(r.cuts.map((c) => [c.at, c.source, c.label]), [[0, "timeline", "scene opener"], [2, "timeline", "screen"]]);
+});
+
+test("check and frames take a film in a folder whose name ffmpeg could misread", { skip }, async () => {
+  // An apostrophe, a colon and a backslash once broke the filters' notes
+  // file, and a %d the stills, which ffmpeg read as a numbered sequence.
+  // Windows takes none of a colon or a backslash in a name.
+  const names = ["it's here", "Ay\u015fe'nin filmi", "q'u'o,t,e[s];f", "take%d", "50% off", ...(process.platform === "win32" ? [] : ["x'y:z", "a:b c,d[e];f", "back\\slash"])];
+  for (const name of names) {
+    const base = tmp();
+    const dir = path.join(base, name);
+    fs.mkdirSync(dir);
+    const file = await film(dir);
+    const r = await checkFilm(file, { lufs: "-22" });
+    assert.equal(r.pass, true, `${name}: ${r.failed.join(", ")}`);
+    assert.ok(r.audio.integrated < -20, `${name}: ${r.audio.integrated}`);
+    assert.deepEqual(fs.readdirSync(path.join(dir, "check")).sort(), ["CHECK.md", "check.json", "sheet.png", "wave.png"], name);
+    assert.equal(probe(path.join(dir, "check", "sheet.png")).height > 100, true, name);
+    // No timeline: frames reads the cuts from the picture.
+    const f = await saveFrames(file);
+    assert.equal(f.cuts.length, 5, name);
+    assert.deepEqual(fs.readdirSync(path.join(dir, "frames")).sort(), [...f.stills.map((x) => path.basename(x.file)), "sheet.jpg"].sort(), name);
+    // Nothing went anywhere else.
+    assert.deepEqual(fs.readdirSync(base), [name]);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["check", "film.mp4", "frames"], name);
+  }
 });
 
 test("no file of the kit asks ebur128 for a framelog value ffmpeg 4.4 refuses", () => {
