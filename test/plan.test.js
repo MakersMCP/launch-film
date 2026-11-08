@@ -119,7 +119,7 @@ function filmWithMusic() {
 }
 
 test("film.json's music is checked before anything renders", async () => {
-  const { load } = filmWithMusic();
+  const { dir, load } = filmWithMusic();
   for (const value of [undefined, true, false, { volume: 0.4 }, { volume: 2 }, {}]) assert.deepEqual(load(value).problems, [], JSON.stringify(value));
   const kinds = '"music" must be true, false, { "volume": 0.55 } or the path of an audio file';
   for (const value of [3, "", ["a.wav"], { file: "a.wav" }]) assert.deepEqual(load(value).problems, [kinds], JSON.stringify(value));
@@ -129,7 +129,13 @@ test("film.json's music is checked before anything renders", async () => {
   // whose track has moved are still made.
   const missing = load("nope.wav");
   assert.deepEqual(missing.problems, []);
-  assert.deepEqual((await checkMusic(missing)).problems, ['"music" "nope.wav" is not a file']);
+  // Each refusal says where the track was looked for and what to give.
+  assert.deepEqual((await checkMusic(missing)).problems, [`"music" "nope.wav" is not a file. It was looked for at ${path.join(dir, "nope.wav")}, ` +
+    "as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)"]);
+  const elsewhere = path.join(os.tmpdir(), "launch-film-no-such-track.wav");
+  assert.deepEqual((await checkMusic(load(elsewhere))).problems, [`"music" ${JSON.stringify(elsewhere)} is not a file: give the path of a track (true plays the look's own music, false none)`]);
+  assert.deepEqual((await checkMusic(load("brand"))).problems, ['"music" "brand" is a folder, not a file: give the path of the track in it']);
+  assert.deepEqual((await checkMusic(load("https://example.com/a.mp3"))).problems, ['"music" "https://example.com/a.mp3" is an address: download the track and give the path of the file, from film.json\'s folder or absolute']);
   assert.deepEqual((await checkMusic(load(true))).problems, []);
 });
 
@@ -141,11 +147,11 @@ test("a track with no sound, a silent one and one shorter than the film are refu
     writeWav(path.join(dir, name), bus);
     return name;
   };
-  assert.deepEqual((await checkMusic(load("brand/brand.json"))).problems, ['"music" "brand/brand.json" has no sound ffmpeg can read']);
+  assert.deepEqual((await checkMusic(load("brand/brand.json"))).problems, ['"music" "brand/brand.json" has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound']);
   const [short] = (await checkMusic(load(wav("short.wav", 1, 0.3)))).problems;
   assert.match(short, /^"music" "short\.wav" lasts 1\.00 s and the film 5\.00 s: give a track at least as long as the film\. musicfit makes one/);
   assert.match(short, /npx musicfit@latest <track> --length 5 --hit 2\.5 --fps 25$/);
-  assert.deepEqual((await checkMusic(load(wav("silent.wav", 6, 0)))).problems, ['"music" "silent.wav" is silent over the film\'s 5.00 s']);
+  assert.deepEqual((await checkMusic(load(wav("silent.wav", 6, 0)))).problems, ['"music" "silent.wav" is silent over the film\'s 5.00 s: give a track with sound in it, or false for no music']);
   // A track as long as the film, give or take half a frame, is taken.
   for (const seconds of [6, 4.99]) {
     const { track, problems } = await checkMusic(load(wav("tone.wav", seconds, 0.3)));

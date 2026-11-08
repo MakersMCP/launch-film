@@ -107,21 +107,31 @@ function musicOf(value, dir, problems) {
 // The user's own track, when film.json names one, read before anything
 // renders: its sound for the film's length, decoded, and its loudness over
 // it. Returns { track, problems }: a file that is missing, has no sound
-// ffmpeg can read, is shorter than the film or is silent is a problem.
+// ffmpeg can read, is shorter than the film or is silent is a problem, and
+// each problem says what to give instead.
 async function checkMusic(loaded) {
   const { music, seconds: total, clips } = loaded;
   if (!music || !music.track) return { track: null, problems: [] };
   const at = `"music" ${JSON.stringify(music.name)}`;
-  let isFile = false;
+  const refuse = (problem) => ({ track: null, problems: [problem] });
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
+  let kind = null;
   try {
-    isFile = fs.statSync(music.track).isFile();
+    const s = fs.statSync(music.track);
+    kind = s.isFile() ? "file" : s.isDirectory() ? "folder" : "other";
   } catch {
     // Not there.
   }
-  if (!isFile) return { track: null, problems: [`${at} is not a file`] };
+  if (kind === "folder") return refuse(`${at} is a folder, not a file: give the path of the track in it`);
+  // A relative path is read from film.json's folder, which may not be where
+  // the user stood when they wrote it: the message says where it looked.
+  if (kind !== "file") {
+    return refuse(path.isAbsolute(music.name) ? `${at} is not a file: give the path of a track (true plays the look's own music, false none)`
+      : `${at} is not a file. It was looked for at ${music.track}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)`);
+  }
   // A second past the film's end, so a track as long as the film shows it.
   const sound = readSound(music.track, { seconds: total + 1 });
-  if (!sound) return { track: null, problems: [`${at} has no sound ffmpeg can read`] };
+  if (!sound) return refuse(`${at} has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound`);
   // musicfit gives a length to the millisecond: half a frame short is whole.
   if (sound.seconds < total - 0.5 / FPS) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
@@ -130,7 +140,7 @@ async function checkMusic(loaded) {
       `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS}`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });
-  if (!(level.integrated > -70)) return { track: null, problems: [`${at} is silent over the film's ${total.toFixed(2)} s`] };
+  if (!(level.integrated > -70)) return refuse(`${at} is silent over the film's ${total.toFixed(2)} s: give a track with sound in it, or false for no music`);
   return { track: { ...sound, ...level, name: music.name }, problems: [] };
 }
 
