@@ -37,8 +37,9 @@ const normHex = (v) => {
 // The commands that may run easybrandkit, in the order they are tried: the
 // one given (a command, or the path of easybrandkit's script), else
 // LAUNCH_FILM_EASYBRANDKIT, else an easybrandkit installed on PATH, else
-// easybrandkit from npm through npx, then from its GitHub repository when
-// npm cannot give it.
+// easybrandkit 0.4.0 from npm through npx, then the same release from its
+// GitHub repository when npm cannot give it. The version is pinned, so a run
+// never picks up a newer easybrandkit on its own.
 function easybrandkitCommands(given = "") {
   const raw = String(given || process.env.LAUNCH_FILM_EASYBRANDKIT || "").trim();
   if (raw) {
@@ -48,7 +49,7 @@ function easybrandkitCommands(given = "") {
   const installed = onPath(process.platform === "win32" ? "easybrandkit.cmd" : "easybrandkit");
   if (installed) return [[installed]];
   const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-  return [[npx, "-y", "easybrandkit@latest"], [npx, "-y", "github:EminBudak/easybrandkit"]];
+  return [[npx, "-y", "easybrandkit@0.4.0"], [npx, "-y", "github:EminBudak/easybrandkit#v0.4.0"]];
 }
 
 const HOW = "Install easybrandkit (npm install -g easybrandkit), or point LAUNCH_FILM_EASYBRANDKIT (or --easybrandkit) at its scripts/easybrandkit.js, or give a kit you already have with --brand.";
