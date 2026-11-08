@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { findChrome } = require("../src/chrome");
 const { available, probe, readPixels } = require("../src/ffmpeg");
 const { makeStills, parseTargets, galleryClips, TARGETS } = require("../src/stills");
@@ -14,6 +15,7 @@ const { readBrand } = require("../src/brand");
 const { planFilm } = require("../src/plan");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
+const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
 const fixture = path.join(__dirname, "fixtures", "acme");
 const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", weight: { head: 700, body: 500 } };
 
@@ -83,4 +85,41 @@ test("stills come out at their exact sizes from a film's plan", { skip }, async 
   assert.match(md, /\| og\.png \| 1200x630 \| og:image/);
   assert.ok(!/[\u2013\u2014]/.test(md), "STILLS.md has no dashes");
   assert.ok(!fs.readdirSync(r.dir).some((n) => n.startsWith(".work")), "the work files are gone");
+});
+
+// Every file in a folder, hidden ones too, with its bytes.
+function snap(dir) {
+  const seen = {};
+  const walk = (at, rel) => {
+    for (const name of fs.readdirSync(at).sort()) {
+      const file = path.join(at, name);
+      if (fs.lstatSync(file).isDirectory()) walk(file, `${rel}${name}/`);
+      else seen[`${rel}${name}`] = fs.readFileSync(file).toString("base64");
+    }
+  };
+  walk(dir, "");
+  return seen;
+}
+
+test("a stills run that fails keeps the earlier pictures", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-stills-"));
+  fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
+  const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
+  const film = planFilm(readBrand(path.join(dir, "brand", "brand.json")), words, { filmDir: dir });
+  const filmFile = path.join(dir, "film.json");
+  fs.writeFileSync(filmFile, JSON.stringify(film));
+  await makeStills(filmFile, { targets: "og,x" });
+  // New words, so a picture made again is not the same file.
+  film.clips[0].scene.text = "Notes that link themselves";
+  fs.writeFileSync(filmFile, JSON.stringify(film));
+  const before = snap(dir);
+  // og.png is made again, then x.png fails, emptied first as ffmpeg -y does.
+  const ffmpeg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-")), "ffmpeg");
+  fs.writeFileSync(ffmpeg, `#!/bin/sh\ncase "$*" in *x.png*) for last; do :; done; : > "$last"; echo 'stand-in: no x today' >&2; exit 1;; esac\nexec '${(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "stills", filmFile, "--for", "og,x"],
+    { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /making .*stills\/x\.png: ffmpeg failed: stand-in: no x today/);
+  assert.ok(!/launch-film-part/.test(r.stderr), "the message names the picture where it goes");
+  assert.deepEqual(snap(dir), before);
 });

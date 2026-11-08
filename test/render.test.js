@@ -5,13 +5,15 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { findChrome, launch, openPage, evaluate } = require("../src/chrome");
 const { FFMPEG, available, probe, readPixels, mustRun } = require("../src/ffmpeg");
 const { renderFilm } = require("../src/film");
 const audio = require("../src/audio");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
+const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
+const cli = path.join(__dirname, "..", "bin", "launch-film.js");
 const fixture = path.join(__dirname, "fixtures", "acme");
 const TIMELINE = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "timeline.js"), "utf8");
 
@@ -113,9 +115,24 @@ function soundOf(file) {
   return out;
 }
 
+// A film rendered once, for the tests that need an earlier render: each
+// gets a copy of its folder.
+let rendered = null;
+async function renderedFolder() {
+  if (!rendered) {
+    const dir = filmFolder();
+    await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
+    rendered = dir;
+  }
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-"));
+  fs.cpSync(rendered, copy, { recursive: true });
+  return copy;
+}
+
 test("a short film renders with picture and sound", { skip, timeout: 240_000 }, async () => {
   const dir = filmFolder();
   const result = await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
+  rendered = dir;
   const info = probe(result.output);
   assert.equal(info.width, 1920);
   assert.equal(info.height, 1080);
@@ -154,4 +171,83 @@ test("a film plays the track film.json names, in place of the bed", { skip, time
   const peak = (from, to) => sound.subarray(Math.round(from * audio.SR), Math.round(to * audio.SR)).reduce((p, v) => Math.max(p, Math.abs(v)), 0);
   const end = sound.length / audio.SR;
   assert.ok(peak(end - 0.05, end) < 0.1 * peak(1, 4), `the last 50 ms peak at ${peak(end - 0.05, end).toFixed(3)} against ${peak(1, 4).toFixed(3)}`);
+});
+
+// Every file in a folder, hidden ones too, with its bytes.
+function snap(dir) {
+  const seen = {};
+  const walk = (at, rel) => {
+    for (const name of fs.readdirSync(at).sort()) {
+      const file = path.join(at, name);
+      if (fs.lstatSync(file).isDirectory()) walk(file, `${rel}${name}/`);
+      else seen[`${rel}${name}`] = fs.readFileSync(file).toString("base64");
+    }
+  };
+  walk(dir, "");
+  return seen;
+}
+// What a CLI run of that process id left in the temp folder.
+const leftBy = (pid) => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("launch-film-") && n.includes(`-${pid}-`));
+// A stand-in for ffmpeg: a line of sh that may answer for it first ("$@"
+// are the arguments), then the ffmpeg the tests run.
+function standIn(line) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-test-")), "ffmpeg");
+  const real = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
+  fs.writeFileSync(file, `#!/bin/sh\n${line}\nexec '${real.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
+  return file;
+}
+
+test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  // ffmpeg -y empties the file it writes before it fails.
+  const ffmpeg = standIn(`case "$*" in *loudnorm*) for last; do :; done; : > "$last"; echo 'stand-in: no sound today' >&2; exit 1;; esac`);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /adding the sound: ffmpeg failed: stand-in: no sound today/);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(r.pid), []);
+});
+
+test("a render whose clip encoder stops ends with its words and keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  // An ffmpeg that cannot write the clip stops before it reads a frame, as
+  // on a full disk.
+  const ffmpeg = standIn(`case "$*" in *image2pipe*) echo 'stand-in: No space left on device' >&2; exit 1;; esac`);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
+  assert.match(r.stderr, /ffmpeg failed: stand-in: No space left on device/);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(r.pid), []);
+});
+
+test("a render stopped with SIGTERM leaves the folder and the temp folder as they were", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  const child = spawn(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  // Stopped while the second clip renders.
+  await new Promise((resolve) => child.stderr.on("data", (d) => {
+    stderr += d;
+    if (/clip 1\//.test(stderr)) resolve();
+  }));
+  child.kill("SIGTERM");
+  const { signal } = await ended;
+  assert.equal(signal, "SIGTERM", stderr);
+  assert.match(stderr, /^launch-film: stopped$/m);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(child.pid), []);
+  // No Chrome of it runs on: none names its profile.
+  if (process.platform === "linux") {
+    const running = fs.readdirSync("/proc").filter((p) => /^\d+$/.test(p)).filter((p) => {
+      try {
+        return fs.readFileSync(`/proc/${p}/cmdline`, "utf8").includes(`launch-film-chrome-${child.pid}-`);
+      } catch {
+        return false;
+      }
+    });
+    assert.deepEqual(running, []);
+  }
 });

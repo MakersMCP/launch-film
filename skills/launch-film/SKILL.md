@@ -84,6 +84,8 @@ npx -y launch-film@0.2.1 render film/<name>/film.json
 
 Clips render two at a time; a 30 second film takes one to three minutes. The film is `film/<name>/film.mp4`. If a clip fails, the message names it: fix film.json and render again.
 
+A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again.
+
 ## 5. Check the film before you hand it over
 
 You can't watch the film or hear it, so measure it:

@@ -5,6 +5,7 @@
 // LAUNCH_FILM_FFPROBE point at other builds.
 
 const { spawn, spawnSync } = require("child_process");
+const { track } = require("./out");
 
 const FFMPEG = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
 const FFPROBE = process.env.LAUNCH_FILM_FFPROBE || "ffprobe";
@@ -20,7 +21,7 @@ function available() {
 // report (ebur128's summary) needs loglevel "info".
 function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(FFMPEG, ["-hide_banner", "-nostats", "-loglevel", loglevel, "-y", ...args], { stdio: [input ? "pipe" : "ignore", "ignore", "pipe"] });
+    const child = track(spawn(FFMPEG, ["-hide_banner", "-nostats", "-loglevel", loglevel, "-y", ...args], { stdio: [input ? "pipe" : "ignore", "ignore", "pipe"] }));
     let stderr = "";
     child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-6000)));
     let timer = null;
@@ -140,22 +141,27 @@ function writePng(file, { data, width, height }) {
 
 // A frame encoder: JPEG frames in, an H.264 MP4 out.
 function encoder({ output, fps = 25, crf = 15 }) {
-  const child = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-",
+  const child = track(spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-",
     "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf),
     "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-an", "-r", String(fps), "-movflags", "+faststart", output],
-  { stdio: ["pipe", "ignore", "pipe"] });
+  { stdio: ["pipe", "ignore", "pipe"] }));
   let err = "";
   child.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
   child.stdin.on("error", () => {});
-  const closed = new Promise((resolve) => child.on("close", (code) => resolve(code)));
+  let ended = null;
+  const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
+  const failed = () => new Error(`ffmpeg failed: ${err.trim().split("\n").slice(-2).join(" | ") || (ended.signal ? `stopped by ${ended.signal}` : `exit ${ended.code}`)}`);
   return {
+    // An ffmpeg that has stopped (a full disk, an output it cannot write)
+    // takes no more frames: its error, not a wait for room in the pipe.
     async write(jpeg) {
-      if (!child.stdin.write(jpeg)) await new Promise((resolve) => child.stdin.once("drain", resolve));
+      if (!ended && !child.stdin.write(jpeg)) await Promise.race([new Promise((resolve) => child.stdin.once("drain", resolve)), closed]);
+      if (ended) throw failed();
     },
     async end() {
       child.stdin.end();
-      const code = await closed;
-      if (code !== 0) throw new Error(`ffmpeg failed: ${err.trim().split("\n").slice(-2).join(" | ")}`);
+      await closed;
+      if (ended.code !== 0) throw failed();
     },
     kill: () => child.kill("SIGKILL"),
   };

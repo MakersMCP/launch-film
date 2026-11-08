@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const { mustRun, probe, readPixels, writePng } = require("./ffmpeg");
 const draw = require("./draw");
+const { within } = require("./out");
 
 // A path as one value inside an ffmpeg filter graph.
 const filterPath = (p) => `'${String(p).replace(/\\/g, "/").replace(/'/g, "\\'").replace(/:/g, "\\:")}'`;
@@ -217,28 +218,32 @@ async function contactSheet(stills, file, { title = "", cols = 4 } = {}) {
 
 // The frames command: two stills a shot (once its entrance has played, and
 // near its end) and a contact sheet of them all. A film with one shot gets
-// twelve stills spread evenly.
+// twelve stills spread evenly. They take the place of the earlier ones of
+// the same names once all are made (out.js).
 async function saveFrames(file, { out = null } = {}) {
   const film = path.resolve(file);
   const info = probe(film);
   if (!info.duration) throw new Error(`${file} could not be read as a video`);
   const dir = path.resolve(out || path.join(path.dirname(film), "frames"));
-  fs.mkdirSync(dir, { recursive: true });
-  const { cuts } = await findCuts(film, { info, work: dir });
-  const moments = [];
-  if (cuts.length > 1) {
-    for (const s of shotsOf(cuts, info.duration)) {
-      moments.push({ at: settled(s), name: `clip-${s.index}-a`, label: s.label });
-      moments.push({ at: s.start + s.seconds - 0.3, name: `clip-${s.index}-b`, label: s.label });
+  return within(dir, async (run) => {
+    const { cuts } = await findCuts(film, { info, work: run.part });
+    const moments = [];
+    if (cuts.length > 1) {
+      for (const s of shotsOf(cuts, info.duration)) {
+        moments.push({ at: settled(s), name: `clip-${s.index}-a`, label: s.label });
+        moments.push({ at: s.start + s.seconds - 0.3, name: `clip-${s.index}-b`, label: s.label });
+      }
+    } else {
+      for (let i = 0; i < 12; i++) moments.push({ at: ((i + 0.5) * info.duration) / 12, name: `still-${i + 1}` });
     }
-  } else {
-    for (let i = 0; i < 12; i++) moments.push({ at: ((i + 0.5) * info.duration) / 12, name: `still-${i + 1}` });
-  }
-  const stills = await grabFrames(film, moments, dir, { duration: info.duration });
-  stills.forEach((s, i) => (s.number = cuts.length > 1 ? `${Math.floor(i / 2) + 1}${i % 2 ? "B" : "A"}` : `${i + 1}`));
-  const sheet = path.join(dir, "sheet.jpg");
-  await contactSheet(stills, sheet, { title: `${path.basename(film)}  ${info.duration.toFixed(2)} S  ${info.width}X${info.height}` });
-  return { dir, stills, sheet, cuts };
+    const stills = await grabFrames(film, moments, run.part, { duration: info.duration });
+    for (const s of stills) run.out(path.basename(s.file));
+    stills.forEach((s, i) => (s.number = cuts.length > 1 ? `${Math.floor(i / 2) + 1}${i % 2 ? "B" : "A"}` : `${i + 1}`));
+    await contactSheet(stills, run.out("sheet.jpg"), { title: `${path.basename(film)}  ${info.duration.toFixed(2)} S  ${info.width}X${info.height}` });
+    // Where they are once the run has ended.
+    for (const s of stills) s.file = path.join(dir, path.basename(s.file));
+    return { dir, stills, sheet: path.join(dir, "sheet.jpg"), cuts };
+  });
 }
 
 module.exports = { saveFrames, scanVideo, detectCuts, findCuts, givenCuts, shotsOf, settled, grabFrames, contactSheet, readTimeline, joinStretches, filterPath };

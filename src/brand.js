@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { onPath } = require("./chrome");
+const { track } = require("./out");
 
 // ─── colour ────────────────────────────────────────────────────────────────
 const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
@@ -71,7 +72,7 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
 
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"] }));
     let out = "";
     child.stdout.on("data", (d) => {
       out = (out + d).slice(-3000);

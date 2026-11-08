@@ -15,6 +15,7 @@ const { run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ff
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
+const { within, tempDir, release } = require("./out");
 
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
@@ -259,7 +260,9 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
   const port = film.aspect === "9:16";
   const colours = brandColours(brand);
   const out = path.resolve(output || path.join(dir, "film.mp4"));
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-work-"));
+  // The clips are made in a work folder outside the film's folder; the film
+  // and its timeline go in next to film.json only once both are whole.
+  const work = keep ? fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-work-")) : tempDir("launch-film-work-");
   const notes = [...(brand ? brand.notes : [])];
   try {
     const fonts = await resolveFonts({ style: look, font: colours.headingFont || "", bodyFont: colours.bodyFont || "" }, { offline });
@@ -310,15 +313,16 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
       : audio.music({ look, seconds: total, cuts: clips.map((c) => c.start), seed: clips.length }).bus;
     const wav = path.join(work, "sound.wav");
     audio.writeWav(wav, audio.mixFilm({ seconds: total, music: bed, cues, musicGain: film.music && film.music.volume !== undefined ? Number(film.music.volume) : 0.55 }));
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-      "-t", total.toFixed(3), "-movflags", "+faststart", out], "adding the sound");
     const timeline = { film: path.relative(path.dirname(out), path.resolve(file)), seconds: +total.toFixed(3), look,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
-    fs.writeFileSync(out.replace(/\.mp4$/i, "") + ".timeline.json", JSON.stringify(timeline, null, 2) + "\n");
+    await within(path.dirname(out), async (job) => {
+      await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
+      fs.writeFileSync(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
+    });
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
-    if (!keep) fs.rmSync(work, { recursive: true, force: true });
+    if (!keep) release(work);
     else log(`work files kept in ${work}\n`);
   }
 }

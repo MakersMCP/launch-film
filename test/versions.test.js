@@ -16,9 +16,12 @@ test("the skill runs the release in package.json", () => {
   assert.deepEqual([...new Set(pinned)], [version]);
 });
 
-test("the plugin manifests carry the same version", () => {
+test("the plugin manifests and the lockfile carry the same version", () => {
   for (const file of [".claude-plugin/marketplace.json", ".codex-plugin/plugin.json", "plugin.json"]) {
     const manifest = JSON.parse(read(file));
     assert.equal((manifest.plugins ? manifest.plugins[0] : manifest).version, version, file);
   }
+  const lock = JSON.parse(read("package-lock.json"));
+  assert.equal(lock.version, version, "package-lock.json");
+  assert.equal(lock.packages[""].version, version, "package-lock.json, its root package");
 });

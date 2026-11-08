@@ -3,7 +3,9 @@
 // Typefaces come from Google Fonts by family name and are embedded in the
 // pages as data URLs (latin and latin-ext faces, so accented letters are
 // covered). Each family is fetched once and kept in the cache folder;
-// a family Google does not have is remembered as missing.
+// a family Google does not have is remembered as missing. A cached file is
+// written under a name of its own and renamed into place once whole, since
+// runs at the same time share the folder and a run may be killed mid-write.
 
 const fs = require("fs");
 const os = require("os");
@@ -34,7 +36,9 @@ async function loadFont(family, weights = [400, 700]) {
   const key = `${name.replace(/[^A-Za-z0-9]+/g, "_")}-${weights.join("_")}`;
   const file = path.join(dir, `${key}.css`);
   try {
-    return fs.readFileSync(file, "utf8");
+    const cached = fs.readFileSync(file, "utf8");
+    // A file cut short (by an older release killed mid-write) is fetched again.
+    if (cached.trimEnd().endsWith("}")) return cached;
   } catch {
     // Not fetched yet.
   }
@@ -62,7 +66,16 @@ async function loadFont(family, weights = [400, 700]) {
     const data = Buffer.from(await (await get(url)).arrayBuffer()).toString("base64");
     out += block.slice(block.indexOf("@font-face")).replace(url, `data:font/woff2;base64,${data}`) + "\n";
   }
-  if (out) fs.writeFileSync(file, out);
+  if (out) {
+    const part = `${file}.${process.pid}.${Math.random().toString(16).slice(2, 10)}.part`;
+    try {
+      fs.writeFileSync(part, out);
+      fs.renameSync(part, file);
+    } catch {
+      // Kept for this run only.
+      fs.rmSync(part, { force: true });
+    }
+  }
   return out;
 }
 

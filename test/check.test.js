@@ -224,3 +224,34 @@ test("check runs on an ffmpeg that refuses ebur128's newer framelog value, as 4.
   const saved = JSON.parse(fs.readFileSync(path.join(dir, "check", "check.json"), "utf8"));
   assert.ok(Math.abs(saved.audio.integrated - -21.6) <= 0.3, `integrated ${saved.audio.integrated}`);
 });
+
+// Every file in a folder, hidden ones too, with its bytes.
+function snap(dir) {
+  const seen = {};
+  const walk = (at, rel) => {
+    for (const name of fs.readdirSync(at).sort()) {
+      const file = path.join(at, name);
+      if (fs.lstatSync(file).isDirectory()) walk(file, `${rel}${name}/`);
+      else seen[`${rel}${name}`] = fs.readFileSync(file).toString("base64");
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir, "");
+  return seen;
+}
+
+test("a check that cannot read the sound adds nothing and keeps an earlier report", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  const ffmpeg = standIn(tmp(), `case "$*" in *ebur128*) echo 'stand-in: the sound cannot be read' >&2; exit 1;; esac`);
+  // Into a folder of its own: the folder is not made.
+  const fresh = cli(["check", file, "--out", path.join(dir, "new", "check")], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(fresh.status, 1);
+  assert.match(fresh.stderr, /reading the sound: ffmpeg failed: stand-in: the sound cannot be read/);
+  assert.ok(!fs.existsSync(path.join(dir, "new")), "no folder is made");
+  // Over an earlier report: it stays as it was.
+  assert.equal(cli(["check", file]).status, 0);
+  const before = snap(dir);
+  const again = cli(["check", file, "--lufs", "-14"], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(again.status, 1);
+  assert.deepEqual(snap(dir), before);
+});

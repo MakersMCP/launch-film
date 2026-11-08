@@ -43,3 +43,95 @@ test("public text has no em or en dashes and no hype words", () => {
     assert.ok(!hit, `${name} uses "${hit && hit[0]}"`);
   }
 });
+
+// A film's folder as a plan leaves it: the test brand as brand/, words.json
+// and film.json, and a film.mp4 from a render.
+const os = require("os");
+const crypto = require("crypto");
+const fixture = path.join(root, "test", "fixtures", "acme");
+function filmFolder() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
+  fs.copyFileSync(path.join(fixture, "words.json"), path.join(dir, "words.json"));
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: "brand/brand.json", look: "launch", clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }));
+  fs.writeFileSync(path.join(dir, "film.mp4"), "a film");
+  return dir;
+}
+// Every file and folder in it, hidden ones too, with a hash of each file;
+// with links, a link as where it leads.
+function snap(dir, { links = false } = {}) {
+  const seen = {};
+  const walk = (at, rel) => {
+    for (const name of fs.readdirSync(at).sort()) {
+      const file = path.join(at, name);
+      const key = rel ? `${rel}/${name}` : name;
+      const s = fs.lstatSync(file);
+      if (links && s.isSymbolicLink()) seen[key] = `link to ${fs.readlinkSync(file)}`;
+      else if (s.isDirectory()) walk(file, key);
+      else seen[key] = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir, "");
+  return seen;
+}
+// An easybrandkit that empties the folder it is given and fails, as one
+// that could not open the page did.
+function failingEasybrandkit(dir) {
+  const file = path.join(dir, "easybrandkit.js");
+  fs.writeFileSync(file, 'const fs = require("fs"); const out = process.argv[process.argv.indexOf("--out") + 1];' +
+    ' for (const f of fs.existsSync(out) ? fs.readdirSync(out) : []) fs.rmSync(out + "/" + f, { recursive: true, force: true });' +
+    ' process.stderr.write("easybrandkit: Could not open the page\\n"); process.exit(1);');
+  return file;
+}
+
+// A kit of its own: the test brand under another name, or with a brand.json
+// that cannot be read.
+function otherKit(text) {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")), "kit");
+  fs.cpSync(fixture, dir, { recursive: true });
+  const kit = JSON.parse(fs.readFileSync(path.join(dir, "brand.json"), "utf8"));
+  fs.writeFileSync(path.join(dir, "brand.json"), text || JSON.stringify({ ...kit, name: "Other Notes" }));
+  return dir;
+}
+
+// A plan run on a film's folder that fails: the folder is as it was.
+function planFails(args, said) {
+  const dir = filmFolder();
+  const before = snap(dir);
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, ...args);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, said);
+  assert.deepEqual(snap(dir), before);
+}
+
+test("a plan given another kit and a words.json that is not there leaves the folder as it was", () => {
+  planFails(["--brand", otherKit(), "--words", path.join(os.tmpdir(), "launch-film-no-such-words.json")], /--words .*no-such-words\.json: no such file/);
+});
+
+test("a plan whose easybrandkit fails leaves the folder's kit as it was", () => {
+  planFails(["--easybrandkit", failingEasybrandkit(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")))], /easybrandkit failed \(exit 1\): easybrandkit: Could not open the page/);
+});
+
+test("a plan whose easybrandkit fails leaves a kit that brand/ links to as it was", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  // brand/ links to a kit other films share.
+  const dir = filmFolder();
+  const shared = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-")), "shared-kit");
+  fs.renameSync(path.join(dir, "brand"), shared);
+  fs.symlinkSync(shared, path.join(dir, "brand"));
+  const [before, kit] = [snap(dir, { links: true }), snap(shared)];
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", failingEasybrandkit(fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"))));
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(snap(shared), kit);
+  assert.deepEqual(snap(dir, { links: true }), before);
+});
+
+test("a plan given a kit that cannot be read leaves the folder's kit as it was", () => {
+  planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
+});
+
+test("a plan that fails makes no folder", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
+  const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(fs.readdirSync(base), ["easybrandkit.js"]);
+});

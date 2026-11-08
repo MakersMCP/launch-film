@@ -1,0 +1,329 @@
+"use strict";
+// The out folder (src/out.js), with plain files: a run that ends well puts
+// its files in place, one that fails or is stopped leaves the folder as it
+// was.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawn, spawnSync } = require("child_process");
+const out = require("../src/out");
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-out-"));
+const noSignals = process.platform === "win32" && "POSIX signals";
+
+// Files and folders as { "a/b.txt": content, "a/": "folder" }, hidden ones too.
+function write(dir, files) {
+  for (const [name, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.writeFileSync(path.join(dir, name), text);
+  }
+}
+function snap(dir) {
+  const seen = {};
+  const walk = (at, rel) => {
+    for (const name of fs.readdirSync(at).sort()) {
+      const file = path.join(at, name);
+      const key = rel ? `${rel}/${name}` : name;
+      if (fs.lstatSync(file).isDirectory()) {
+        seen[`${key}/`] = "folder";
+        walk(file, key);
+      } else seen[key] = fs.readFileSync(file, "utf8");
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir, "");
+  return seen;
+}
+const EARLIER = { "film.mp4": "old film", "notes.txt": "mine", "frames/clip-1-a.jpg": "old 1", "frames/clip-7-a.jpg": "old 7", "brand/brand.json": "old kit", "brand/logo-01.png": "old logo" };
+
+// Writes a new film, a frame and a brand kit, with a work file and a file
+// it does not name as an output.
+function make(run) {
+  fs.writeFileSync(run.out("film.mp4"), "new film");
+  fs.mkdirSync(run.out("frames"));
+  fs.writeFileSync(path.join(run.part, "frames", "clip-1-a.jpg"), "new 1");
+  fs.mkdirSync(run.folder("brand"));
+  fs.writeFileSync(path.join(run.part, "brand", "brand.json"), "new kit");
+  fs.writeFileSync(path.join(run.part, ".scan-video.txt"), "work");
+  fs.writeFileSync(path.join(run.part, "stray.txt"), "not an output");
+}
+
+test("a run that ends well replaces its files and keeps the others", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  assert.equal(await out.within(dir, async (run) => (make(run), 7)), 7);
+  assert.deepEqual(snap(dir), {
+    "brand/": "folder", "brand/brand.json": "new kit",
+    "film.mp4": "new film",
+    "frames/": "folder", "frames/clip-1-a.jpg": "new 1", "frames/clip-7-a.jpg": "old 7",
+    "notes.txt": "mine",
+  });
+});
+
+test("a run that makes its folder puts it there whole, or makes nothing", async () => {
+  const base = tmp();
+  const dir = path.join(base, "films", "acme");
+  await out.within(dir, async (run) => make(run));
+  assert.deepEqual(Object.keys(snap(base)), ["films/", "films/acme/", "films/acme/brand/", "films/acme/brand/brand.json", "films/acme/film.mp4", "films/acme/frames/", "films/acme/frames/clip-1-a.jpg"]);
+  const other = path.join(base, "new", "deep", "film");
+  await assert.rejects(out.within(other, async (run) => {
+    make(run);
+    throw new Error("the render failed");
+  }), /the render failed/);
+  assert.ok(!fs.existsSync(path.join(base, "new")), "the folders made for it are gone");
+});
+
+test("a run that fails leaves the folder exactly as it was", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  await assert.rejects(out.within(dir, async (run) => {
+    make(run);
+    throw new Error("ffmpeg failed");
+  }), /ffmpeg failed/);
+  assert.deepEqual(snap(dir), before);
+});
+
+// fs.renameSync failing on the calls given, as a file held open would.
+async function withRenameFailing(calls, fn) {
+  const real = fs.renameSync;
+  let n = 0;
+  fs.renameSync = (from, to) => {
+    n++;
+    if (calls.includes(n)) throw Object.assign(new Error("i/o error"), { code: "EIO" });
+    return real(from, to);
+  };
+  try {
+    return await fn();
+  } finally {
+    fs.renameSync = real;
+  }
+}
+
+test("a commit that cannot finish puts every earlier file back", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  // The outputs go in the order they were named: film.mp4 aside, the new
+  // one in, then the third move, the earlier frame aside, fails.
+  await withRenameFailing([3], () => assert.rejects(out.within(dir, async (run) => make(run)),
+    /^Error: could not put the new files in .*: .*frames\/clip-1-a\.jpg: i\/o error\. .* is as it was\.$/));
+  assert.deepEqual(snap(dir), before);
+});
+
+test("a commit whose undo fails too keeps the earlier files in a folder of its own", async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  // The third move fails, and so does putting the earlier film.mp4 back
+  // (the fifth: the new film.mp4 out again, then the earlier one in).
+  const err = await withRenameFailing([3, 5], () => out.within(dir, async (run) => make(run)).catch((e) => e));
+  const kept = fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1);
+  assert.match(err.message, new RegExp(`Some of the earlier files could not be put back; they are in .*${kept[0]}\\.$`));
+  const inKept = snap(path.join(dir, kept[0]));
+  assert.equal(inKept[".old/film.mp4"], "old film");
+  assert.match(inKept["launch-film-kept.txt"], /could not put these earlier files back.*\n {2}\.old\/film\.mp4\n/s);
+  // The rest is as it was.
+  assert.ok(!fs.existsSync(path.join(dir, "film.mp4")));
+  assert.equal(fs.readFileSync(path.join(dir, "frames", "clip-1-a.jpg"), "utf8"), "old 1");
+  assert.equal(fs.readFileSync(path.join(dir, "brand", "brand.json"), "utf8"), "old kit");
+});
+
+test("a run inside another's part folder goes in with it, or not at all", async () => {
+  for (const ends of ["well", "badly"]) {
+    const dir = tmp();
+    write(dir, EARLIER);
+    const before = snap(dir);
+    const run = out.begin(dir);
+    fs.writeFileSync(run.out("film.json"), "plan");
+    // The render and the frames, as the one-go command makes them.
+    await out.within(run.part, async (r) => fs.writeFileSync(r.out("film.mp4"), "new film"));
+    await out.within(path.join(run.part, "frames"), async (r) => fs.writeFileSync(r.out("clip-2-a.jpg"), "new 2"));
+    assert.equal(out.shown(path.join(run.part, "frames", "clip-2-a.jpg")), path.join(dir, "frames", "clip-2-a.jpg"));
+    if (ends === "badly") {
+      run.discard();
+      assert.deepEqual(snap(dir), before);
+      continue;
+    }
+    run.commit();
+    assert.deepEqual(snap(dir), { ...before, "film.json": "plan", "film.mp4": "new film", "frames/clip-2-a.jpg": "new 2" });
+  }
+});
+
+test("a part folder left by a run killed outright goes when a later run ends well", async () => {
+  const dir = tmp();
+  // A process that has ended, for a pid no process has.
+  const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout;
+  const old = Date.now() / 1000 - 20 * 60;
+  const left = (name, { pid, age }) => {
+    const at = path.join(dir, `.launch-film-part-${pid}-${name}`);
+    write(at, { "film.mp4": "half a film" });
+    if (age) for (const p of [path.join(at, "film.mp4"), at]) fs.utimesSync(p, old, old);
+    return at;
+  };
+  const stale = left("aaaaaaaa", { pid: gone, age: true });
+  const fresh = left("bbbbbbbb", { pid: gone, age: false });
+  const alive = left("cccccccc", { pid: process.ppid, age: true });
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"));
+  assert.ok(!fs.existsSync(stale), "the stale one is gone");
+  assert.ok(fs.existsSync(fresh), "one changed in the last 15 minutes stays");
+  assert.ok(fs.existsSync(alive), "one whose process runs stays");
+});
+
+// A CLI-like process: it listens for signals, begins a run in `dir` and
+// writes into it, starts a child it tracks, says "ready" and waits.
+const RUNNER = `
+const fs = require("fs");
+const { spawn } = require("child_process");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const [dir, how] = process.argv.slice(1);
+out.listen();
+// The child says "on" once it listens; a stubborn one lets SIGTERM go.
+const child = out.track(spawn(process.execPath, ["-e", (how === "stubborn" ? 'process.on("SIGTERM", () => {}); ' : "") + 'process.stdout.write("on"); setInterval(() => {}, 1000)'], { stdio: ["ignore", "pipe", "ignore"] }));
+child.stdout.once("data", () => {
+  if (how === "fails") {
+    // The run waits on its child, and fails when the stop ends it, as a
+    // render does when its ffmpeg is stopped; the CLI then says nothing more.
+    out.within(dir, async (run) => {
+      fs.writeFileSync(run.out("film.mp4"), "new film");
+      process.stdout.write(\`ready \${child.pid}\\n\`);
+      await new Promise((resolve, reject) => child.on("exit", () => reject(new Error("ffmpeg stopped"))));
+    }).catch(() => out.stopping() || process.exit(1));
+    return;
+  }
+  const run = out.begin(dir);
+  fs.writeFileSync(run.out("film.mp4"), "new film");
+  process.stdout.write(\`ready \${child.pid}\\n\`);
+  if (how === "exit") process.exit(1);
+});
+setInterval(() => {}, 1000);
+`;
+
+function runner(dir, how) {
+  const child = spawn(process.execPath, ["-e", RUNNER, dir, how], { stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d));
+  const ready = new Promise((resolve) => child.stdout.on("data", (d) => /ready (\d+)/.test(String(d)) && resolve(Number(/ready (\d+)/.exec(String(d))[1]))));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal, stderr })));
+  return { child, ready, ended };
+}
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  // One that has ended stays a zombie where nothing reaps it, as in a
+  // container whose first process is not an init.
+  try {
+    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+};
+
+test("a run stopped by SIGTERM removes what it built, stops its child and ends by the signal", { skip: noSignals }, async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  const r = runner(dir, "plain");
+  const pid = await r.ready;
+  r.child.kill("SIGTERM");
+  const { signal, stderr } = await r.ended;
+  assert.equal(signal, "SIGTERM");
+  assert.match(stderr, new RegExp(`^launch-film: stopped, so ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is as it was\\n$`));
+  assert.deepEqual(snap(dir), before);
+  assert.ok(!alive(pid), "the child is gone");
+});
+
+test("a run that fails as the stop ends its child is told of as stopped", { skip: noSignals }, async () => {
+  const base = tmp();
+  const dir = path.join(base, "film");
+  const r = runner(dir, "fails");
+  await r.ready;
+  r.child.kill("SIGINT");
+  const { signal, stderr } = await r.ended;
+  assert.equal(signal, "SIGINT");
+  assert.equal(stderr, `launch-film: stopped, so ${dir} was not made\n`);
+  assert.deepEqual(fs.readdirSync(base), []);
+});
+
+test("a second SIGTERM during the clean-up does not cut it short", { skip: noSignals }, async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  // The child lets SIGTERM go, so the clean-up waits for it, then kills it.
+  const r = runner(dir, "stubborn");
+  const pid = await r.ready;
+  r.child.kill("SIGTERM");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  r.child.kill("SIGTERM");
+  const { signal } = await r.ended;
+  assert.equal(signal, "SIGTERM");
+  assert.deepEqual(snap(dir), before);
+  assert.ok(!alive(pid), "the child is gone");
+});
+
+test("a run cut short by process.exit leaves the folder as it was", { skip: noSignals }, async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  const r = runner(dir, "exit");
+  const pid = await r.ready;
+  const { code } = await r.ended;
+  assert.equal(code, 1);
+  assert.deepEqual(snap(dir), before);
+  // Killed at exit, so it may take a moment to be gone.
+  for (let i = 0; i < 50 && alive(pid); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(!alive(pid), "the child is gone");
+});
+
+test("a failed run ends once its processes have stopped, and their temp folder goes with them", { skip: noSignals }, async () => {
+  // A child that has a helper writing into its temp folder, as Chrome's
+  // write into its profile: asked to stop, it stops its helper first;
+  // killed outright, its helper writes on for a while.
+  const script = `
+const { spawn } = require("child_process");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const dir = out.tempDir("launch-film-out-test-");
+const helper = 'const fs = require("fs"); setInterval(() => { fs.mkdirSync(process.argv[1], { recursive: true }); fs.writeFileSync(process.argv[1] + "/state", "on"); }, 20); setTimeout(() => process.exit(0), 3000);';
+const browser = 'const h = require("child_process").spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" }); process.on("SIGTERM", () => { h.kill("SIGKILL"); process.exit(0); }); process.stdout.write("on"); setInterval(() => {}, 1000);';
+const child = out.track(spawn(process.execPath, ["-e", browser, helper, dir], { stdio: ["ignore", "pipe", "ignore"] }));
+child.stdout.once("data", () => {
+  process.stdout.write(dir);
+  setTimeout(() => out.exit(1), 100);
+});
+setInterval(() => {}, 1000);
+`;
+  const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 1, r.stderr);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.ok(r.stdout && !fs.existsSync(r.stdout), `${r.stdout} is gone and nothing writes to it again`);
+});
+
+test("a folder whose drive is not there is refused at once", () => {
+  // As on Windows, where a drive that is not there has no root either: no
+  // folder exists and none can be made. Run on its own, with little memory,
+  // so a run that looks for a folder above the root forever ends soon.
+  const script = `
+const fs = require("fs");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+fs.existsSync = () => false;
+fs.mkdirSync = (at) => { throw Object.assign(new Error("ENOENT: no such file or directory, mkdir '" + at + "'"), { code: "ENOENT" }); };
+try {
+  out.begin("/no-such-drive/films/acme");
+} catch (err) {
+  process.stdout.write(err.message);
+}`;
+  const r = spawnSync(process.execPath, ["--max-old-space-size=64", "-e", script], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 0, `ended by ${r.signal || r.status}: ${String(r.stderr).slice(-300)}`);
+  assert.match(r.stdout, /^ENOENT: no such file or directory, mkdir '.*no-such-drive[\\/]films'$/);
+});
+
+test("a temp folder is named for its process and goes with release", () => {
+  const dir = out.tempDir("launch-film-out-test-");
+  assert.match(path.basename(dir), new RegExp(`^launch-film-out-test-${process.pid}-`));
+  out.release(dir);
+  assert.ok(!fs.existsSync(dir));
+});

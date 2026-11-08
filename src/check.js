@@ -20,6 +20,7 @@ const { FFMPEG, run, probe, writePng } = require("./ffmpeg");
 const frames = require("./frames");
 const { readCues } = require("./cues");
 const draw = require("./draw");
+const { within } = require("./out");
 
 const RULES = {
   // What a film may hold at its start and its end (a fade in, an end card).
@@ -186,14 +187,19 @@ async function checkFilm(file, opts = {}) {
   const allow = parseAllow(opts.allow);
   const cues = opts.cues ? readCues(path.resolve(opts.cues)) : null;
   const dir = path.resolve(opts.out || path.join(path.dirname(film), "check"));
-  fs.mkdirSync(dir, { recursive: true });
+  // The report and its pictures take the place of an earlier check's once
+  // all four are made (out.js).
+  return within(dir, (job) => measure(film, { info, expect, seconds, target, allow, cues, cutsGiven: opts.cuts || null, dir, job }));
+}
+
+async function measure(film, { info, expect, seconds, target, allow, cues, cutsGiven, dir, job }) {
   const duration = info.duration;
   const fps = info.fps || 25;
   const frame = 1.5 / fps;
 
-  const scan = await frames.scanVideo(film, { work: dir, duration });
-  const sound = info.audio ? await scanAudio(film, { work: dir, duration }) : null;
-  const { cuts, source } = await frames.findCuts(film, { info, work: dir, scan, given: opts.cuts || null });
+  const scan = await frames.scanVideo(film, { work: job.part, duration });
+  const sound = info.audio ? await scanAudio(film, { work: job.part, duration }) : null;
+  const { cuts, source } = await frames.findCuts(film, { info, work: job.part, scan, given: cutsGiven });
 
   const checks = [];
   const add = (name, status, expected, found, extra = {}) => checks.push({ name, status, expected, found, ...extra });
@@ -272,7 +278,7 @@ async function checkFilm(file, opts = {}) {
   // The pictures: a frame for each cut, and the sound over time.
   const shots = frames.shotsOf(cuts, duration);
   const temp = shots.map((s) => ({ at: frames.settled(s), name: `.cut-${process.pid}-${s.index}`, label: s.label }));
-  const stills = await frames.grabFrames(film, temp, dir, { duration });
+  const stills = await frames.grabFrames(film, temp, job.part, { duration });
   stills.forEach((s, i) => {
     const c = cuts[i];
     s.number = String(c.index);
@@ -280,14 +286,13 @@ async function checkFilm(file, opts = {}) {
     s.label = [c.label, c.verdict ? { on: "ON BEAT", near: `NEAR BEAT ${c.off > 0 ? "+" : ""}${c.off}F`, off: `OFF BEAT ${c.off > 0 ? "+" : ""}${c.off}F` }[c.verdict] : ""].filter(Boolean).join("  ");
     s.labelColour = c.verdict === "off" ? "#F87171" : c.verdict === "near" ? "#FACC15" : c.verdict === "on" ? "#4ADE80" : "#7D8494";
   });
-  const sheet = path.join(dir, "sheet.png");
+  const sheet = job.out("sheet.png");
   try {
     await frames.contactSheet(stills, sheet, { title: `${path.basename(film)}  ${length} S  ${size}  ${shownFps} FPS  ${cuts.length} CUT${cuts.length > 1 ? "S" : ""} (${source.toUpperCase()})` });
   } finally {
     for (const s of stills) fs.rmSync(s.file, { force: true });
   }
-  const wave = path.join(dir, "wave.png");
-  await drawWave(wave, { film, duration, sound, target, cuts, cues, fps });
+  await drawWave(job.out("wave.png"), { film, duration, sound, target, cuts, cues, fps });
 
   const result = {
     file: path.relative(dir, film),
@@ -303,8 +308,8 @@ async function checkFilm(file, opts = {}) {
     rules: RULES,
     files: { report: "CHECK.md", sheet: "sheet.png", wave: "wave.png" },
   };
-  fs.writeFileSync(path.join(dir, "check.json"), JSON.stringify(result, null, 2) + "\n");
-  fs.writeFileSync(path.join(dir, "CHECK.md"), report(result, { film, source }));
+  fs.writeFileSync(job.out("check.json"), JSON.stringify(result, null, 2) + "\n");
+  fs.writeFileSync(job.out("CHECK.md"), report(result, { film, source }));
   return { ...result, dir };
 }
 

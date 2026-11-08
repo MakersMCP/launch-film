@@ -8,13 +8,15 @@
 // On a Mac, Chrome asks for the login keychain under a fresh profile unless
 // it is given a mock keychain and a basic password store: without them a
 // dialog came up on every render. The real HOME stays, so Chrome finds its
-// own files; the profile is a temp folder of its own.
+// own files; the profile is a temp folder of its own, removed once Chrome
+// has gone (and on a stop, with the pages' folders: out.js).
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
+const { tempDir, release, track } = require("./out");
 
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
@@ -54,11 +56,25 @@ function findChrome() {
   return null;
 }
 
+// Chrome links SingletonSocket in its profile to a socket in a temp folder
+// of its own (com.google.Chrome.XXXXXX); one killed outright leaves that
+// folder behind, so it goes with the profile.
+function forgetSocket(profile) {
+  try {
+    const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
+    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir())) {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  } catch {
+    // No such link, or not in the temp folder.
+  }
+}
+
 // A browser with its own temp profile, answering protocol calls by promise.
 async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome was not found. Install Google Chrome or Chromium, or set LAUNCH_FILM_CHROME to its path.");
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-chrome-"));
+  const profile = tempDir("launch-film-chrome-");
   const args = [
     "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
     "--disable-extensions", "--disable-sync", "--disable-default-apps", "--disable-background-networking",
@@ -72,7 +88,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
     "--remote-debugging-pipe", `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "about:blank",
   ];
-  const child = spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] });
+  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }));
   let stderr = "";
   child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
   const pending = new Map();
@@ -80,6 +96,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   let id = 0;
   let buf = Buffer.alloc(0);
   let dead = null;
+  let closing = false;
   child.on("exit", (code) => {
     dead = new Error(`Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`);
     for (const w of pending.values()) w.reject(dead);
@@ -122,9 +139,23 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
       const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
       return { sessionId, targetId, call: (m, p) => send(m, p, sessionId) };
     },
+    // Chrome is asked to close, so its helpers (the GPU, network and page
+    // processes) end with it: killed outright, they went on writing to the
+    // profile for seconds. One that has not gone in 3 s is killed. The
+    // profile is removed once it has gone.
     close() {
-      child.kill("SIGKILL");
-      setTimeout(() => fs.rmSync(profile, { recursive: true, force: true }), 300).unref();
+      if (closing) return;
+      closing = true;
+      const gone = () => {
+        forgetSocket(profile);
+        release(profile);
+      };
+      if (dead) return gone();
+      child.once("exit", gone);
+      const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
+      timer.unref();
+      child.once("exit", () => clearTimeout(timer));
+      send("Browser.close").catch(() => {});
     },
   };
 }
@@ -254,7 +285,7 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
 // its time and captured as a JPEG into ffmpeg. files: { name: Buffer } served
 // next to the page.
 async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 1080, scale = 1, fps = 25, onFrame = null }) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-page-"));
+  const dir = tempDir("launch-film-page-");
   fs.writeFileSync(path.join(dir, "index.html"), html);
   for (const [name, data] of Object.entries(files)) {
     const file = path.join(dir, name);
@@ -280,13 +311,13 @@ async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 108
     throw err;
   } finally {
     browser.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    release(dir);
   }
 }
 
 // One still of a page at a time (ms), as PNG: for checks and tests.
 async function stillOf({ html, files = {}, at = 0, W = 1920, H = 1080, scale = 1 }) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-page-"));
+  const dir = tempDir("launch-film-page-");
   fs.writeFileSync(path.join(dir, "index.html"), html);
   for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), data);
   const browser = await launch({ W, H });
@@ -300,7 +331,7 @@ async function stillOf({ html, files = {}, at = 0, W = 1920, H = 1080, scale = 1
     return { png: Buffer.from(shot.data, "base64"), errors: exceptions };
   } finally {
     browser.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    release(dir);
   }
 }
 
@@ -312,7 +343,7 @@ async function snapshots(pages) {
   const out = [];
   try {
     for (const p of pages) {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-page-"));
+      const dir = tempDir("launch-film-page-");
       try {
         fs.writeFileSync(path.join(dir, "index.html"), p.html);
         for (const [name, data] of Object.entries(p.files || {})) fs.writeFileSync(path.join(dir, name), data);
@@ -327,7 +358,7 @@ async function snapshots(pages) {
         out.push({ png: Buffer.from(shot.data, "base64"), errors: exceptions });
         await browser.send("Target.closeTarget", { targetId: page.targetId }).catch(() => {});
       } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+        release(dir);
       }
     }
   } finally {
