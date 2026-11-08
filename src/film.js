@@ -265,13 +265,19 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
   if (loaded.problems.length) throw new Error(`film.json has problems:\n  - ${loaded.problems.join("\n  - ")}`);
   const { track, problems } = await checkMusic(loaded);
   if (problems.length) throw new Error(`film.json has problems:\n  - ${problems.join("\n  - ")}`);
-  const { film, dir, brand, clips } = loaded;
+  const { dir } = loaded;
+  const out = path.resolve(output || path.join(dir, "film.mp4"));
+  // The clips are made in a work folder outside the film's folder; the film
+  // and its timeline go in next to film.json only once both are whole. The
+  // run is begun here, so a stop while the clips render says which folder
+  // it left as it was.
+  return within(path.dirname(out), (job) => renderInto(job, file, loaded, { out, track, jobs, log, keep, offline }));
+}
+
+async function renderInto(job, file, { film, brand, clips }, { out, track, jobs, log, keep, offline }) {
   const look = film.look;
   const port = film.aspect === "9:16";
   const colours = brandColours(brand);
-  const out = path.resolve(output || path.join(dir, "film.mp4"));
-  // The clips are made in a work folder outside the film's folder; the film
-  // and its timeline go in next to film.json only once both are whole.
   const work = keep ? fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-work-")) : tempDir("launch-film-work-");
   const notes = [...(brand ? brand.notes : [])];
   try {
@@ -325,11 +331,9 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
     audio.writeWav(wav, audio.mixFilm({ seconds: total, music: bed, cues, musicGain: film.music && film.music.volume !== undefined ? Number(film.music.volume) : 0.55 }));
     const timeline = { film: path.relative(path.dirname(out), path.resolve(file)), seconds: +total.toFixed(3), look,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
-    await within(path.dirname(out), async (job) => {
-      await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-        "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
-      fs.writeFileSync(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
-    });
+    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+      "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
+    fs.writeFileSync(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
     if (!keep) release(work);

@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, stopping, exit } = require("../src/out");
+const { listen, within, shown, aftermath, stopping, exit } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -92,16 +92,17 @@ function fail(message) {
   // At once, or once the Chrome and ffmpeg still running have stopped.
   exit(1);
 }
-// A run that failed. A Ctrl-C reaches ffmpeg or ffprobe as well, and one
-// that ends them while launch-film waits on them fails the run before
-// launch-film's own handler for the signal has run: that comes once the
-// event loop polls again, so the failure waits that long and, when it was a
-// stop, the stop is told of instead.
+// A run that failed: said with what became of its folder. A Ctrl-C reaches
+// ffmpeg or ffprobe as well, and one that ends them while launch-film waits
+// on them fails the run before launch-film's own handler for the signal has
+// run: that comes once the event loop polls again, so the failure waits that
+// long and, when it was a stop, the stop is told of instead.
 function failed(err) {
   const message = err && err.message ? err.message : String(err);
   setImmediate(() => setImmediate(() => {
     if (stopping()) return;
-    say(`launch-film: ${shown(message)}\n`);
+    const folders = aftermath();
+    say(`launch-film: ${shown(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
     exit(1);
   }));
 }

@@ -268,16 +268,18 @@ test("a check that cannot read the sound adds nothing and keeps an earlier repor
   const dir = tmp();
   const file = await film(dir);
   const ffmpeg = standIn(tmp(), `case "$*" in *ebur128*) echo 'stand-in: the sound cannot be read' >&2; exit 1;; esac`);
-  // Into a folder of its own: the folder is not made.
+  // Into a folder of its own: the folder is not made, and the last line
+  // says so.
   const fresh = cli(["check", file, "--out", path.join(dir, "new", "check")], { LAUNCH_FILM_FFMPEG: ffmpeg });
   assert.equal(fresh.status, 1);
-  assert.match(fresh.stderr, /reading the sound: ffmpeg failed: stand-in: the sound cannot be read/);
+  assert.equal(fresh.stderr, `launch-film: reading the sound: ffmpeg failed: stand-in: the sound cannot be read\nlaunch-film: ${path.join(dir, "new", "check")} was not made.\n`);
   assert.ok(!fs.existsSync(path.join(dir, "new")), "no folder is made");
   // Over an earlier report: it stays as it was.
   assert.equal(cli(["check", file]).status, 0);
   const before = snap(dir);
   const again = cli(["check", file, "--lufs", "-14"], { LAUNCH_FILM_FFMPEG: ffmpeg });
   assert.equal(again.status, 1);
+  assert.match(again.stderr, new RegExp(`\\nlaunch-film: ${path.join(dir, "check").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is as it was\\.\\n$`));
   assert.deepEqual(snap(dir), before);
 });
 

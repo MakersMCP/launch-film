@@ -21,10 +21,11 @@
 // ffmpeg and easybrandkit the runs started, kills those still running after
 // STOP_WAIT, removes every part folder and temp folder, and ends the process
 // by the same signal. A failed run ends the process the same way, with
-// SIGTERM to them and exit code 1 (exit). A run killed outright (SIGKILL)
-// cannot remove its part folder: a later run that ends well in the same
-// place removes it, once its process is gone and nothing in it has changed
-// for STALE.
+// SIGTERM to them and exit code 1 (exit). Either way the CLI's last line
+// says which folder was left as it was (told). A run killed outright
+// (SIGKILL) cannot remove its part folder: a later run that ends well in the
+// same place removes it, once its process is gone and nothing in it has
+// changed for STALE.
 
 const fs = require("fs");
 const os = require("os");
@@ -42,7 +43,7 @@ const open = new Set();
 const temps = new Set();
 const children = new Set();
 const places = [];
-// What became of the folders of the runs a stop ended.
+// What became of the folders of the runs a stop or a failure ended.
 const told = [];
 let stopping = null;
 // A failed run is ending the process (exit).
@@ -118,6 +119,8 @@ function begin(dir) {
     made,
     outputs: new Map(),
     ended: false,
+    // Its failure has said what became of its folder.
+    said: false,
     out: (name) => output(run, name, false),
     folder: (name) => output(run, name, true),
     commit: () => commit(run),
@@ -235,6 +238,7 @@ function commit(run) {
 
 // Why a commit failed, said for the person who runs it again.
 function failed(run, err, stuck, left) {
+  run.said = true;
   const at = shown(path.join(run.dir, err.at || ""));
   const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
   const why = held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${err.message}`;
@@ -276,8 +280,9 @@ function finish(run, names) {
 // Removes a run's part folder and the folders it made for it.
 function discard(run) {
   if (run.ended) return;
-  // A run inside another's goes with it; a stop tells of the outer one.
-  if (stopping && ![...open].some((r) => r !== run && inside(run.dir, r.part))) told.push(run.existed ? `${shown(run.dir)} is as it was` : `${shown(run.dir)} was not made`);
+  // A run inside another's goes with it, and the outer one is told of; a
+  // run whose commit failed has told of its folder itself.
+  if (!run.said && ![...open].some((r) => r !== run && inside(run.dir, r.part))) told.push(run.existed ? `${shown(run.dir)} is as it was` : `${shown(run.dir)} was not made`);
   ended(run);
   remove(run.part);
   for (const folder of run.made) {
@@ -288,6 +293,14 @@ function discard(run) {
       break;
     }
   }
+}
+
+// What became of the folders of the runs that failed, said once: the CLI
+// ends its failure with it.
+function aftermath() {
+  const said = [...new Set(told)];
+  told.length = 0;
+  return said;
 }
 
 // ─── temp folders and processes ────────────────────────────────────────────
@@ -440,4 +453,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { begin, within, shown, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE };
+module.exports = { begin, within, shown, aftermath, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE };

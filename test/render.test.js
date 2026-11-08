@@ -204,7 +204,9 @@ test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240
   const ffmpeg = standIn(`case "$*" in *loudnorm*) for last; do :; done; : > "$last"; echo 'stand-in: no sound today' >&2; exit 1;; esac`);
   const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, /adding the sound: ffmpeg failed: stand-in: no sound today/);
+  assert.match(r.stderr, /adding the sound: ffmpeg failed: stand-in: no sound today\n/);
+  // The last line says the film's folder is as it was.
+  assert.ok(r.stderr.endsWith(`\nlaunch-film: ${dir} is as it was.\n`), r.stderr);
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(leftBy(r.pid), []);
 });
@@ -236,7 +238,8 @@ test("a render stopped with SIGTERM leaves the folder and the temp folder as the
   child.kill("SIGTERM");
   const { signal } = await ended;
   assert.equal(signal, "SIGTERM", stderr);
-  assert.match(stderr, /^launch-film: stopped$/m);
+  // Stopped while its clips render, it says which folder it left as it was.
+  assert.ok(stderr.endsWith(`\nlaunch-film: stopped, so ${dir} is as it was\n`), stderr);
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(leftBy(child.pid), []);
   // No Chrome of it runs on: none names its profile.

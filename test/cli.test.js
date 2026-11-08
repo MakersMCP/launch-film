@@ -94,13 +94,17 @@ function otherKit(text) {
   return dir;
 }
 
-// A plan run on a film's folder that fails: the folder is as it was.
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// A plan run on a film's folder that fails: the folder is as it was, and
+// the last line says so.
 function planFails(args, said) {
   const dir = filmFolder();
   const before = snap(dir);
   const r = cli("plan", "https://acme-notes.example", "--out", dir, ...args);
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, said);
+  assert.match(r.stderr, new RegExp(`\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
   assert.deepEqual(snap(dir), before);
 }
 
@@ -133,6 +137,7 @@ test("a plan that fails makes no folder", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-cli-"));
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));
   assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, new RegExp(`\\nlaunch-film: ${escape(path.join(base, "films", "acme"))} was not made\\.\\n$`));
   assert.deepEqual(fs.readdirSync(base), ["easybrandkit.js"]);
 });
 
