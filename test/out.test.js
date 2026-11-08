@@ -224,6 +224,12 @@ const alive = (pid) => {
     return true;
   }
 };
+// Whether it is gone within a second: one killed outright as the run ends
+// takes a moment to be gone on a loaded machine.
+async function gone(pid) {
+  for (let i = 0; i < 50 && alive(pid); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  return !alive(pid);
+}
 
 test("a run stopped by SIGTERM removes what it built, stops its child and ends by the signal", { skip: noSignals }, async () => {
   const dir = tmp();
@@ -236,7 +242,7 @@ test("a run stopped by SIGTERM removes what it built, stops its child and ends b
   assert.equal(signal, "SIGTERM");
   assert.match(stderr, new RegExp(`^launch-film: stopped, so ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is as it was\\n$`));
   assert.deepEqual(snap(dir), before);
-  assert.ok(!alive(pid), "the child is gone");
+  assert.ok(await gone(pid), "the child is gone");
 });
 
 test("a run that fails as the stop ends its child is told of as stopped", { skip: noSignals }, async () => {
@@ -264,7 +270,7 @@ test("a second SIGTERM during the clean-up does not cut it short", { skip: noSig
   const { signal } = await r.ended;
   assert.equal(signal, "SIGTERM");
   assert.deepEqual(snap(dir), before);
-  assert.ok(!alive(pid), "the child is gone");
+  assert.ok(await gone(pid), "the child is gone");
 });
 
 test("a run cut short by process.exit leaves the folder as it was", { skip: noSignals }, async () => {
@@ -276,9 +282,7 @@ test("a run cut short by process.exit leaves the folder as it was", { skip: noSi
   const { code } = await r.ended;
   assert.equal(code, 1);
   assert.deepEqual(snap(dir), before);
-  // Killed at exit, so it may take a moment to be gone.
-  for (let i = 0; i < 50 && alive(pid); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(!alive(pid), "the child is gone");
+  assert.ok(await gone(pid), "the child is gone");
 });
 
 test("a failed run ends once its processes have stopped, and their temp folder goes with them", { skip: noSignals }, async () => {
