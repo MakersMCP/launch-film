@@ -713,3 +713,107 @@ launch({ W: 100, H: 100 }).catch(() => {});
   assert.equal(await ended, "SIGTERM");
   assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
 });
+
+// A stand-in Chrome in Node that answers every call on the DevTools pipe and
+// makes its socket folder in the temp folder, linked from its profile, as
+// Chrome does. "helper": it starts a helper that names the profile in its
+// command line, as Chrome's helpers do, lets SIGTERM go and writes into the
+// profile; its pid goes to the file STAND_IN_PID. "closing": on Ctrl-C it
+// starts to close, its link going first, and then lingers until it is
+// killed.
+function standInChrome(dir) {
+  const file = path.join(dir, "chrome");
+  fs.writeFileSync(file, `#!${process.execPath}
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const profile = process.argv.find((a) => a.startsWith("--user-data-dir=")).slice("--user-data-dir=".length);
+const sock = fs.mkdtempSync(path.join(process.env.TMPDIR, "com.google.Chrome."));
+fs.writeFileSync(path.join(sock, "SingletonSocket"), "");
+fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(profile, "SingletonSocket"));
+if (process.env.STAND_IN === "helper") {
+  const write = 'process.on("SIGTERM", () => {}); const fs = require("fs"); setInterval(() => { try { fs.mkdirSync(process.argv[1] + "/Default", { recursive: true }); fs.writeFileSync(process.argv[1] + "/Default/state", "on"); } catch {} }, 5);';
+  const helper = spawn(process.execPath, ["-e", write, profile, "--user-data-dir=" + profile], { stdio: "ignore" });
+  fs.writeFileSync(process.env.STAND_IN_PID, String(helper.pid));
+}
+if (process.env.STAND_IN === "closing") {
+  process.on("SIGINT", () => fs.rmSync(path.join(profile, "SingletonSocket"), { force: true }));
+  process.on("SIGTERM", () => {});
+}
+let buf = "";
+fs.createReadStream("", { fd: 3 }).on("data", (d) => {
+  buf += d;
+  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) fs.writeSync(4, JSON.stringify({ id: JSON.parse(buf.slice(0, i)).id, result: {} }) + "\\0");
+});
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  return file;
+}
+
+// A process that starts Chrome as a render does, says "up" once Chrome
+// answers, and then fails ("fails") or waits for a signal.
+const STARTS_CHROME = `
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
+out.listen();
+launch({ W: 100, H: 100 }).then(() => {
+  process.stdout.write("up");
+  if (process.argv[1] === "fails") setTimeout(() => out.exit(1), 100);
+});
+setInterval(() => {}, 1000);
+`;
+
+test("a failed run ends the Chrome helpers that still write in its profile before the profile goes", { skip: process.platform !== "linux" && "/proc tells which processes use a profile" }, async () => {
+  const temp = tmp();
+  const pidFile = path.join(tmp(), "helper.pid");
+  const env = { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: standInChrome(tmp()), STAND_IN: "helper", STAND_IN_PID: pidFile };
+  const r = spawnSync(process.execPath, ["-e", STARTS_CHROME, "fails"], { encoding: "utf8", timeout: 20_000, env });
+  const helper = Number(fs.readFileSync(pidFile, "utf8"));
+  try {
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stdout, "up");
+    // Had the helper lived on, it would have made the profile again.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
+    assert.ok(await gone(helper), "the helper is gone");
+  } finally {
+    try {
+      process.kill(helper, "SIGKILL");
+    } catch {
+      // Gone, as it should be.
+    }
+  }
+});
+
+test("a stop as Chrome starts to close removes the socket folder Chrome made", { skip: noSignals }, async () => {
+  // Ctrl-C reaches Chrome too, as it closes after a clip: it unlinks its
+  // socket from the profile, and is killed before it removes the folder.
+  const temp = tmp();
+  const env = { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: standInChrome(tmp()), STAND_IN: "closing" };
+  const child = spawn(process.execPath, ["-e", STARTS_CHROME, "waits"], { stdio: ["ignore", "pipe", "ignore"], env });
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  assert.equal(fs.readdirSync(temp).filter((n) => n.startsWith("com.google.Chrome.")).length, 1);
+  child.kill("SIGINT");
+  assert.equal(await ended, "SIGINT");
+  assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
+});
+
+test("a run removes the temp folders of runs that are gone", () => {
+  // Of their kind: one of a process that has ended, one whose pid is now
+  // this process's, one of a process that runs, and one without a pid, as
+  // --keep makes.
+  const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout;
+  const prefix = "launch-film-sweep-test-";
+  const names = [`${prefix}${gone}-aB3dE6`, `${prefix}${process.pid}-Zz9Yy8`, `${prefix}${process.ppid}-Qq1Ww2`, `${prefix}Kk4Ll5`];
+  for (const name of names) fs.mkdirSync(path.join(os.tmpdir(), name));
+  const cleaned = [];
+  const made = out.tempDir(prefix, (dir) => cleaned.push(path.basename(dir)));
+  try {
+    assert.deepEqual(cleaned.sort(), names.slice(0, 2).sort(), "each goes as a temp folder of this process does");
+    assert.deepEqual(names.map((n) => fs.existsSync(path.join(os.tmpdir(), n))), [false, false, true, true]);
+  } finally {
+    out.release(made);
+    for (const name of names) fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true });
+  }
+});

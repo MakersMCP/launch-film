@@ -57,18 +57,76 @@ function findChrome() {
 }
 
 // Chrome links SingletonSocket in its profile to a socket in a temp folder
-// of its own (com.google.Chrome.XXXXXX); one killed outright leaves that
-// folder behind, so it goes with the profile, read from the link before the
-// profile is removed.
-function forgetSocket(profile) {
+// of its own (com.google.Chrome.XXXXXX), and removes both as it closes. One
+// stopped while it closes, or killed outright, leaves that folder behind,
+// so the folder is read from the link while Chrome is up, and goes with the
+// profile. Returns it, or null.
+function socketFolder(profile) {
   try {
     const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
-    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir())) {
-      fs.rmSync(folder, { recursive: true, force: true });
-    }
+    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir())) return folder;
   } catch {
     // No such link, or not in the temp folder.
   }
+  return null;
+}
+
+// The processes that use a profile: Chrome names it in the command line of
+// each of them, its helpers' too. Read from /proc, so on Linux only.
+function usersOf(profile) {
+  const flag = `--user-data-dir=${profile}`;
+  const pids = [];
+  let names = [];
+  try {
+    names = fs.readdirSync("/proc");
+  } catch {
+    return pids;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+    try {
+      const cmd = fs.readFileSync(`/proc/${name}/cmdline`, "utf8");
+      const at = cmd.indexOf(flag);
+      if (at >= 0 && /^[\0 ]?$/.test(cmd.charAt(at + flag.length))) pids.push(Number(name));
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+  return pids;
+}
+
+// Whether a process runs, an ended one that waits to be reaped aside.
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/s.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+}
+
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// Run just before a profile is removed: what still uses it is ended first,
+// since Chrome's helpers, still closing or left by a Chrome killed outright,
+// wrote into it after it was removed and so kept it, and the socket folder
+// Chrome made for it (`socket`, else read from its link) goes with it.
+function closeProfile(profile, socket) {
+  const pids = usersOf(profile);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  }
+  for (let i = 0; i < 100 && pids.some(alive); i++) pause(10);
+  const folder = socket || socketFolder(profile);
+  if (folder) fs.rmSync(folder, { recursive: true, force: true });
 }
 
 // A browser with its own temp profile, answering protocol calls by promise.
@@ -77,7 +135,8 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   if (!chrome) throw new Error("Chrome was not found. Install Google Chrome or Chromium, or set LAUNCH_FILM_CHROME to its path.");
   // Removed with the socket folder Chrome links from it, however the run
   // ends: Chrome killed by a stop leaves that folder in the temp folder.
-  const profile = tempDir("launch-film-chrome-", forgetSocket);
+  let socket = null;
+  const profile = tempDir("launch-film-chrome-", (dir) => closeProfile(dir, socket));
   const args = [
     "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
     "--disable-extensions", "--disable-sync", "--disable-default-apps", "--disable-background-networking",
@@ -133,6 +192,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     child.stdio[3].write(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }) + "\0");
   });
   await send("Browser.getVersion");
+  socket = socketFolder(profile);
   return {
     send,
     on: (fn) => listeners.add(fn),

@@ -493,13 +493,46 @@ function aftermath() {
 // A folder in the system's temp folder, named for the process that made it
 // (<prefix><pid>-<random>), removed with release(), and on a stop or at
 // exit when it has not been (or could not be). before(dir), when given,
-// runs each time just before it is removed: Chrome's profile takes the
-// socket folder Chrome links from it along (chrome.js).
+// runs each time just before it is removed: Chrome's profile ends what
+// still uses it and takes the socket folder Chrome links from it along
+// (chrome.js). The first time a process makes one of a kind, it removes the
+// ones of that kind whose process is gone, or whose pid is its own now,
+// the same way: a run killed outright leaves them.
+const swept = new Set();
 function tempDir(prefix, before = null) {
+  if (!swept.has(prefix)) {
+    swept.add(prefix);
+    sweepTemps(prefix, before);
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}${process.pid}-`));
   temps.set(dir, before);
   hook();
   return dir;
+}
+
+function sweepTemps(prefix, before) {
+  const named = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d+)-[A-Za-z0-9]{6}$`);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const m = named.exec(entry.name);
+    const at = path.join(os.tmpdir(), entry.name);
+    if (!m || !entry.isDirectory() || temps.has(at)) continue;
+    const pid = Number(m[1]);
+    if (pid !== process.pid && running(pid)) continue;
+    if (before) {
+      try {
+        before(at);
+      } catch {
+        // The folder goes all the same.
+      }
+    }
+    remove(at);
+  }
 }
 
 function clear(dir) {
