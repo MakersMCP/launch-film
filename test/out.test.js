@@ -26,7 +26,9 @@ function snap(dir) {
     for (const name of fs.readdirSync(at).sort()) {
       const file = path.join(at, name);
       const key = rel ? `${rel}/${name}` : name;
-      if (fs.lstatSync(file).isDirectory()) {
+      const s = fs.lstatSync(file);
+      if (s.isSymbolicLink()) seen[key] = `link to ${fs.readlinkSync(file)}`;
+      else if (s.isDirectory()) {
         seen[`${key}/`] = "folder";
         walk(file, key);
       } else seen[key] = fs.readFileSync(file, "utf8");
@@ -351,6 +353,141 @@ setInterval(() => {}, 1000);
   await new Promise((resolve) => child.on("exit", resolve));
   assert.ok(!fs.existsSync(dir), "the temp folder is gone");
   assert.deepEqual(fs.readdirSync(base), [], "and what its clean-up removes");
+});
+
+// Two processes that put a film, a brand kit (replaced whole) and frames
+// (merged) in one folder at the same moment, `trials` times over: what each
+// says, and what the folder holds after both.
+const RACER = `
+const fs = require("fs");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const [dir, me, at] = process.argv.slice(1);
+out.within(dir, async (run) => {
+  fs.writeFileSync(run.out("film.mp4"), me);
+  fs.mkdirSync(run.folder("brand"));
+  for (const n of ["brand.json", "logo.png"]) fs.writeFileSync(run.part + "/brand/" + n, me);
+  fs.mkdirSync(run.out("frames"));
+  for (const n of ["1", "2"]) fs.writeFileSync(run.part + "/frames/" + n + ".jpg", me);
+  while (Date.now() < Number(at)) {}
+}).then(() => process.exit(0), (err) => { process.stderr.write(err.message); process.exit(1); });
+`;
+function racer(dir, me, at) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", RACER, dir, me, String(at)], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("exit", (code) => resolve({ code, stderr }));
+  });
+}
+
+test("two runs that put their files in one folder at once take turns", async () => {
+  for (let t = 0; t < 16; t++) {
+    const dir = tmp();
+    write(dir, { "film.mp4": "O", "brand/brand.json": "O", "brand/logo.png": "O", "frames/1.jpg": "O" });
+    const at = Date.now() + 400;
+    const [x, y] = await Promise.all([racer(dir, "X", at), racer(dir, "Y", at)]);
+    assert.deepEqual([x, y].map((r) => r.code), [0, 0], `trial ${t}: ${x.stderr} ${y.stderr}`);
+    // The one that went second replaced the other's files, every one.
+    const s = snap(dir);
+    const last = s["film.mp4"];
+    assert.deepEqual(s, { "brand/": "folder", "brand/brand.json": last, "brand/logo.png": last, "film.mp4": last, "frames/": "folder", "frames/1.jpg": last, "frames/2.jpg": last }, `trial ${t}`);
+  }
+});
+
+test("a commit waits for a run that holds the folder, and takes over from one that is gone", async () => {
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  // Held by a process that has ended: taken over at once.
+  const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout;
+  write(dir, { [`${out.LOCK}/pid`]: gone });
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"));
+  assert.deepEqual(snap(dir), { "film.mp4": "new film" });
+  // Held by a process that runs: the commit waits for it to let go.
+  const holder = spawn(process.execPath, ["-e", `
+const fs = require("fs");
+fs.mkdirSync(process.argv[1]);
+fs.writeFileSync(process.argv[1] + "/pid", String(process.pid));
+process.stdout.write("held");
+setTimeout(() => { fs.rmSync(process.argv[1], { recursive: true }); process.exit(0); }, 700);`, path.join(dir, out.LOCK)], { stdio: ["ignore", "pipe", "ignore"] });
+  await new Promise((resolve) => holder.stdout.once("data", resolve));
+  const started = Date.now();
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "newer film"));
+  assert.ok(Date.now() - started >= 400, `waited ${Date.now() - started} ms`);
+  assert.deepEqual(snap(dir), { "film.mp4": "newer film" });
+});
+
+// A folder on another disk than the temp folder, where the system has one.
+function otherDisk() {
+  const dev = fs.statSync(os.tmpdir()).dev;
+  for (const at of ["/dev/shm", "/run/user/" + (process.getuid ? process.getuid() : ""), "/var/tmp", "/tmp"]) {
+    try {
+      if (fs.statSync(at).dev !== dev) return fs.mkdtempSync(path.join(at, "launch-film-out-"));
+    } catch {
+      // Not here, or not writable.
+    }
+  }
+  return null;
+}
+
+test("frames/ that links to a folder on another disk takes the new frames", { skip: process.platform === "win32" && "links need rights on Windows" }, async (t) => {
+  const elsewhere = otherDisk();
+  if (!elsewhere) return t.skip("no folder on another disk");
+  try {
+    const dir = tmp();
+    write(dir, { "film.mp4": "old film" });
+    write(elsewhere, { "clip-1-a.jpg": "old 1", "clip-7-a.jpg": "old 7" });
+    fs.symlinkSync(elsewhere, path.join(dir, "frames"));
+    // The one-go command: the frames run inside the film's run.
+    await out.within(dir, async (run) => {
+      fs.writeFileSync(run.out("film.mp4"), "new film");
+      await out.within(path.join(run.part, "frames"), async (r) => fs.writeFileSync(r.out("clip-1-a.jpg"), "new 1"));
+    });
+    assert.equal(fs.readFileSync(path.join(dir, "film.mp4"), "utf8"), "new film");
+    assert.ok(fs.lstatSync(path.join(dir, "frames")).isSymbolicLink(), "frames/ is still the link");
+    assert.deepEqual(snap(elsewhere), { "clip-1-a.jpg": "new 1", "clip-7-a.jpg": "old 7" });
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["film.mp4", "frames"]);
+    // One that fails there leaves both folders as they were.
+    const before = [snap(dir), snap(elsewhere)];
+    await assert.rejects(out.within(dir, async (run) => {
+      await out.within(path.join(run.part, "frames"), async (r) => fs.writeFileSync(r.out("clip-1-a.jpg"), "newer 1"));
+      fs.writeFileSync(run.out("film.mp4"), "newer film");
+      // The film cannot go in: a folder is where it goes.
+      fs.renameSync(path.join(dir, "film.mp4"), path.join(dir, "film.old"));
+      fs.mkdirSync(path.join(dir, "film.mp4"));
+    }), /a folder is where this run puts a file/);
+    fs.rmdirSync(path.join(dir, "film.mp4"));
+    fs.renameSync(path.join(dir, "film.old"), path.join(dir, "film.mp4"));
+    assert.deepEqual([snap(dir), snap(elsewhere)], before);
+  } finally {
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test("on Windows a new folder is put in place when another program lets go of it in a moment", () => {
+  // Windows refuses to move a folder while a virus scanner looks at a new
+  // file in it; the scanner lets go in a moment.
+  const base = tmp();
+  const script = `
+const fs = require("fs");
+const path = require("path");
+Object.defineProperty(process, "platform", { value: "win32" });
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const dir = path.join(process.argv[1], "film");
+const real = fs.renameSync;
+let refused = 0;
+fs.renameSync = (from, to) => {
+  if (to === dir && refused < 2) {
+    refused++;
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  }
+  return real(from, to);
+};
+out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"))
+  .then(() => process.stdout.write("put in place after " + refused + " refusals"), (err) => process.stdout.write("failed: " + err.message));
+`;
+  const r = spawnSync(process.execPath, ["-e", script, base], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.stdout, "put in place after 2 refusals", r.stderr);
+  assert.deepEqual(snap(base), { "film/": "folder", "film/film.mp4": "new film" });
 });
 
 test("a stop removes the socket folder Chrome links from its profile", { skip: noSignals }, async () => {
