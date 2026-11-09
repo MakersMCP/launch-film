@@ -130,6 +130,46 @@ test("a plan whose easybrandkit fails leaves a kit that brand/ links to as it wa
   assert.deepEqual(snap(dir, { links: true }), before);
 });
 
+test("a plan whose easybrandkit fails cannot reach through a link inside the folder's kit", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  // A file and a folder in brand/ that link to files other films share, as
+  // an easybrandkit working on the run's copy would write and clear them.
+  const dir = filmFolder();
+  const shared = tmp();
+  fs.mkdirSync(path.join(shared, "pages"));
+  fs.writeFileSync(path.join(shared, "logo.png"), "the shared logo");
+  fs.writeFileSync(path.join(shared, "pages", "home.md"), "the shared page");
+  fs.symlinkSync(path.join(shared, "logo.png"), path.join(dir, "brand", "logo-01.png"));
+  fs.symlinkSync(path.join(shared, "pages"), path.join(dir, "brand", "pages"));
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, 'const fs = require("fs"); const out = process.argv[process.argv.indexOf("--out") + 1];' +
+    ' if (fs.lstatSync(out + "/logo-01.png").isSymbolicLink()) process.stderr.write("a link reached the copy\\n");' +
+    ' fs.writeFileSync(out + "/logo-01.png", "new"); fs.writeFileSync(out + "/pages/home.md", "new"); fs.rmSync(out + "/pages/home.md");' +
+    ' process.stderr.write("easybrandkit: Could not open the page\\n"); process.exit(1);');
+  const [before, theirs] = [snap(dir, { links: true }), snap(shared)];
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", kit);
+  assert.equal(r.status, 1, r.stderr);
+  assert.ok(!r.stderr.includes("a link reached the copy"), r.stderr);
+  assert.deepEqual(snap(shared), theirs);
+  assert.deepEqual(snap(dir, { links: true }), before);
+});
+
+test("a plan makes the folder's brand/ of plain files, however the kit it was given holds them", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  const kit = otherKit();
+  const shared = tmp();
+  fs.mkdirSync(path.join(shared, "pages"));
+  fs.writeFileSync(path.join(shared, "pages", "home.md"), "the shared page");
+  fs.renameSync(path.join(kit, "logo-header.png"), path.join(shared, "logo-header.png"));
+  fs.symlinkSync(path.join(shared, "logo-header.png"), path.join(kit, "logo-header.png"));
+  fs.symlinkSync(path.join(shared, "pages"), path.join(kit, "pages"));
+  const dir = filmFolder();
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--brand", kit, "--words", path.join(kit, "words.json"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!fs.lstatSync(path.join(dir, "brand", "logo-header.png")).isSymbolicLink());
+  assert.ok(!fs.lstatSync(path.join(dir, "brand", "pages")).isSymbolicLink());
+  assert.equal(fs.readFileSync(path.join(dir, "brand", "pages", "home.md"), "utf8"), "the shared page");
+  assert.equal(fs.readdirSync(shared).length, 2);
+});
+
 test("a plan given a kit that cannot be read leaves the folder's kit as it was", () => {
   planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
 });

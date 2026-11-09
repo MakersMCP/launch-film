@@ -570,6 +570,31 @@ test("a write that fails names the file it was writing, as the new one, and a qu
   assert.equal(out.said(`ENOSPC, No space left on device '${path.join(part, "brand")}'`), `ENOSPC, No space left on device the new '${path.join(dir, "brand")}'`);
 });
 
+test("a copy is made of plain files, whatever links the folder holds", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  const base = tmp();
+  const from = path.join(base, "kit");
+  const elsewhere = path.join(base, "elsewhere");
+  write(from, { "brand.json": "{}", "deep/inner/page.md": "page", ".launch-film-commit/pid": "1" });
+  write(elsewhere, { "logo.png": "logo", "folder/a.txt": "a" });
+  fs.symlinkSync(path.join(elsewhere, "logo.png"), path.join(from, "logo-link.png"));
+  fs.symlinkSync(path.join(elsewhere, "folder"), path.join(from, "deep", "folder-link"));
+  // A link that leads nowhere, one to a folder the copy is inside of, and a
+  // file whose kind cannot be copied.
+  fs.symlinkSync(path.join(base, "no-such"), path.join(from, "dangling"));
+  fs.symlinkSync(from, path.join(from, "deep", "back"));
+  if (spawnSync("mkfifo", [path.join(from, "pipe")]).status !== 0) fs.writeFileSync(path.join(from, "pipe.skip"), "");
+  const to = path.join(base, "copy");
+  // Through a link, as a brand/ that links to a kit.
+  fs.symlinkSync(from, path.join(base, "link-to-kit"));
+  out.copyPlain(path.join(base, "link-to-kit"), to);
+  const copied = snap(to);
+  delete copied["pipe.skip"];
+  assert.deepEqual(copied, { "brand.json": "{}", "deep/": "folder", "deep/inner/": "folder", "deep/inner/page.md": "page", "deep/folder-link/": "folder", "deep/folder-link/a.txt": "a", "logo-link.png": "logo" });
+  // Into itself it cannot go.
+  assert.throws(() => out.copyPlain(from, path.join(from, "brand")), /is inside/);
+  assert.ok(!fs.existsSync(path.join(from, "brand")));
+});
+
 test("a temp folder is named for its process and goes with release", () => {
   const dir = out.tempDir("launch-film-out-test-");
   assert.match(path.basename(dir), new RegExp(`^launch-film-out-test-${process.pid}-`));

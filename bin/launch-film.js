@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, said, aftermath, noticed, stopping, exit, reason, save } = require("../src/out");
+const { listen, within, shown, said, aftermath, noticed, stopping, exit, reason, save, copyPlain } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -196,12 +196,13 @@ async function makePlan(url, flags, run) {
     }
   }
   // The film refers to the brand by a path from its own folder. A kit is
-  // copied as plain files, its links followed, so this run never writes
-  // where a link leads (a brand/ that links to a kit other films share).
+  // copied as plain files, every link in it followed, so nothing this run
+  // does to the copy reaches where a link leads (a brand/ that links to a
+  // kit other films share, or a kit with a link in it).
   const local = run.folder("brand");
   const copy = (from) => {
     try {
-      fs.cpSync(from, local, { recursive: true, dereference: true });
+      copyPlain(from, local);
     } catch (err) {
       throw new Error(`copying the brand kit ${from} to ${local}: ${reason(err)}`);
     }

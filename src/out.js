@@ -116,6 +116,33 @@ function save(file, data) {
   }
 }
 
+// Copies a folder as plain files and folders, every link in it followed and
+// what it leads to copied, at any depth (fs.cpSync's dereference follows only
+// a link at the top), so what works on the copy never reaches through a link.
+// Left out are a link that leads nowhere or back to a folder the copy is
+// inside of, sockets and the like, and what launch-film's own runs keep
+// there. The folders take the mode and the default ACL of where they are
+// made, as the part folder does. A folder cannot be copied into itself.
+function copyPlain(from, to, above = []) {
+  const real = fs.realpathSync(from);
+  if (!above.length && inside(path.join(fs.realpathSync(path.dirname(to)), path.basename(to)), real)) throw new Error(`${to} is inside ${from}`);
+  fs.mkdirSync(to, { recursive: true });
+  const trail = [...above, real];
+  for (const name of fs.readdirSync(from)) {
+    if (name.startsWith(".launch-film-")) continue;
+    const source = path.join(from, name);
+    let s;
+    try {
+      s = fs.statSync(source);
+    } catch (err) {
+      if (err.code === "ENOENT" || err.code === "ELOOP") continue;
+      throw err;
+    }
+    if (s.isFile()) fs.copyFileSync(source, path.join(to, name));
+    else if (s.isDirectory() && !trail.includes(fs.realpathSync(source))) copyPlain(source, path.join(to, name), trail);
+  }
+}
+
 // A name on one line: a line break or another control character in it,
 // and a backslash, are written escaped.
 const ESCAPES = { "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
@@ -1013,5 +1040,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, reason, save,
+module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
   socketFolder, closeProfile, STALE, LOCK };
