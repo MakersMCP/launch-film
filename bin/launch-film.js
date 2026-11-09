@@ -42,12 +42,15 @@ Options:
   --seconds <n>        Aim for this length, 20-40 (default 30).
   --aspect <ratio>     16:9 (default) or 9:16.
   --jobs <n>           Clips rendered at once (default 2).
-  --no-music           Leave out the music bed. In film.json, "music" is
+  --no-music           Plan the film without the music bed (plan, the
+                       one-go command and stills <url>; a render plays what
+                       "music" in film.json says). In film.json, "music" is
                        true (the look's bed), false (none), { "volume": 0.55 }
                        (the bed at another level) or the path of your own
                        track, from film.json's folder or absolute, at least
                        as long as the film.
-  --no-sfx             Leave out the sound effects.
+  --no-sfx             Plan the film without the sound effects (a render
+                       plays what "sfx" in film.json says).
   --keep               Keep the work files (each clip's MP4).
 
 Check options (CHECK.md, check.json, sheet.png and wave.png go to --out,

@@ -77,7 +77,8 @@ npx launch-film looks | types | icons <word> | doctor
   --aspect 9:16         a vertical film (default 16:9)
   --brand <dir>         use an easybrandkit folder you already have
   --easybrandkit <cmd>  the easybrandkit to run (default: LAUNCH_FILM_EASYBRANDKIT, one on PATH, else easybrandkit with npx)
-  --no-music, --no-sfx, --jobs <n>, --keep
+  --no-music, --no-sfx  plan the film without the music bed or the sound effects (a render reads "music" and "sfx" in film.json)
+  --jobs <n>, --keep
 ```
 
 A run leaves this behind:
@@ -193,7 +194,7 @@ The cuts come from the timeline launch-film writes next to its film. For a film 
 
 Words between asterisks are set in the brand's accent color. A bar is one bar of the look's music, about two seconds; give `seconds` instead if you prefer.
 
-`music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track of your own, from film.json's folder or absolute. A track plays from the first frame in place of the bed: it is brought to about the bed's level (lower when its peaks would clip), cut at the end of the film and faded out over its last second, and the sound effects play over it as they do over the bed. A track that is missing, has no sound, is silent or is shorter than the film is refused before anything renders, with a message that says what to give instead and, for a relative path that is not there, where it was looked for. [musicfit](https://github.com/EminBudak/musicfit) makes a track exactly the film's length with its hit on the beat you choose, such as the logo close: `npx musicfit@latest track.mp3 --length 29.333 --hit 24 --fps 25`, with the film's length and the last clip's start from film.timeline.json. The message that refuses a short track gives both.
+`music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track of your own, from film.json's folder or absolute. A track plays from the first frame in place of the bed: it is brought to about the bed's level (lower when its peaks would clip), cut at the end of the film and faded out over its last second, and the sound effects play over it as they do over the bed. A track that is missing, has no sound, is silent or is shorter than the film is refused before anything renders, with a message that says what to give instead and, for a relative path that is not there, where it was looked for. [musicfit](https://github.com/EminBudak/musicfit) makes a track exactly the film's length with its hit on the beat you choose, such as the logo close. Run in the film's folder, `npx musicfit@latest track.mp3 --length 29.333 --hit 24 --fps 25 --out music` writes `music/fitted.wav`, with the film's length and the last clip's start from film.timeline.json, and `"music": "music/fitted.wav"` plays it. The message that refuses a short track gives both numbers.
 
 ## Looks
 
@@ -220,7 +221,7 @@ Run `npx launch-film@latest doctor` to check. It has been tested on macOS with C
 - A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which.
 - easybrandkit needs a site that opens in a headless browser. A bot check or a login wall gets no kit, and a social profile is not a brand's site.
 - A 30 second film takes one to three minutes to render on a laptop.
-- The music is simple by design. To use your own track, give its path as `music` in film.json and render again. The cuts still fall on the bars of the look's own tempo (launch 112 BPM, aurora 96, gridline 120, pop 124, journal 90), so a track's beats meet every cut when a bar of the look holds a whole number of the track's beats, with its hit on a cut such as the logo close: four at the look's own tempo, two at half of it, eight at twice it, or five for a 120 BPM track in aurora.
+- The music is simple by design. To use your own track, give its path as `music` in film.json and render again. The cuts still fall on the bars of the look's own tempo (launch 112 BPM, aurora 96, gridline 120, pop 124, journal 90), so a track's beats meet every cut when a bar of the look holds a whole number of the track's beats, with its hit on a cut such as the logo close: four at the look's own tempo, two at half of it, eight at twice it, or five for a 120 BPM track in aurora. So read the track's tempo with `npx musicfit@latest track.mp3 --analyze` before you plan the film, and fit the track once the film is rendered.
 
 ## License
 
