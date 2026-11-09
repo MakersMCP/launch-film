@@ -45,7 +45,7 @@ The plan already picked one from the brand: `launch` (dark stage, depth, one bri
 
 ## 3. Write the scenes
 
-film.json holds `look`, `aspect` (`16:9` or `9:16`) and `clips`, played in order. Each clip has a `kind` and a length in `bars` of the look's music (one bar is about 2 seconds; cuts land on the beat). You may give `seconds` instead.
+film.json holds `look`, `aspect` (`16:9` or `9:16`), `music` and `clips`, played in order. `music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track, from film.json's folder or absolute, at least as long as the film. Each clip has a `kind` and a length in `bars` of the look's music (one bar is about 2 seconds; cuts land on the beat). You may give `seconds` instead.
 
 | kind | what it shows | fields |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ npx -y launch-film@0.2.1 render film/<name>/film.json
 
 Clips render two at a time; a 30 second film takes one to three minutes. The film is `film/<name>/film.mp4`. If a clip fails, the message names it: fix film.json and render again.
 
-A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again.
+A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again. An earlier file the user made read-only is not replaced: the run names it and stops. A frames, stills or check folder that is a link takes the new files in the folder it leads to.
 
 ## 5. Check the film before you hand it over
 
@@ -114,7 +114,7 @@ Fix what you find in film.json and render again. If the loudness or the peaks fa
 npx -y launch-film@0.2.1 stills film/<name>/film.json --for ph,og,x,play,chrome
 ```
 
-This makes the pictures a launch needs from the same plan, at the exact size each place asks for, in `film/<name>/stills/`: the Product Hunt gallery (`ph-1.png` to `ph-6.png`, 1270x760) and thumbnail (240x240), `og.png` (1200x630) for link previews, `x.png` (1600x900) for a post on X, `play-feature.png` (1024x500) for Google Play, and the Chrome Web Store tiles (`chrome-small.png` 440x280 and `chrome-marquee.png` 1400x560). Ask for only the ones the user needs with `--for`; a site's address in place of film.json plans the film first.
+This makes the pictures a launch needs from the same plan, at the exact size each place asks for, in `film/<name>/stills/`: the Product Hunt gallery (`ph-1.png` up to `ph-6.png`, 1270x760: the first picture, then one for each scene of the film after it) and thumbnail (240x240), `og.png` (1200x630) for link previews, `x.png` (1600x900) for a post on X, `play-feature.png` (1024x500) for Google Play, and the Chrome Web Store tiles (`chrome-small.png` 440x280 and `chrome-marquee.png` 1400x560). Ask for only the ones the user needs with `--for`; a site's address in place of film.json plans the film first.
 
 Read `stills/STILLS.md` and look at every picture with the same list as the frames. The words come from film.json, so fix them there and run `stills` again. Then give the user the folder and say what each file is for.
 
