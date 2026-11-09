@@ -266,6 +266,27 @@ test("a render whose clip encoder stops ends with its words and keeps the earlie
   assert.deepEqual(leftBy(r.pid), []);
 });
 
+test("a render whose ffmpeg stops reading its frames and then fails says so, and does not wait forever", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  // It reads nothing while the pipe fills up, then stops, as an ffmpeg does
+  // that has lost its disk while it works.
+  const ffmpeg = standIn(`case "$*" in *image2pipe*) sleep 4; echo 'stand-in: No space left on device' >&2; exit 1;; esac`);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
+  assert.match(r.stderr, /^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\n/m);
+  assert.deepEqual(snap(dir), before);
+});
+
+test("a render whose ffmpeg cannot be started says so in a line of its own and names the folder", { skip, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: path.join(dir, "no-such-ffmpeg") } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, `launch-film: rendering clip 1: ffmpeg failed: spawn ${path.join(dir, "no-such-ffmpeg")} ENOENT\nlaunch-film: ${dir} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
+});
+
 test("a render stopped with SIGTERM leaves the folder and the temp folder as they were", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);

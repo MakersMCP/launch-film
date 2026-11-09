@@ -231,7 +231,14 @@ function encoder({ output, fps = 25, crf = 15 }) {
   child.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
   child.stdin.on("error", () => {});
   let ended = null;
-  const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
+  const closed = new Promise((resolve) => {
+    child.on("close", (code, signal) => resolve((ended = ended || { code, signal })));
+    // One that cannot be started fails as one that stopped does.
+    child.on("error", (e) => {
+      err = e.message;
+      resolve((ended = { code: -1, signal: null }));
+    });
+  });
   const failed = () => new Error(why({ ...ended, stderr: err }, { lines: 2 }));
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)
