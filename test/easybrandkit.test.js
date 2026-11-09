@@ -83,6 +83,45 @@ test("an easybrandkit that writes brand.json resolves its path", async () => {
   assert.equal(await runEasybrandkit("https://example.com", path.join(dir, "out"), { command: fake }), path.join(dir, "out", "brand.json"));
 });
 
+// Run as on Windows, in a process of its own: what easybrandkitCommands
+// answers with `dir` as the whole of PATH.
+function commandsOnWindows(dir) {
+  const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
+  const env = { ...process.env, PATH: dir };
+  delete env.LAUNCH_FILM_EASYBRANDKIT;
+  const r = spawnSync(process.execPath, ["-e", `Object.defineProperty(process, "platform", { value: "win32" }); process.stdout.write(JSON.stringify(require(${brand}).easybrandkitCommands()));`], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+test("on Windows the script behind npx.cmd and easybrandkit.cmd is run with Node, as Node starts no .cmd file without a shell", () => {
+  const dir = tmp();
+  const put = (rel, text = "") => {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text, { mode: 0o755 });
+    return file;
+  };
+  assert.deepEqual(commandsOnWindows(dir), [["npx.cmd", "-y", "easybrandkit@0.4.0"], ["npx.cmd", "-y", "github:EminBudak/easybrandkit#v0.4.0"]]);
+  put("npx.cmd");
+  const cli = put(path.join("node_modules", "npm", "bin", "npx-cli.js"));
+  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, cli, "-y", "easybrandkit@0.4.0"], [process.execPath, cli, "-y", "github:EminBudak/easybrandkit#v0.4.0"]]);
+  const installed = put("easybrandkit.cmd");
+  assert.deepEqual(commandsOnWindows(dir), [[installed]]);
+  put(path.join("node_modules", "easybrandkit", "package.json"), JSON.stringify({ bin: { easybrandkit: "skills/easybrandkit/scripts/easybrandkit.js" } }));
+  const script = put(path.join("node_modules", "easybrandkit", "skills", "easybrandkit", "scripts", "easybrandkit.js"));
+  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, script]]);
+});
+
+test("an easybrandkit Node refuses to start is told of with what to do", () => {
+  // Node throws for a .cmd file on Windows, where a missing command is an event.
+  const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
+  const r = spawnSync(process.execPath, ["-e", `require("child_process").spawn = () => { throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" }); };
+require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: "some.cmd" }).catch((e) => process.stdout.write(e.message));`, tmp()], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^easybrandkit could not be started \(spawn EINVAL\)\. Install easybrandkit/);
+});
+
 test("easybrandkit's temp files go with a temp folder of the run's own, on Linux", { skip: process.platform !== "linux" && "the temp folder is left as it is elsewhere" }, async () => {
   // It leaves a folder in its temp folder, as a Chrome stopped as it starts
   // does.

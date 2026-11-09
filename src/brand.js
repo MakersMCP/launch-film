@@ -47,10 +47,33 @@ function easybrandkitCommands(given = "") {
     if (/\.(c?js|mjs)$/i.test(raw) && fs.existsSync(raw)) return [[process.execPath, raw]];
     return [raw.split(" ").filter(Boolean)];
   }
-  const installed = onPath(process.platform === "win32" ? "easybrandkit.cmd" : "easybrandkit");
-  if (installed) return [[installed]];
-  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-  return [[npx, "-y", "easybrandkit@0.4.0"], [npx, "-y", "github:EminBudak/easybrandkit#v0.4.0"]];
+  const windows = process.platform === "win32";
+  const installed = onPath(windows ? "easybrandkit.cmd" : "easybrandkit");
+  if (installed) return [windows ? scriptOfInstalled(installed) : [installed]];
+  const npx = windows ? scriptOfNpx() : ["npx"];
+  return [[...npx, "-y", "easybrandkit@0.4.0"], [...npx, "-y", "github:EminBudak/easybrandkit#v0.4.0"]];
+}
+
+// On Windows npx and an installed easybrandkit are .cmd files. Node starts
+// one only through a shell, and a shell would read the & and % of an address
+// as its own, so the script behind it is run with Node, where it is found
+// next to the .cmd file, as npm puts it.
+function scriptOfInstalled(cmd) {
+  const folder = path.join(path.dirname(cmd), "node_modules", "easybrandkit");
+  try {
+    const { bin } = JSON.parse(fs.readFileSync(path.join(folder, "package.json"), "utf8"));
+    const script = path.join(folder, typeof bin === "string" ? bin : bin.easybrandkit);
+    if (fs.existsSync(script)) return [process.execPath, script];
+  } catch {
+    // Not where npm puts it: started as it is, and refused with what to do.
+  }
+  return [cmd];
+}
+
+function scriptOfNpx() {
+  const cmd = onPath("npx.cmd");
+  const script = cmd ? path.join(path.dirname(cmd), "node_modules", "npm", "bin", "npx-cli.js") : null;
+  return script && fs.existsSync(script) ? [process.execPath, script] : ["npx.cmd"];
 }
 
 const HOW = "Install easybrandkit (npm install -g easybrandkit), or point LAUNCH_FILM_EASYBRANDKIT (or --easybrandkit) at its scripts/easybrandkit.js, or give a kit you already have with --brand.";
@@ -79,7 +102,17 @@ function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
     const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
     const done = () => temp && release(temp);
-    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"], env: tempEnv(temp) }), { watch: true });
+    const unstarted = (e) => {
+      done();
+      reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
+    };
+    let child;
+    try {
+      child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"], env: tempEnv(temp) }), { watch: true });
+    } catch (e) {
+      // A .cmd file on Windows, given without a shell.
+      return unstarted(e);
+    }
     let out = "";
     child.stdout.on("data", (d) => {
       out = (out + d).slice(-3000);
@@ -89,10 +122,7 @@ function runOnce([cmd, ...pre], url, dir, log) {
       out = (out + d).slice(-3000);
       log(String(d));
     });
-    child.on("error", (e) => {
-      done();
-      reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
-    });
+    child.on("error", unstarted);
     child.on("close", (code) => {
       done();
       if (code === 0 && fs.existsSync(path.join(dir, "brand.json"))) return resolve(path.join(dir, "brand.json"));
