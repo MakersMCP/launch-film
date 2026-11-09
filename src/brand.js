@@ -70,9 +70,11 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
   }
 }
 
+// easybrandkit runs a Chrome of its own, which a stop or a failure of the
+// run ends with it (out.js, watch).
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
-    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"] }));
+    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"] }), { watch: true });
     let out = "";
     child.stdout.on("data", (d) => {
       out = (out + d).slice(-3000);

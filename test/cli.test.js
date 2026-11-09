@@ -159,6 +159,95 @@ test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop
   assert.deepEqual({ code, signal, stderr }, { code: null, signal: "SIGINT", stderr: "launch-film: stopped\n" });
 });
 
+// A stand-in easybrandkit that starts a stand-in Chrome and waits, with no
+// handler for a signal, as easybrandkit 0.4.0. Its Chrome makes its profile
+// and its socket folder in the temp folder, as Chrome does, writes its pid
+// to STAND_IN_PID, lets SIGTERM go, and on Ctrl-C removes its socket folder
+// and ends a moment later.
+function easybrandkitWithChrome(dir) {
+  const chrome = path.join(dir, "chrome.js");
+  fs.writeFileSync(chrome, `
+const fs = require("fs");
+const path = require("path");
+const profile = process.argv.find((a) => a.startsWith("--user-data-dir=")).slice("--user-data-dir=".length);
+const sock = fs.mkdtempSync(path.join(process.env.TMPDIR, "com.google.Chrome."));
+fs.writeFileSync(path.join(sock, "SingletonSocket"), "");
+fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(profile, "SingletonSocket"));
+process.on("SIGTERM", () => {});
+process.on("SIGINT", () => {
+  fs.rmSync(path.join(profile, "SingletonSocket"));
+  fs.rmSync(sock, { recursive: true });
+  setTimeout(() => process.exit(0), 200);
+});
+fs.writeFileSync(process.env.STAND_IN_PID, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const kit = path.join(dir, "easybrandkit.js");
+  fs.writeFileSync(kit, `
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "easybrandkit-chrome-"));
+require("child_process").spawn(process.execPath, [${JSON.stringify(chrome)}, "--headless=new", "--user-data-dir=" + profile], { stdio: "ignore" });
+setInterval(() => {}, 1000);
+`);
+  return kit;
+}
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+};
+
+test("a plan stopped while easybrandkit reads the brand ends the Chrome easybrandkit started and removes its profile", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+  for (const how of ["SIGTERM", "SIGINT"]) {
+    const dir = filmFolder();
+    const before = snap(dir);
+    const temp = tmp();
+    const pidFile = path.join(tmp(), "chrome.pid");
+    const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", easybrandkitWithChrome(tmp())],
+      { detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile } });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+    for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+    try {
+      if (how === "SIGTERM") {
+        // To launch-film alone: easybrandkit ends, its Chrome would not.
+        child.kill("SIGTERM");
+      } else {
+        // Ctrl-C reaches every process of the group: easybrandkit ends at
+        // once and its Chrome is moved out of its tree before launch-film
+        // looks, so this comes a moment into the brand, as a Ctrl-C does.
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        process.kill(-child.pid, "SIGINT");
+      }
+      const { signal } = await ended;
+      assert.equal(signal, how, stderr);
+      assert.ok(stderr.endsWith(`launch-film: stopped, so ${dir} is as it was\n`), stderr);
+      for (let i = 0; i < 50 && alive(chrome); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.ok(!alive(chrome), `${how}: easybrandkit's Chrome is gone`);
+      assert.deepEqual(fs.readdirSync(temp), [], `${how}: neither its profile nor its socket folder is left`);
+      assert.deepEqual(snap(dir), before);
+    } finally {
+      try {
+        process.kill(chrome, "SIGKILL");
+      } catch {
+        // Gone, as it should be.
+      }
+    }
+  }
+});
+
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
   // A kit whose brand.json names its screen by an absolute path outside it.
   const kit = otherKit();

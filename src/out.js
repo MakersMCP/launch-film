@@ -29,15 +29,16 @@
 //
 // A stop (Ctrl-C, SIGTERM, SIGHUP) passes its signal on to the Chrome,
 // ffmpeg and easybrandkit the runs started, kills those still running after
-// STOP_WAIT, removes every part folder and temp folder, and ends the process
-// by the same signal. A failed run ends the process the same way, with
-// SIGTERM to them and exit code 1 (exit). Either way the CLI's last line
-// says which folder was left as it was (told). A run killed outright
-// (SIGKILL) cannot remove its part folder: a later run that ends well in the
-// same place removes it, once its process is gone and nothing in it has
-// changed for STALE. One killed while it put its files in place can hold
-// earlier files in its .old: that part folder is never removed, but kept
-// under a name no run removes, with a note of what is in it (sweep).
+// STOP_WAIT, with the Chrome easybrandkit started (watch), removes every
+// part folder and temp folder, and ends the process by the same signal. A
+// failed run ends the process the same way, with SIGTERM to them and exit
+// code 1 (exit). Either way the CLI's last line says which folder was left
+// as it was (told). A run killed outright (SIGKILL) cannot remove its part
+// folder: a later run that ends well in the same place removes it, once its
+// process is gone and nothing in it has changed for STALE. One killed while
+// it put its files in place can hold earlier files in its .old: that part
+// folder is never removed, but kept under a name no run removes, with a
+// note of what is in it (sweep).
 
 const fs = require("fs");
 const os = require("os");
@@ -257,11 +258,21 @@ function place(ctx, from, to, rel, whole) {
   move(from, to, ctx.moved, rel);
 }
 
+// A process's fields in /proc/<pid>/stat after its name (Linux), else null:
+// [1] is its parent's pid, [19] when it started in clock ticks since boot.
+function statOf(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  } catch {
+    return null;
+  }
+}
+
 // When a process started, in ms, where /proc tells (Linux), else null.
 function startOf(pid) {
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+    const ticks = Number((statOf(pid) || [])[19]);
     const boot = Number(/^btime (\d+)$/m.exec(fs.readFileSync("/proc/stat", "utf8"))[1]);
     // The clock ticks a hundred times a second on Linux.
     return Number.isFinite(ticks) && boot ? (boot + ticks / 100) * 1000 : null;
@@ -559,11 +570,197 @@ function signal(child, name) {
   }
 }
 
-// A process the runs stop with them: Chrome, ffmpeg, easybrandkit.
-function track(child) {
+function kill(pid) {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Gone already.
+  }
+}
+
+// Whether a process runs, an ended one that waits to be reaped aside.
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  const stat = statOf(pid);
+  return !stat || stat[0] !== "Z";
+}
+
+// ─── Chrome's profiles ─────────────────────────────────────────────────────
+// The processes that use a Chrome profile: Chrome names it in the command
+// line of each of them, its helpers' too. Read from /proc, so on Linux only.
+function usersOf(profile) {
+  const flag = `--user-data-dir=${profile}`;
+  const pids = [];
+  let names = [];
+  try {
+    names = fs.readdirSync("/proc");
+  } catch {
+    return pids;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+    try {
+      const cmd = fs.readFileSync(`/proc/${name}/cmdline`, "utf8");
+      const at = cmd.indexOf(flag);
+      if (at >= 0 && /^[\0 ]?$/.test(cmd.charAt(at + flag.length))) pids.push(Number(name));
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+  return pids;
+}
+
+// Whether a folder is right in the system's temp folder.
+function inTemp(folder) {
+  try {
+    return fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir());
+  } catch {
+    return false;
+  }
+}
+
+// Chrome links SingletonSocket in its profile to a socket in a temp folder
+// of its own (com.google.Chrome.XXXXXX), and removes both as it closes. One
+// stopped while it closes, or killed outright, leaves that folder behind,
+// so the folder is read from the link while Chrome is up, and goes with the
+// profile. Returns it, or null.
+function socketFolder(profile) {
+  try {
+    const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
+    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && inTemp(folder)) return folder;
+  } catch {
+    // No such link.
+  }
+  return null;
+}
+
+// Run just before a profile is removed: what still uses it is ended first,
+// since Chrome's helpers, still closing or left by a Chrome killed outright,
+// wrote into it after it was removed and so kept it, and the socket folder
+// Chrome made for it (`socket`, else read from its link) goes with it.
+function closeProfile(profile, socket = null) {
+  const pids = usersOf(profile);
+  for (const pid of pids) kill(pid);
+  for (let i = 0; i < 100 && pids.some(alive); i++) pause(10);
+  const folder = socket || socketFolder(profile);
+  if (folder) remove(folder);
+}
+
+// The processes below `pids`, all the way down: [{ pid, start }]. Read from
+// /proc (Linux); elsewhere none.
+function below(pids) {
+  if (!pids.length) return [];
+  let names = [];
+  try {
+    names = fs.readdirSync("/proc");
+  } catch {
+    return [];
+  }
+  const kids = new Map();
+  for (const name of names) {
+    const stat = /^\d+$/.test(name) ? statOf(name) : null;
+    if (!stat) continue;
+    if (!kids.has(stat[1])) kids.set(stat[1], []);
+    kids.get(stat[1]).push({ pid: Number(name), start: stat[19] });
+  }
+  const found = [];
+  for (const queue = pids.map(String); queue.length; ) {
+    for (const kid of kids.get(queue.shift()) || []) {
+      found.push(kid);
+      queue.push(String(kid.pid));
+    }
+  }
+  return found;
+}
+
+// easybrandkit runs a Chrome of its own, and (0.4.0) on a stop neither ends
+// it nor removes its profile: a stop sent to launch-film alone left that
+// Chrome running for good, and Ctrl-C left its profile in the temp folder.
+// So the processes below one started with { watch: true } are looked at
+// while it runs, four times a second, and again as a stop or a failure
+// begins, and the profiles in the temp folder that the Chromes among them
+// use are noted with their socket folders: Ctrl-C ends easybrandkit at once,
+// and its Chrome is out of its tree before launch-film can look. The stop
+// or the failure ends those processes, and every process that uses one of
+// those profiles wherever it has been moved since, and removes the profiles
+// (Linux, where /proc tells).
+const watched = new Set();
+const theirs = new Map();
+const below0 = [];
+let watcher = null;
+
+// The Chrome profile a process names on its command line, or null. Chrome
+// writes its command line over once it runs, as one line with spaces, so
+// the value ends at a NUL, or in that form at a space.
+function profileOf(pid) {
+  let cmd = "";
+  try {
+    cmd = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+  } catch {
+    return null;
+  }
+  const m = /(?:^|[\0 ])--user-data-dir=([^\0]+)/.exec(cmd);
+  if (!m) return null;
+  return path.resolve(cmd.replace(/\0+$/, "").includes("\0") ? m[1] : m[1].split(" ")[0]);
+}
+
+function note(list) {
+  for (const p of list) {
+    const profile = profileOf(p.pid);
+    if (!profile || temps.has(profile) || theirs.get(profile) || !inTemp(profile)) continue;
+    theirs.set(profile, socketFolder(profile));
+  }
+  return list;
+}
+
+function watch(child) {
+  if (!fs.existsSync("/proc/self/stat")) return;
+  watched.add(child);
+  child.once("exit", () => {
+    watched.delete(child);
+    // One that ended well took its Chrome and profile with it.
+    for (const profile of theirs.keys()) if (!lstat(profile)) theirs.delete(profile);
+  });
+  if (watcher) return;
+  watcher = setInterval(() => {
+    if (watched.size) note(below([...watched].map((c) => c.pid)));
+    else {
+      clearInterval(watcher);
+      watcher = null;
+    }
+  }, 250);
+  watcher.unref();
+}
+
+// Whether a process noted as { pid, start } is still that process.
+function same(p) {
+  const stat = statOf(p.pid);
+  return Boolean(stat) && stat[19] === p.start;
+}
+
+// Ends the processes `list` that are still the ones noted, and what uses
+// the profiles noted, and removes those profiles.
+function endTheirs(list) {
+  for (const p of list) if (same(p)) kill(p.pid);
+  below0.length = 0;
+  for (const [profile, socket] of theirs) {
+    closeProfile(profile, socket);
+    remove(profile);
+  }
+  theirs.clear();
+}
+
+// A process the runs stop with them: Chrome, ffmpeg, easybrandkit. With
+// watch, the processes it starts are stopped with it too (above).
+function track(child, { watch: tree = false } = {}) {
   if (!child || !child.pid) return child;
   children.add(child);
   child.once("exit", () => children.delete(child));
+  if (tree) watch(child);
   if (stopping) signal(child, "SIGKILL");
   else if (ending) signal(child, "SIGTERM");
   return child;
@@ -571,8 +768,11 @@ function track(child) {
 
 // Asks the processes the runs started to stop with the signal `name`, so
 // Chrome takes its helpers with it and npx passes it on to easybrandkit,
-// and calls then() once they have gone or STOP_WAIT has passed.
+// and calls then() once they have gone or STOP_WAIT has passed. What runs
+// below the watched ones is noted first: once easybrandkit has ended, the
+// system moves its Chrome out of its tree.
 function settle(name, then) {
+  below0.push(...note(below([...watched].map((c) => c.pid))));
   for (const child of children) signal(child, name);
   const since = Date.now();
   const wait = setInterval(() => {
@@ -585,7 +785,12 @@ function settle(name, then) {
 // Stops what is left: the processes, the runs not ended (the innermost
 // first) and the temp folders.
 function endAll() {
+  // What runs below the watched processes is looked at before they are
+  // killed, while their tree is whole, and what ran there as the stop began
+  // again: a process that was only starting then can be a Chrome now.
+  const now = note([...below0, ...below([...watched].map((c) => c.pid))].filter(same));
   for (const child of children) signal(child, "SIGKILL");
+  endTheirs(now);
   for (const run of [...open].reverse()) discard(run);
   for (const dir of temps.keys()) clear(dir);
   temps.clear();
@@ -736,4 +941,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, STALE, LOCK };
+module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep,
+  socketFolder, closeProfile, STALE, LOCK };

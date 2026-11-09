@@ -16,7 +16,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
-const { tempDir, release, track } = require("./out");
+const { tempDir, release, track, socketFolder, closeProfile } = require("./out");
 
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
@@ -54,79 +54,6 @@ function findChrome() {
     if (found) return found;
   }
   return null;
-}
-
-// Chrome links SingletonSocket in its profile to a socket in a temp folder
-// of its own (com.google.Chrome.XXXXXX), and removes both as it closes. One
-// stopped while it closes, or killed outright, leaves that folder behind,
-// so the folder is read from the link while Chrome is up, and goes with the
-// profile. Returns it, or null.
-function socketFolder(profile) {
-  try {
-    const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
-    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir())) return folder;
-  } catch {
-    // No such link, or not in the temp folder.
-  }
-  return null;
-}
-
-// The processes that use a profile: Chrome names it in the command line of
-// each of them, its helpers' too. Read from /proc, so on Linux only.
-function usersOf(profile) {
-  const flag = `--user-data-dir=${profile}`;
-  const pids = [];
-  let names = [];
-  try {
-    names = fs.readdirSync("/proc");
-  } catch {
-    return pids;
-  }
-  for (const name of names) {
-    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-    try {
-      const cmd = fs.readFileSync(`/proc/${name}/cmdline`, "utf8");
-      const at = cmd.indexOf(flag);
-      if (at >= 0 && /^[\0 ]?$/.test(cmd.charAt(at + flag.length))) pids.push(Number(name));
-    } catch {
-      // Gone meanwhile.
-    }
-  }
-  return pids;
-}
-
-// Whether a process runs, an ended one that waits to be reaped aside.
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    return !/^\d+ \(.*\) Z/s.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
-  } catch {
-    return true;
-  }
-}
-
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-// Run just before a profile is removed: what still uses it is ended first,
-// since Chrome's helpers, still closing or left by a Chrome killed outright,
-// wrote into it after it was removed and so kept it, and the socket folder
-// Chrome made for it (`socket`, else read from its link) goes with it.
-function closeProfile(profile, socket) {
-  const pids = usersOf(profile);
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Gone already.
-    }
-  }
-  for (let i = 0; i < 100 && pids.some(alive); i++) pause(10);
-  const folder = socket || socketFolder(profile);
-  if (folder) fs.rmSync(folder, { recursive: true, force: true });
 }
 
 // A browser with its own temp profile, answering protocol calls by promise.
