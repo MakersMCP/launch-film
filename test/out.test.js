@@ -833,6 +833,27 @@ out.within(process.argv[1], async (run) => {
   assert.deepEqual(snap(dir), before);
 });
 
+test("an earlier file the user made read-only is refused by name before anything moves", { skip: (process.platform === "win32" || process.getuid() === 0) && "a file its user may not write" }, async () => {
+  const dir = tmp();
+  write(dir, EARLIER);
+  fs.chmodSync(path.join(dir, "frames", "clip-1-a.jpg"), 0o444);
+  const before = snap(dir);
+  const err = await out.within(dir, async (run) => make(run)).catch((e) => e);
+  const file = path.join(dir, "frames", "clip-1-a.jpg");
+  assert.equal(err.message, `could not put the new files in ${dir}: ${file} may not be written (EACCES), so it was not replaced: make it writable or remove it, and run again. ${dir} is as it was.`);
+  assert.deepEqual(snap(dir), before);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o444);
+  // A link there is replaced, whatever it leads to, and what it leads to is left.
+  const other = tmp();
+  const theirs = path.join(tmp(), "theirs.txt");
+  fs.writeFileSync(theirs, "the user's own");
+  fs.chmodSync(theirs, 0o444);
+  fs.symlinkSync(theirs, path.join(other, "CHECK.md"));
+  await out.within(other, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a check"));
+  assert.deepEqual(snap(other), { "CHECK.md": "a check" });
+  assert.equal(fs.readFileSync(theirs, "utf8"), "the user's own");
+});
+
 test("a commit waits for a run that holds the folder, and takes over from one that is gone", async () => {
   const dir = tmp();
   write(dir, { "film.mp4": "old film" });

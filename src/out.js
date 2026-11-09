@@ -483,8 +483,10 @@ async function lock(dir, base = dir) {
   }
 }
 
-// The folders already there that take the outputs' files one by one, which a
-// run takes turns for, read before anything moves (found).
+// What the outputs find where they go, read before anything moves (found):
+// the folders already there that take their files one by one, which a run
+// takes turns for, and the first earlier file this user may not write, which
+// a rename would replace without a word where writing it would fail.
 function survey(from, to, whole, found) {
   const there = lstat(to);
   if (!there) return found;
@@ -492,6 +494,12 @@ function survey(from, to, whole, found) {
   if (isFolder && !whole && isDir(to)) {
     found.folders.push(to);
     for (const name of fs.readdirSync(from)) if (!name.startsWith(".")) survey(path.join(from, name), path.join(to, name), false, found);
+  } else if (!isFolder && there.isFile() && !found.readOnly) {
+    try {
+      fs.accessSync(to, fs.constants.W_OK);
+    } catch (err) {
+      found.readOnly = Object.assign(new Error(`${shown(to)} may not be written (${err.code}), so it was not replaced: make it writable or remove it, and run again`), { at: null });
+    }
   }
   return found;
 }
@@ -531,7 +539,7 @@ async function commit(run) {
     letGo.push(await lock(dir));
     const taken = new Set();
     for (;;) {
-      found = { folders: [] };
+      found = { folders: [], readOnly: null };
       for (const name of names) survey(path.join(part, name), path.join(dir, name), run.outputs.get(name), found);
       const more = found.folders.filter((folder) => !taken.has(folder));
       if (!more.length) break;
@@ -546,6 +554,7 @@ async function commit(run) {
     throw failed(run, err, [], []);
   }
   try {
+    if (found.readOnly) throw failed(run, found.readOnly, [], []);
     const ctx = { run, old: null, home: dir, moved: [] };
     try {
       // The earlier files go aside in a part folder in this folder: the
