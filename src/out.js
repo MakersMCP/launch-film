@@ -72,8 +72,6 @@ const open = new Set();
 const temps = new Map();
 const children = new Set();
 const places = [];
-// What lets go of each commit lock this process holds.
-const locks = new Set();
 // What became of the folders of the runs a stop or a failure ended, and
 // what the runs that ended well found left by runs killed outright.
 const told = [];
@@ -450,12 +448,7 @@ async function lock(dir, base = dir) {
       fs.mkdirSync(at);
       made = true;
       fs.writeFileSync(path.join(at, "pid"), String(process.pid));
-      const letGo = () => {
-        locks.delete(letGo);
-        remove(at);
-      };
-      locks.add(letGo);
-      return letGo;
+      return () => remove(at);
     } catch (err) {
       // Taken over before it got its pid, its run held up for seconds: it
       // is lost, and the next try is as good as the first.
@@ -1009,7 +1002,6 @@ function endAll() {
   const now = note([...below0, ...below([...watched].map((c) => c.pid))].filter(same));
   for (const child of children) signal(child, "SIGKILL");
   endTheirs(now);
-  for (const letGo of [...locks]) letGo();
   for (const run of [...open].reverse()) discard(run);
   for (const dir of temps.keys()) clear(dir);
   temps.clear();

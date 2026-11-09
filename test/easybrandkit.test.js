@@ -136,9 +136,10 @@ fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(out + "/brand.json", "{}");`);
   const saw = path.join(dir, "saw");
   const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
-  const r = spawnSync(process.execPath, ["-e", `require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: process.argv[2] }).then((f) => process.stdout.write(f));`, path.join(dir, "out"), fake],
+  const r = spawnSync(process.execPath, ["-e", `require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: process.argv[2] }).then(() => process.stdout.write(String(require("fs").readdirSync(require("os").tmpdir()).length)));`, path.join(dir, "out"), fake],
     { encoding: "utf8", env: { ...process.env, TMPDIR: temp, SAW: saw } });
   assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "0", "it goes as soon as easybrandkit has ended");
   assert.match(path.basename(fs.readFileSync(saw, "utf8")), /^launch-film-brand-\d+-/);
   assert.deepEqual(fs.readdirSync(temp), [], "nothing is left in the temp folder");
 });

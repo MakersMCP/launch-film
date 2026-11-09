@@ -674,11 +674,11 @@ stubborn.stdout.once("data", () => {
       }
     });
   }
-  if (how === "commit") {
+  if (how === "commit" || how === "commit-waits") {
     out.within(dir, async (run) => {
       fs.writeFileSync(run.out("film.mp4"), "new film");
       say("ready");
-      await new Promise((resolve) => process.once("SIGTERM", resolve));
+      if (how === "commit") await new Promise((resolve) => process.once("SIGTERM", resolve));
     }).then(() => say("committed"), (err) => say(err.stopped ? "not committed" : err.message));
     return;
   }
@@ -768,18 +768,28 @@ const fs = require("fs");
 const path = require("path");
 const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
 const [dir, me, at] = process.argv.slice(1);
-// With RACER_MOVE each move takes that long, and with RACER_LOCK the first
-// move of the lock aside waits that long.
+// Each move of a file is noted in RACER_LOG. With RACER_MOVE each takes that
+// long, with RACER_TAKE the run waits that long on its way to taking over a
+// lock left behind, and with RACER_LOCK as it moves that lock aside.
 const nap = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const once = (name) => {
+  const ms = Number(process.env[name] || 0);
+  process.env[name] = "0";
+  if (ms) nap(ms);
+};
 const real = fs.renameSync;
-let held = false;
 fs.renameSync = (from, to) => {
-  if (path.basename(from) !== out.LOCK) nap(Number(process.env.RACER_MOVE || 0));
-  else if (!held) {
-    held = true;
-    nap(Number(process.env.RACER_LOCK || 0));
+  if (path.basename(from) === out.LOCK) once("RACER_LOCK");
+  else {
+    nap(Number(process.env.RACER_MOVE || 0));
+    if (process.env.RACER_LOG) fs.appendFileSync(process.env.RACER_LOG, me);
   }
   return real(from, to);
+};
+const mkdir = fs.mkdirSync;
+fs.mkdirSync = (at, ...rest) => {
+  if (String(at).endsWith("-taking")) once("RACER_TAKE");
+  return mkdir(at, ...rest);
 };
 out.within(dir, async (run) => {
   fs.writeFileSync(run.out("film.mp4"), me);
@@ -815,27 +825,31 @@ test("two runs that put their files in one folder at once take turns", async () 
 
 test("several runs that find a lock a killed run left take it over one at a time", async () => {
   const racers = ["A", "B", "C", "D", "E", "F"];
-  const earlier = { "film.mp4": "O", "brand/brand.json": "O", "brand/logo.png": "O", "frames/1.jpg": "O", [`${out.LOCK}/pid`]: "4194000" };
-  const judge = (dir, all, what) => {
+  // No frames/ yet: a run that finds it takes its lock too, which would
+  // keep the runs apart whatever became of this lock.
+  const earlier = { "film.mp4": "O", "brand/brand.json": "O", "brand/logo.png": "O", [`${out.LOCK}/pid`]: "4194000" };
+  // Every run ended well, the folder holds one run's files and no other's,
+  // and the moves of one run are never mixed with another's.
+  const race = async (what, env) => {
+    const dir = tmp();
+    write(dir, earlier);
+    const log = path.join(tmp(), "moves.log");
+    const at = Date.now() + 700;
+    const all = await Promise.all(env.map((extra, i) => racer(dir, racers[i], at, { RACER_LOG: log, ...extra })));
     assert.deepEqual(all.map((r) => r.code), all.map(() => 0), `${what}: ${all.map((r) => r.stderr).join(" ")}`);
     const s = snap(dir);
     const last = s["film.mp4"];
     assert.deepEqual(s, { "brand/": "folder", "brand/brand.json": last, "brand/logo.png": last, "film.mp4": last, "frames/": "folder", "frames/1.jpg": last, "frames/2.jpg": last }, what);
+    const turns = fs.readFileSync(log, "utf8").replace(/(.)\1*/g, "$1");
+    assert.equal(new Set(turns).size, turns.length, `${what}: the moves went ${turns}`);
   };
-  for (let t = 0; t < 8; t++) {
-    const dir = tmp();
-    write(dir, earlier);
-    const at = Date.now() + 700;
-    judge(dir, await Promise.all(racers.map((me) => racer(dir, me, at))), `six at once, trial ${t}`);
-  }
-  // One is held up on its way to moving the lock aside, as on a loaded
-  // machine, until the other has taken over and holds the lock, and the
-  // moves take a while, so that lock is still held then.
+  for (let t = 0; t < 8; t++) await race(`six at once, trial ${t}`, racers.map(() => ({})));
+  // One is held up on its way to taking the lock over, or as it moves the
+  // lock aside, as on a loaded machine, until the other has taken over and
+  // holds the lock; and the moves take long enough that it still does then.
   for (let t = 0; t < 3; t++) {
-    const dir = tmp();
-    write(dir, earlier);
-    const at = Date.now() + 700;
-    judge(dir, await Promise.all([racer(dir, "X", at, { RACER_MOVE: "45" }), racer(dir, "Y", at, { RACER_MOVE: "45", RACER_LOCK: "70" })]), `one held up, trial ${t}`);
+    await race(`held up on its way, trial ${t}`, [{ RACER_MOVE: "45" }, { RACER_MOVE: "45", RACER_TAKE: "70" }]);
+    await race(`held up as it moves the lock, trial ${t}`, [{ RACER_MOVE: "45" }, { RACER_MOVE: "45", RACER_LOCK: "70" }]);
   }
 });
 
@@ -961,6 +975,31 @@ out.within(process.argv[1], async (run) => {
   assert.ok(fs.existsSync(path.join(dir, out.LOCK)), "it holds the folder's lock");
   child.kill("SIGTERM");
   assert.equal(await ended, "SIGTERM");
+  assert.deepEqual(snap(dir), before);
+});
+
+test("a lock let go while a stop is under way is not taken: the run puts nothing in place", { skip: noSignals }, async () => {
+  // The lock is held by this test's runner until the stop has begun; the
+  // stop waits a moment for a child that lets SIGTERM go.
+  const dir = tmp();
+  write(dir, EARLIER);
+  write(dir, { [`${out.LOCK}/pid`]: String(process.ppid) });
+  const before = snap(dir);
+  const child = spawn(process.execPath, ["-e", AFTER_STOP, dir, "commit-waits"], { stdio: ["ignore", "pipe", "ignore"] });
+  let said = "";
+  const ended = new Promise((resolve) => child.on("exit", resolve));
+  await new Promise((resolve) => child.stdout.on("data", (d) => {
+    said += d;
+    if (/ready/.test(said)) resolve();
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  child.kill("SIGTERM");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  fs.rmSync(path.join(dir, out.LOCK), { recursive: true });
+  await ended;
+  assert.equal(said, "ready\nnot committed\n");
+  delete before[`${out.LOCK}/`];
+  delete before[`${out.LOCK}/pid`];
   assert.deepEqual(snap(dir), before);
 });
 

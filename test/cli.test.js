@@ -244,6 +244,7 @@ fs.writeFileSync(path.join(sock, "SingletonSocket"), "");
 fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(profile, "SingletonSocket"));
 process.on("SIGTERM", () => {});
 process.on("SIGINT", () => {
+  if (process.env.STAND_IN_STUBBORN) return;
   fs.rmSync(path.join(profile, "SingletonSocket"));
   fs.rmSync(sock, { recursive: true });
   setTimeout(() => process.exit(0), 200);
@@ -314,6 +315,31 @@ test("a plan stopped while easybrandkit reads the brand ends the Chrome easybran
       } catch {
         // Gone, as it should be.
       }
+    }
+  }
+});
+
+test("a Chrome that outlives easybrandkit at a Ctrl-C is ended by the profile it uses in the run's own temp folder", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+  const dir = filmFolder();
+  const temp = shortTmp();
+  const pidFile = path.join(tmp(), "chrome.pid");
+  const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", easybrandkitWithChrome(tmp())],
+    { detached: true, stdio: ["ignore", "ignore", "ignore"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile, STAND_IN_STUBBORN: "1" } });
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));
+  for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    process.kill(-child.pid, "SIGINT");
+    assert.equal(await ended, "SIGINT");
+    for (let i = 0; i < 50 && alive(chrome); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(!alive(chrome), "its Chrome is gone");
+    assert.deepEqual(fs.readdirSync(temp), []);
+  } finally {
+    try {
+      process.kill(chrome, "SIGKILL");
+    } catch {
+      // Gone, as it should be.
     }
   }
 });
