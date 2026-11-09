@@ -249,6 +249,34 @@ test("check runs on an ffmpeg that refuses ebur128's newer framelog value, as 4.
   assert.ok(Math.abs(saved.audio.integrated - -21.6) <= 0.3, `integrated ${saved.audio.integrated}`);
 });
 
+test("a film's flat tops are found at any sample rate, also on an ffmpeg that measures loudness only at 48 kHz", { skip: noShell }, async () => {
+  // A 44.1 kHz film limited hard and then turned down: its peak is below
+  // full scale and flat. ffmpeg 4.4 puts a resampler in front of ebur128,
+  // which this stand-in does on the ffmpeg the tests run.
+  const dir = tmp();
+  const file = path.join(dir, "turned.mov");
+  await mustRun(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=4", "-f", "lavfi", "-i", "sine=f=220:r=44100:d=4",
+    "-af", "aformat=s16,volume=30dB:precision=fixed,aformat=s16,volume=-4dB:precision=fixed", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", file], "making a test film");
+  const ffmpeg = standIn(tmp(), `for a do shift; case "$a" in *ebur128=*) a=$(printf %s "$a" | sed 's/ebur128=/aresample=48000,ebur128=/');; esac; set -- "$@" "$a"; done`);
+  const r = cli(["check", file], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(r.status, 1, r.stderr);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "check", "check.json"), "utf8"));
+  const clipping = saved.checks.find((c) => c.name === "clipping");
+  assert.equal(clipping.status, "fail", clipping.found);
+  assert.match(clipping.found, /^sample peak -4\.0 dBFS, flat on its peak \d+ times$/);
+  assert.equal(saved.audio.samplePeak, -4);
+});
+
+test("a film with no sound in its sound track reads as silent", { skip }, async () => {
+  const dir = tmp();
+  const file = path.join(dir, "quiet.mp4");
+  await mustRun(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", "-f", "mov", file], "making a test film");
+  const r = await checkFilm(file, {});
+  const clipping = r.checks.find((c) => c.name === "clipping");
+  assert.deepEqual([clipping.status, clipping.found], ["pass", "silent"]);
+  assert.equal(r.audio.samplePeak, -Infinity);
+});
+
 // Every file in a folder, hidden ones too, with its bytes.
 function snap(dir) {
   const seen = {};

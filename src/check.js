@@ -70,29 +70,36 @@ function parseAllow(text) {
   });
 }
 
-// The sound, measured: ebur128's loudness every 100 ms and its summary
-// (integrated loudness, range, sample and true peak), and silencedetect's
-// stretches. framelog=verbose keeps ebur128's line for every 100 ms below
-// the info level its summary is read at, and every ffmpeg from 4.4 on takes
-// it.
+// The sound, measured: astats reads its peak and how flat it stays there,
+// from the sound as it is in the film; ebur128 its loudness every 100 ms and
+// its summary (integrated loudness, range and true peak), and silencedetect
+// its stretches, at 48 kHz. ffmpeg 4.4's ebur128 takes nothing else, so at
+// another rate ffmpeg would put a resampler in front of it, and what came
+// after it would no longer see the flat tops of clipped sound; newer builds
+// measure at the film's own rate. Resampled here on every build, a film has
+// the same numbers on all of them. framelog=verbose keeps ebur128's line for
+// every 100 ms below the info level its summary is read at, and every ffmpeg
+// from 4.4 on takes it.
 async function scanAudio(film, { work, duration }) {
   const notes = path.join(work, `.scan-audio-${process.pid}.txt`);
   try {
     const r = await run([...input(film), "-vn", "-af",
-      `ebur128=metadata=1:peak=true+sample:framelog=verbose,silencedetect=n=-50dB:d=0.5,astats=measure_overall=Peak_count+Flat_factor:measure_perchannel=none,ametadata=mode=print:file=${frames.filterPath(notes)}`,
+      `astats=measure_overall=Peak_level+Peak_count+Flat_factor:measure_perchannel=none,aresample=48000,ebur128=metadata=1:peak=true:framelog=verbose,silencedetect=n=-50dB:d=0.5,ametadata=mode=print:file=${frames.filterPath(notes)}`,
       "-f", "null", "-"], { loglevel: "info" });
     if (r.code !== 0) throw new Error(`reading the sound: ${why(r, { lines: 2 })}`);
     const num = (re) => {
       const m = re.exec(r.stderr);
       return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : null;
     };
+    const peak = num(/Peak level dB:\s*(-?[\d.]+|-inf)/);
     const summary = {
       integrated: num(/Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+|-inf) LUFS/),
       range: num(/Loudness range:\s*\n\s*LRA:\s*(-?[\d.]+) LU/),
-      samplePeak: num(/Sample peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/),
+      // To a tenth of a dB, as the other levels are given.
+      samplePeak: peak === null ? null : +peak.toFixed(1),
       truePeak: num(/True peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/),
-      // astats: how often the sound reached its peak, and how flat it stayed
-      // there. Clipped sound sits on its peak, flat, many times over.
+      // How often the sound reached its peak, and how flat it stayed there.
+      // Clipped sound sits on its peak, flat, many times over.
       peakCount: num(/Peak count:\s*([\d.]+)/),
       flat: num(/Flat factor:\s*(-?[\d.]+)/),
     };
