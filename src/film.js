@@ -15,7 +15,7 @@ const { input, picture, whole, writePicture, run, mustRun, probe, readPixels, re
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
-const { within, tempDir, release, save } = require("./out");
+const { within, tempDir, release, save, reason } = require("./out");
 
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
@@ -110,7 +110,7 @@ function musicOf(value, dir, problems) {
 // ffmpeg can read, is shorter than the film or is silent is a problem, and
 // each problem says what to give instead.
 async function checkMusic(loaded) {
-  const { music, seconds: total, clips } = loaded;
+  const { music, seconds: total, clips, dir } = loaded;
   if (!music || !music.track) return { track: null, problems: [] };
   const at = `"music" ${JSON.stringify(music.name)}`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
@@ -129,15 +129,24 @@ async function checkMusic(loaded) {
     return refuse(path.isAbsolute(music.name) ? `${at} is not a file: give the path of a track (true plays the look's own music, false none)`
       : `${at} is not a file. It was looked for at ${music.track}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)`);
   }
+  // A good file the user may not read would read as a file with no sound.
+  try {
+    fs.accessSync(music.track, fs.constants.R_OK);
+  } catch (err) {
+    return refuse(`${at} cannot be read: ${reason(err)}. Make it readable, or give a copy of it you can read`);
+  }
   // A second past the film's end, so a track as long as the film shows it.
   const sound = readSound(music.track, { seconds: total + 1 });
   if (!sound) return refuse(`${at} has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound`);
   // musicfit gives a length to the millisecond: half a frame short is whole.
   if (sound.seconds < total - 0.5 / FPS) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
+    // In a folder of its own in the film's: the path set in film.json stays
+    // good, whatever else musicfit is asked to do next to the film.
+    const folder = path.join(dir, "music");
     return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ` +
       `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
-      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS}`] };
+      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${/^[\w@%+=:,./-]+$/.test(folder) ? folder : JSON.stringify(folder)}, then set "music" in film.json to "music/fitted.wav"`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });
   if (!(level.integrated > -70)) return refuse(`${at} is silent over the film's ${total.toFixed(2)} s: give a track with sound in it, or false for no music`);

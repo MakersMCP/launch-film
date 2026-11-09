@@ -151,7 +151,7 @@ test("a track with no sound, a silent one and one shorter than the film are refu
   assert.deepEqual((await checkMusic(load("brand/brand.json"))).problems, ['"music" "brand/brand.json" has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound']);
   const [short] = (await checkMusic(load(wav("short.wav", 1, 0.3)))).problems;
   assert.match(short, /^"music" "short\.wav" lasts 1\.00 s and the film 5\.00 s: give a track at least as long as the film\. musicfit makes one/);
-  assert.match(short, /npx musicfit@latest <track> --length 5 --hit 2\.5 --fps 25$/);
+  assert.ok(short.endsWith(`npx musicfit@latest <track> --length 5 --hit 2.5 --fps 25 --out ${path.join(dir, "music")}, then set "music" in film.json to "music/fitted.wav"`), short);
   assert.deepEqual((await checkMusic(load(wav("silent.wav", 6, 0)))).problems, ['"music" "silent.wav" is silent over the film\'s 5.00 s: give a track with sound in it, or false for no music']);
   // A track as long as the film, give or take half a frame, is taken.
   for (const seconds of [6, 4.99]) {
@@ -162,4 +162,14 @@ test("a track with no sound, a silent one and one shorter than the film are refu
   }
   // Its path may be absolute.
   assert.deepEqual((await checkMusic(load(path.join(dir, "tone.wav")))).problems, []);
+});
+
+test("a track the user may not read is refused for that, not as a file with no sound", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not read, and ffmpeg" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const bus = new Bus(6);
+  for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+  const file = path.join(dir, "noread.wav");
+  writeWav(file, bus);
+  fs.chmodSync(file, 0o000);
+  assert.deepEqual((await checkMusic(load("noread.wav"))).problems, ['"music" "noread.wav" cannot be read: permission denied (EACCES). Make it readable, or give a copy of it you can read']);
 });
