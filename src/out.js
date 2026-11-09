@@ -492,12 +492,15 @@ function finish(run, names) {
   ended(run);
   remove(run.part);
   for (const stage of run.stages) remove(stage);
-  // A run inside another's part folder: its outputs go in with that run's.
+  // A run inside another's part folder: its outputs go in with that run's,
+  // and what runs killed outright left is seen to once that run has ended
+  // well, so a run that fails after it leaves the folder as it was.
   const outer = [...open].filter((r) => inside(run.dir, r.part)).sort((a, b) => b.part.length - a.part.length)[0];
   if (outer) {
     const top = path.relative(outer.part, run.dir).split(path.sep)[0];
     if (top) output(outer, top, false);
     else for (const name of names) output(outer, name, run.outputs.get(name));
+    return;
   }
   sweep(run.dir);
   sweep(path.dirname(run.dir));

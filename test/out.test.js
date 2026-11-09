@@ -307,6 +307,29 @@ out.within(process.argv[1] + "/check", async (run) => fs.writeFileSync(run.out("
   assert.ok(fs.existsSync(left));
 });
 
+test("a run inside another's part folder leaves what killed runs left to that run, so one that fails after it leaves the folder as it was", async () => {
+  const dir = tmp();
+  write(dir, { "film.json": "earlier plan" });
+  leftWithEarlier(dir, ["film.mp4"]);
+  const before = snap(dir);
+  // The one-go command: the render, inside the plan's part folder, ends
+  // well; then the frames fail.
+  await assert.rejects(out.within(dir, async (run) => {
+    fs.writeFileSync(run.out("film.json"), "new plan");
+    await out.within(run.part, async (r) => fs.writeFileSync(r.out("film.mp4"), "new film"));
+    throw new Error("saving a still: ffmpeg failed");
+  }), /saving a still/);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(out.noticed(), []);
+  // One that ends well sees to it, once.
+  await out.within(dir, async (run) => {
+    fs.writeFileSync(run.out("film.json"), "new plan");
+    await out.within(run.part, async (r) => fs.writeFileSync(r.out("film.mp4"), "new film"));
+  });
+  assert.equal(out.noticed().length, 1);
+  assert.equal(fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-")).length, 1);
+});
+
 test("a run inside another's part folder goes in with it, or not at all", async () => {
   for (const ends of ["well", "badly"]) {
     const dir = tmp();
