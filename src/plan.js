@@ -258,7 +258,7 @@ function copyFrom(brand, words) {
 // ─── clips ─────────────────────────────────────────────────────────────────
 // Lengths are whole bars of the look's music, so cuts land on downbeats.
 function planFilm(brand, words, { look = null, seconds = 30, aspect = "16:9", filmDir = path.dirname(brand.dir) } = {}) {
-  const chosen = look && LOOKS[look] ? look : pickLook(brand);
+  const chosen = look && Object.hasOwn(LOOKS, look) ? look : pickLook(brand);
   const mood = MOODS[chosen];
   const bar = 240 / mood.bpm;
   const copy = copyFrom(brand, words);

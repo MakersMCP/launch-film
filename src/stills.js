@@ -38,7 +38,7 @@ const TARGETS = {
 // "ph,og" as a list of targets; all of them when none is given.
 function parseTargets(text) {
   const list = String(text || Object.keys(TARGETS).join(",")).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  const unknown = list.filter((t) => !TARGETS[t]);
+  const unknown = list.filter((t) => !Object.hasOwn(TARGETS, t));
   if (unknown.length || !list.length) throw new Error(`--for "${text}": choose from ${Object.keys(TARGETS).join(", ")}`);
   return [...new Set(list)];
 }

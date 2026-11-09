@@ -86,7 +86,7 @@ function parseScene(spec, { look = "launch", portrait = false, brand = {} } = {}
   const problems = [];
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) return { problems: ["a scene must be one JSON object"] };
   const type = String(spec.type || "");
-  if (!TYPES[type]) return { problems: [`"type" must be one of ${Object.keys(TYPES).join(", ")}`] };
+  if (!Object.hasOwn(TYPES, type)) return { problems: [`"type" must be one of ${Object.keys(TYPES).join(", ")}`] };
   const def = TYPES[type];
   const words = (value, where, max, required) => {
     if (value === undefined || value === null || value === "") {
@@ -115,7 +115,7 @@ function parseScene(spec, { look = "launch", portrait = false, brand = {} } = {}
       return "";
     }
     const name = String(value).toLowerCase().trim();
-    if (!icons()[name]) {
+    if (!Object.hasOwn(icons(), name)) {
       const near = iconSearch(name.split("-")[0]).slice(0, 8);
       problems.push(`${where} "${name}" is not an icon${near.length ? ` (near: ${near.join(", ")})` : ""}; search with: launch-film icons <word>`);
       return "";
@@ -123,11 +123,12 @@ function parseScene(spec, { look = "launch", portrait = false, brand = {} } = {}
     return name;
   };
   const style = String(spec.look || look);
-  if (!LOOKS[style]) problems.push(`"look" must be one of ${Object.keys(LOOKS).join(", ")}`);
+  const knownLook = Object.hasOwn(LOOKS, style);
+  if (!knownLook) problems.push(`"look" must be one of ${Object.keys(LOOKS).join(", ")}`);
   const need = def.need || {};
   const scene = {
     type,
-    style: LOOKS[style] ? style : "launch",
+    style: knownLook ? style : "launch",
     portrait: Boolean(portrait),
     lang: /^[a-z]{2}$/i.test(String(spec.lang || "")) ? String(spec.lang).toLowerCase() : "",
     brand: { background: brand.background || null, accent: brand.accent || null, accent2: brand.accent2 || null },

@@ -32,7 +32,8 @@ function loadFilm(file) {
     return { problems: [`${file} is not valid JSON: ${err.message}`] };
   }
   const problems = [];
-  if (!motion.LOOKS[film.look]) problems.push(`"look" must be one of ${Object.keys(motion.LOOKS).join(", ")}`);
+  const knownLook = Object.hasOwn(motion.LOOKS, String(film.look));
+  if (!knownLook) problems.push(`"look" must be one of ${Object.keys(motion.LOOKS).join(", ")}`);
   if (film.aspect && !["16:9", "9:16"].includes(film.aspect)) problems.push('"aspect" must be "16:9" or "9:16"');
   let brand = null;
   if (film.brand) {
@@ -42,7 +43,7 @@ function loadFilm(file) {
       problems.push(`the brand could not be read from ${film.brand}: ${err.message}`);
     }
   }
-  const mood = audio.MOODS[film.look] || audio.MOODS.launch;
+  const mood = (knownLook && audio.MOODS[film.look]) || audio.MOODS.launch;
   const bar = 240 / mood.bpm;
   const clips = Array.isArray(film.clips) ? film.clips : [];
   if (!clips.length) problems.push('"clips" is empty');

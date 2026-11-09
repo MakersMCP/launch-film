@@ -266,6 +266,86 @@ test("a plan into a folder already there writes the path of a file outside the k
   assert.deepEqual(loadFilm(path.join(dir, "film.json")).problems, []);
 });
 
+test("an option's value is all that follows its first =", () => {
+  // The folder's name holds an =: cut there, the plan would land on the
+  // film in a folder named "my".
+  const base = tmp();
+  fs.mkdirSync(path.join(base, "my"));
+  fs.writeFileSync(path.join(base, "my", "film.json"), "another film's plan");
+  const r = cli("plan", "https://acme-notes.example", `--out=${base}/my=film`, `--brand=${fixture}`, "--words", path.join(fixture, "words.json"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(path.join(base, "my=film", "film.json")));
+  assert.equal(fs.readFileSync(path.join(base, "my", "film.json"), "utf8"), "another film's plan");
+});
+
+test("an option a command does not take is refused by name, and nothing is made", () => {
+  const dir = tmp();
+  const film = path.join(dir, "film.json");
+  const url = "https://acme-notes.example";
+  const out = path.join(dir, "out");
+  for (const [args, said] of [
+    [["check", "film.mp4", "--outt", out], "--outt is not an option of launch-film check. Run launch-film --help."],
+    [["render", film, "--music", "track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
+    [["plan", url, "--out", out, "--music=track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
+    [["render", film, "--no-music"], '--no-music is for a plan: a render plays what "music" in film.json says. Set it to false there and render again'],
+    [["render", film, "--no-sfx"], '--no-sfx is for a plan: a render plays what "sfx" in film.json says. Set it to false there and render again'],
+    [["render", film, "--out", out], "--out is not an option of launch-film render. Run launch-film --help."],
+    [["plan", url, "--out", out, "--jobs", "1"], "--jobs is not an option of launch-film plan. Run launch-film --help."],
+    [["frames", "film.mp4", "--for", "og"], "--for is not an option of launch-film frames. Run launch-film --help."],
+    [["stills", film, "--look", "pop"], "--look is not an option of launch-film stills <film.json>. Run launch-film --help."],
+    [[url, "--out", out, "--output", path.join(dir, "movie.mp4")], "--output is not an option of launch-film <url>. Run launch-film --help."],
+    [["looks", "--everything"], "--everything is not an option of launch-film looks. Run launch-film --help."],
+    [["plan", url, "--out", out, "--__proto__", "x"], "--__proto__ is not an option of launch-film plan. Run launch-film --help."],
+  ]) {
+    const r = cli(...args);
+    assert.equal(r.status, 1, args.join(" "));
+    assert.equal(r.stderr, `launch-film: ${said}\n`, args.join(" "));
+  }
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test("every option a command takes gets past the refusal, also as makersmcp gives them", () => {
+  const dir = tmp();
+  const none = path.join(dir, "none.json");
+  const notAnOption = /is not an option|is for a plan/;
+  const url = "https://acme-notes.example";
+  const kit = path.join(dir, "no-such-kit");
+  const plans = ["--out", path.join(dir, "out"), "--brand", kit, "--words", path.join(fixture, "words.json"), "--easybrandkit", "ebk", "--look", "pop", "--seconds", "20", "--aspect", "9:16", "--no-music", "--no-sfx", "--verbose"];
+  for (const args of [
+    [url, ...plans, "--jobs", "2", "--keep"],
+    ["plan", url, ...plans],
+    ["stills", url, ...plans, "--for", "og"],
+    ["stills", none, "--for", "og", "--easybrandkit", "ebk"],
+    ["render", none, "--jobs", "1", "--keep", "--output", path.join(dir, "m.mp4")],
+    ["frames", none, "--out", path.join(dir, "f")],
+    ["check", none, "--out", path.join(dir, "c"), "--expect", "1920x1080@25", "--seconds", "20-40", "--lufs", "-14", "--cues", none, "--cuts", "1,2", "--allow", "1-2"],
+  ]) {
+    const r = cli(...args);
+    assert.equal(r.status, 1, args.join(" "));
+    assert.ok(!notAnOption.test(r.stderr), r.stderr);
+  }
+  // --keep and --verbose take no value: what follows them is read as usual.
+  assert.match(cli("plan", url, "--verbose", "--brand", kit, "--out", path.join(dir, "out")).stderr, /no brand\.json at/);
+});
+
+test("a look or a place named as one of JavaScript's own properties is refused", () => {
+  const dir = tmp();
+  const r = cli("plan", "https://acme-notes.example", "--out", path.join(dir, "out"), "--brand", fixture, "--words", path.join(fixture, "words.json"), "--look", "constructor");
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, 'launch-film: --look "constructor": choose from launch, aurora, gridline, pop, journal\n');
+  assert.deepEqual(fs.readdirSync(dir), []);
+  const { parseTargets } = require("../src/stills");
+  assert.throws(() => parseTargets("constructor"), /--for "constructor": choose from ph, og, x, play, chrome/);
+  const { loadFilm } = require("../src/film");
+  const { parseScene } = require("../src/scene");
+  const file = path.join(dir, "film.json");
+  fs.writeFileSync(file, JSON.stringify({ look: "toString", clips: [{ kind: "scene", seconds: 3, scene: { type: "headline", title: "A title" } }] }));
+  assert.deepEqual(loadFilm(file).problems.filter((p) => !p.includes("clips[0].scene")), ['"look" must be one of launch, aurora, gridline, pop, journal']);
+  assert.match(parseScene({ type: "constructor" }).problems[0], /^"type" must be one of/);
+  assert.match(parseScene({ type: "headline", title: "A title", look: "valueOf" }).problems[0], /^"look" must be one of/);
+  assert.match(parseScene({ type: "features", items: [{ icon: "constructor", title: "A" }, { icon: "constructor", title: "B" }] }).problems[0], /"constructor" is not an icon/);
+});
+
 test("doctor says when ffmpeg is older than 4.4, and passes a version it cannot read", { skip: process.platform === "win32" && "the stand-in ffmpeg is a shell script" }, () => {
   const dir = tmp();
   const doctor = (version) => {

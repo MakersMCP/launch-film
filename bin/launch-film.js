@@ -52,6 +52,8 @@ Options:
   --no-sfx             Plan the film without the sound effects (a render
                        plays what "sfx" in film.json says).
   --keep               Keep the work files (each clip's MP4).
+  --output <file>      Where render writes the film (default: film.mp4 next
+                       to film.json).
 
 Check options (CHECK.md, check.json, sheet.png and wave.png go to --out,
 default check/ next to the film; it exits with 1 when the film fails):
@@ -71,20 +73,55 @@ A run that fails or is stopped leaves the folder it writes to as it was.
 Everything renders on this machine with Chrome and ffmpeg. No account or key.
 `;
 
+// The options each command takes, as they are written. Any other is refused
+// by name: an option dropped without a word reads as one that worked.
+const PLANS = ["out", "brand", "words", "easybrandkit", "look", "seconds", "aspect", "no-music", "no-sfx", "verbose"];
+const OPTIONS = {
+  "<url>": [...PLANS, "jobs", "keep"],
+  plan: PLANS,
+  render: ["jobs", "keep", "output"],
+  frames: ["out"],
+  check: ["out", "expect", "seconds", "lufs", "cues", "cuts", "allow"],
+  stills: ["for", ...PLANS],
+  // Of a film.json: the plan is made already. makersmcp gives every stills
+  // call its easybrandkit.
+  "stills <film.json>": ["for", "easybrandkit"],
+  looks: [],
+  types: [],
+  icons: [],
+  doctor: [],
+};
+const SWITCHES = new Set(["keep", "verbose"]);
+
 function parseArgs(argv) {
-  const out = { _: [], flags: {} };
+  const out = { _: [], flags: {}, given: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") out.flags.help = true;
     else if (a === "--version" || a === "-v") out.flags.version = true;
-    else if (/^--no-/.test(a)) out.flags[a.slice(5)] = false;
-    else if (a === "--keep") out.flags.keep = true;
-    else if (a.startsWith("--")) {
-      const [key, inline] = a.slice(2).split("=");
-      out.flags[key] = inline !== undefined ? inline : argv[++i];
+    else if (/^--no-/.test(a)) {
+      out.flags[a.slice(5)] = false;
+      out.given.push(a.slice(2));
+    } else if (a.startsWith("--")) {
+      // The value is all that follows the first =: a folder's name can
+      // hold one.
+      const eq = a.indexOf("=");
+      const key = a.slice(2, eq < 0 ? undefined : eq);
+      out.given.push(key);
+      if (SWITCHES.has(key)) out.flags[key] = true;
+      else out.flags[key] = eq < 0 ? argv[++i] : a.slice(eq + 1);
     } else out._.push(a);
   }
   return out;
+}
+
+// Why an option is not one of `command`'s, or null when all of them are.
+function notTaken(given, command) {
+  const key = given.find((k) => !OPTIONS[command].includes(k));
+  if (key === undefined) return null;
+  if (key === "music") return '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute';
+  if (key === "no-music" || key === "no-sfx") return `--${key} is for a plan: a render plays what "${key.slice(3)}" in film.json says. Set it to false there and render again`;
+  return `--${key} is not an option of launch-film ${command}. Run launch-film --help.`;
 }
 
 const say = (text) => process.stderr.write(text);
@@ -249,7 +286,7 @@ async function frames(file, flags) {
 }
 
 async function main() {
-  const { _: args, flags } = parseArgs(process.argv.slice(2));
+  const { _: args, flags, given } = parseArgs(process.argv.slice(2));
   // Ctrl-C or a signal stops the run and leaves its folder as it was.
   listen();
   if (flags.version) {
@@ -261,6 +298,13 @@ async function main() {
     return;
   }
   const [command, ...rest] = args;
+  const takes = command === "stills" && /\.json$/i.test(rest[0] || "") ? "stills <film.json>" : Object.hasOwn(OPTIONS, command) ? command : "<url>";
+  const refused = notTaken(given, takes);
+  if (refused) return fail(refused);
+  if (flags.look !== undefined && OPTIONS[takes].includes("look")) {
+    const { LOOKS } = require("../src/motion");
+    if (!Object.hasOwn(LOOKS, flags.look)) return fail(`--look "${flags.look}": choose from ${Object.keys(LOOKS).join(", ")}`);
+  }
   if (command === "looks") {
     const { LOOKS } = require("../src/motion");
     for (const [name, look] of Object.entries(LOOKS)) process.stdout.write(`${name.padEnd(9)} ${look.about}. Suits ${look.suits}.\n`);
