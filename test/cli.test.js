@@ -5,9 +5,12 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { tmp, shortTmp, WAITS } = require("./tmp");
+const { available, FFMPEG } = require("../src/ffmpeg");
 
 const root = path.join(__dirname, "..");
 const cli = (...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 30_000 });
+// The same with these added to its environment, and a minute to end in.
+const cliWith = (env, ...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, ...env } });
 
 test("help, looks and types", () => {
   const help = cli("--help");
@@ -475,6 +478,42 @@ console.log("Read " + out + "/BRAND.md for the details.");`);
     assert.ok(r.stderr.includes(`Saved the kit to ${path.join(dir, "brand")}\nRead ${path.join(dir, "brand", "BRAND.md")} for the details.\n`), r.stderr);
     assert.ok(!r.stderr.includes(".launch-film-part-"), r.stderr);
   }
+});
+
+// A run whose plan is made and whose next step fails: Chrome is not there.
+for (const [what, args] of [["the one-go command", []], ["stills of an address", ["stills"]]]) {
+  test(`${what} puts the plan in with what it makes, or not at all`, { skip: !available() && "ffmpeg not found" }, () => {
+    const dir = filmFolder();
+    const before = snap(dir);
+    const r = cliWith({ LAUNCH_FILM_CHROME: path.join(dir, "no-such-chrome") }, ...args, "https://acme-notes.example", "--out", dir, "--brand", otherKit(), "--words", path.join(fixture, "words.json"), "--look", "journal");
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /Chrome was not found/);
+    assert.match(r.stderr, new RegExp(`\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
+    assert.deepEqual(snap(dir), before);
+  });
+}
+
+test("a render stops on a track it refuses, before any Chrome is started", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
+  const dir = filmFolder();
+  fs.rmSync(path.join(dir, "film.mp4"));
+  const started = path.join(tmp(), "chrome-started");
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, `#!/bin/sh\n: > "${started}"\nexit 1\n`, { mode: 0o755 });
+  const film = JSON.parse(fs.readFileSync(path.join(dir, "film.json"), "utf8"));
+  const render = (music) => {
+    fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...film, music }));
+    return cliWith({ LAUNCH_FILM_CHROME: chrome }, "render", path.join(dir, "film.json"));
+  };
+  const missing = render("no-such-track.wav");
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.equal(missing.stderr, `launch-film: film.json has problems:\n  - "music" "no-such-track.wav" is not a file. It was looked for at ${path.join(dir, "no-such-track.wav")}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)\n`);
+  const made = spawnSync(FFMPEG, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", path.join(dir, "short.wav")], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const short = render("short.wav");
+  assert.equal(short.status, 1, short.stderr);
+  assert.match(short.stderr, /^launch-film: film\.json has problems:\n {2}- "music" "short\.wav" lasts 1\.00 s and the film 2\.50 s: give a track at least as long as the film\./);
+  assert.ok(!fs.existsSync(path.join(dir, "film.mp4")), "no film is made");
+  assert.ok(!fs.existsSync(started), "no Chrome was started");
 });
 
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {

@@ -88,6 +88,40 @@ test("a run that fails leaves the folder exactly as it was", async () => {
   assert.deepEqual(snap(dir), before);
 });
 
+test("a folder of the run's that meets a file of that name is refused, and the file is left alone", async () => {
+  // A folder replaced whole, as brand/, and one that takes its files one by
+  // one, as frames/. A rename would put the user's file aside for good.
+  for (const whole of [true, false]) {
+    const dir = tmp();
+    write(dir, { brand: "a file of the user's", "film.mp4": "old film" });
+    const before = snap(dir);
+    const err = await out.within(dir, async (run) => {
+      fs.writeFileSync(run.out("film.mp4"), "new film");
+      fs.mkdirSync(whole ? run.folder("brand") : run.out("brand"));
+      fs.writeFileSync(path.join(run.part, "brand", "brand.json"), "new kit");
+    }).catch((e) => e);
+    assert.equal(err.message, `could not put the new files in ${dir}: ${path.join(dir, "brand")}: a file is where this run puts a folder. ${dir} is as it was.`);
+    assert.deepEqual(snap(dir), before);
+  }
+});
+
+test("a run whose folder another run makes during the rename puts its files in one by one", async () => {
+  const base = tmp();
+  const dir = path.join(base, "film");
+  const real = fs.renameSync;
+  // The other run's folder is there just as the part folder is to become it.
+  fs.renameSync = (from, to) => {
+    if (to === dir && !fs.existsSync(dir)) write(dir, { "film.mp4": "the other run's film", "notes.txt": "the other run's notes" });
+    return real(from, to);
+  };
+  try {
+    await out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"));
+  } finally {
+    fs.renameSync = real;
+  }
+  assert.deepEqual(snap(base), { "film/": "folder", "film/film.mp4": "new film", "film/notes.txt": "the other run's notes" });
+});
+
 test("an earlier folder replaced whole goes, with a folder in it the user made read-only", { skip: (process.platform === "win32" || process.getuid() === 0) && "a folder its user may not write in" }, async () => {
   const dir = tmp();
   write(dir, { "brand/brand.json": "old kit", "brand/notes/a.txt": "mine", "brand/notes/deep/b.txt": "mine too", "film.mp4": "old film" });
