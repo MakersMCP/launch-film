@@ -98,6 +98,24 @@ function mine(at) {
   return Boolean(s) && s.isDirectory() && (uid() === null || s.uid === uid());
 }
 
+// A system error's reason without the call and the path Node adds to it:
+// "no space left on device (ENOSPC)". Node's own message for a write that
+// fails names no file, so what was written is said with it (save).
+function reason(err) {
+  const text = String((err && err.message) || err);
+  const m = /^(E[A-Z0-9]+)[:,] (.+?)(?:, [a-z_]+(?: '.*)?| '.*)?$/s.exec(text);
+  return m ? `${m[2].charAt(0).toLowerCase()}${m[2].slice(1)} (${m[1]})` : text;
+}
+
+// Writes a file, and fails with the file and the reason.
+function save(file, data) {
+  try {
+    fs.writeFileSync(file, data);
+  } catch (err) {
+    throw new Error(`writing ${file}: ${reason(err)}`);
+  }
+}
+
 // A name on one line: a line break or another control character in it,
 // and a backslash, are written escaped.
 const ESCAPES = { "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
@@ -128,7 +146,8 @@ function shown(text) {
 
 // A failure's message, as shown(), with a file in a part folder named as
 // the new one: the run made it, and the earlier file of that name, which
-// it does not touch, is as it was. A path in quotes is only shown().
+// it does not touch, is as it was. A path in quotes, as Node's own errors
+// give it, is named so too, before its quote.
 function said(text) {
   const mark = "\u0001";
   let s = String(text);
@@ -136,7 +155,7 @@ function said(text) {
     const [part, target] = places[i];
     s = s.split(part + path.sep).join(`${mark}${target}${path.sep}`).split(part).join(target);
   }
-  return s.replace(/\u0001+/g, mark).replace(/(^|[\s(])\u0001/g, "$1the new ").split(mark).join("");
+  return s.replace(/\u0001+/g, mark).replace(/(^|[\s(])(['"]?)\u0001/g, "$1the new $2").split(mark).join("");
 }
 
 // However the process ends, no part folder of a run that has not ended is
@@ -160,9 +179,22 @@ function begin(dir) {
   const made = [];
   // Up to the root at most: on Windows a drive that is not there has none.
   for (let at = home; !fs.existsSync(at) && path.dirname(at) !== at; at = path.dirname(at)) made.push(at);
-  fs.mkdirSync(home, { recursive: true });
   const part = path.join(home, partName());
-  fs.mkdirSync(part);
+  try {
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(part);
+  } catch (err) {
+    // The folders it made go, and the refusal names the folder it could
+    // not write in, not the part folder, which is the run's own business.
+    for (const folder of made) {
+      try {
+        fs.rmdirSync(folder);
+      } catch {
+        break;
+      }
+    }
+    throw new Error(`cannot write in ${shown(made.length ? path.dirname(made[made.length - 1]) : home)}: ${reason(err)}`);
+  }
   places.push([part, target]);
   const run = {
     dir: target,
@@ -981,5 +1013,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep,
+module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, reason, save,
   socketFolder, closeProfile, STALE, LOCK };

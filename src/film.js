@@ -15,7 +15,7 @@ const { input, picture, whole, writePicture, run, mustRun, probe, readPixels, re
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
-const { within, tempDir, release } = require("./out");
+const { within, tempDir, release, save } = require("./out");
 
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
@@ -299,7 +299,10 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       const page = await buildClip(clip, ctx);
       const mp4 = path.join(work, `clip-${String(clip.index).padStart(2, "0")}.mp4`);
       const started = Date.now();
-      const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS });
+      // A failure says which clip it stopped, as ffmpeg's and Chrome's own
+      // words do not.
+      const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS })
+        .catch((err) => Promise.reject(new Error(`rendering clip ${clip.index + 1}: ${err.message}`)));
       done++;
       log(`clip ${clip.index + 1}/${clips.length} (${clip.kind}${clip.parsed ? ` ${clip.parsed.type}` : ""}, ${clip.seconds.toFixed(1)} s) rendered in ${((Date.now() - started) / 1000).toFixed(1)} s [${done}/${clips.length}]\n`);
       if (r.errors.length) notes.push(`clip ${clip.index + 1}: the page reported ${r.errors.slice(0, 2).join("; ")}`);
@@ -335,7 +338,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
     await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
       "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
-    fs.writeFileSync(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
+    save(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
     if (!keep) release(work);

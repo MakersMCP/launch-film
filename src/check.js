@@ -20,7 +20,7 @@ const { FFMPEG, input, why, stoppedSync, run, probe, writePng } = require("./ffm
 const frames = require("./frames");
 const { readCues } = require("./cues");
 const draw = require("./draw");
-const { within } = require("./out");
+const { within, save } = require("./out");
 
 const RULES = {
   // What a film may hold at its start and its end (a fade in, an end card).
@@ -310,8 +310,8 @@ async function measure(film, { info, expect, seconds, target, allow, cues, cutsG
     rules: RULES,
     files: { report: "CHECK.md", sheet: "sheet.png", wave: "wave.png" },
   };
-  fs.writeFileSync(job.out("check.json"), JSON.stringify(result, null, 2) + "\n");
-  fs.writeFileSync(job.out("CHECK.md"), report(result, { film, source }));
+  save(job.out("check.json"), JSON.stringify(result, null, 2) + "\n");
+  save(job.out("CHECK.md"), report(result, { film, source }));
   return { ...result, dir };
 }
 

@@ -220,7 +220,8 @@ test("a render whose clip encoder stops ends with its words and keeps the earlie
   const ffmpeg = standIn(`case "$*" in *image2pipe*) echo 'stand-in: No space left on device' >&2; exit 1;; esac`);
   const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
   assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
-  assert.match(r.stderr, /ffmpeg failed: stand-in: No space left on device/);
+  // It says which clip it stopped, as ffmpeg's own words do not.
+  assert.match(r.stderr, /^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\n/m);
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(leftBy(r.pid), []);
 });

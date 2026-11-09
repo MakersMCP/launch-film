@@ -16,7 +16,7 @@ const { snapshots } = require("./chrome");
 const { probe, coverPng } = require("./ffmpeg");
 const { prepareIcon, prepareLogo } = require("./logo");
 const { markEnd } = require("./plan");
-const { within } = require("./out");
+const { within, reason, save } = require("./out");
 
 // What each target makes. kind: hero (mark, promise and screen), tile (the
 // mark alone) or frames (the film's scenes, for the rest of a gallery).
@@ -75,7 +75,11 @@ async function makeStills(filmFile, { targets = null, out = null, log = () => {}
 async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, run, log }) {
   // The pages' marks and pictures, in the part folder.
   const work = path.join(run.part, ".work");
-  fs.mkdirSync(work);
+  try {
+    fs.mkdirSync(work);
+  } catch (err) {
+    throw new Error(`writing in ${run.part}: ${reason(err)}`);
+  }
   const notes = [];
   const look = film.look;
   const colours = brandColours(brand);
@@ -167,7 +171,11 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   const made = [];
   for (const [i, j] of jobs.entries()) {
     const raw = path.join(work, `${j.name}.raw.png`);
-    fs.writeFileSync(raw, shot[i].png);
+    try {
+      fs.writeFileSync(raw, shot[i].png);
+    } catch (err) {
+      throw new Error(`making ${path.join(run.part, `${j.name}.png`)}: ${reason(err)}`);
+    }
     await coverPng(raw, run.out(`${j.name}.png`), j.W, j.H);
     if (shot[i].errors.length) notes.push(`${j.name}: the page reported ${shot[i].errors.slice(0, 2).join("; ")}`);
     // Where it is once the run has ended.
@@ -176,7 +184,7 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   const lines = ["# Launch stills", "", `Made by launch-film from ${path.relative(outDir, path.resolve(filmFile)) || "film.json"} in the ${look} look. Every picture is an opaque PNG at the exact size its place asks for.`, "",
     "| File | Size | For |", "| --- | --- | --- |", ...made.map((f) => `| ${f.name} | ${f.W}x${f.H} | ${f.use} |`), ""];
   if (notes.length) lines.push("Notes:", "", ...notes.map((n) => `- ${n}`), "");
-  fs.writeFileSync(run.out("STILLS.md"), lines.join("\n"));
+  save(run.out("STILLS.md"), lines.join("\n"));
   return { dir: outDir, files: made, notes };
 }
 

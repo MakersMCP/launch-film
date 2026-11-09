@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, said, aftermath, noticed, stopping, exit } = require("../src/out");
+const { listen, within, shown, said, aftermath, noticed, stopping, exit, reason, save } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -159,7 +159,13 @@ async function makePlan(url, flags, run) {
   // copied as plain files, its links followed, so this run never writes
   // where a link leads (a brand/ that links to a kit other films share).
   const local = run.folder("brand");
-  const copy = (from) => fs.cpSync(from, local, { recursive: true, dereference: true });
+  const copy = (from) => {
+    try {
+      fs.cpSync(from, local, { recursive: true, dereference: true });
+    } catch (err) {
+      throw new Error(`copying the brand kit ${from} to ${local}: ${reason(err)}`);
+    }
+  };
   let brandFile;
   let storeWords = null;
   if (flags.brand) {
@@ -183,7 +189,7 @@ async function makePlan(url, flags, run) {
         const listing = (kit.stores || []).find((s) => s && /appstore|googleplay/i.test(String(s.type)) && s.ok !== false);
         if (!listing) throw new Error("easybrandkit read no store listing from it");
         kit.app = { name: listing.name || kit.name || "", by: listing.by || "", site: listing.site || "" };
-        fs.writeFileSync(brandFile, JSON.stringify(kit, null, 2) + "\n");
+        save(brandFile, JSON.stringify(kit, null, 2) + "\n");
       } catch (err) {
         if (!appStoreId(url)) throw err;
         say(`easybrandkit could not read the listing (${err.message.split(". ")[0]}); reading it from the App Store instead.\n`);
@@ -206,13 +212,13 @@ async function makePlan(url, flags, run) {
     say(`Reading the words on the page...\n`);
     words = await readWords(brand.url || url, { log: say });
   }
-  fs.writeFileSync(run.out("words.json"), JSON.stringify(words, null, 2) + "\n");
+  save(run.out("words.json"), JSON.stringify(words, null, 2) + "\n");
   const seconds = Math.min(40, Math.max(20, Number(flags.seconds) || 30));
   const film = planFilm(brand, words, { look: flags.look, seconds, aspect: flags.aspect === "9:16" ? "9:16" : "16:9", filmDir: run.part });
   if (flags.music === false) film.music = false;
   if (flags.sfx === false) film.sfx = false;
   const filmFile = run.out("film.json");
-  fs.writeFileSync(filmFile, JSON.stringify(film, null, 2) + "\n");
+  save(filmFile, JSON.stringify(film, null, 2) + "\n");
   for (const note of brand.notes) say(`note: ${note}\n`);
   say(`Planned ${film.clips.length} clips in the ${film.look} look: ${where(filmFile)}\n`);
   return { filmFile };

@@ -522,7 +522,52 @@ try {
 }`;
   const r = spawnSync(process.execPath, ["--max-old-space-size=64", "-e", script], { encoding: "utf8", timeout: 20_000 });
   assert.equal(r.status, 0, `ended by ${r.signal || r.status}: ${String(r.stderr).slice(-300)}`);
-  assert.match(r.stdout, /^ENOENT: no such file or directory, mkdir '.*no-such-drive[\\/]films'$/);
+  assert.match(r.stdout, /^cannot write in .+: no such file or directory \(ENOENT\)$/);
+});
+
+test("a folder the run cannot write in is named in the refusal, not the part folder, and nothing is made", { skip: (process.platform === "win32" || process.getuid() === 0) && "a folder its user may not write in" }, async () => {
+  const base = tmp();
+  const locked = path.join(base, "locked");
+  fs.mkdirSync(locked);
+  fs.writeFileSync(path.join(locked, "film.mp4"), "old film");
+  fs.chmodSync(locked, 0o555);
+  try {
+    // The folder itself, and a folder to be made in it.
+    for (const dir of [locked, path.join(locked, "films", "check")]) {
+      const err = await out.within(dir, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a check")).catch((e) => e);
+      assert.equal(err.message, `cannot write in ${locked}: permission denied (EACCES)`);
+    }
+    assert.deepEqual(fs.readdirSync(locked), ["film.mp4"]);
+  } finally {
+    fs.chmodSync(locked, 0o755);
+  }
+});
+
+test("a write that fails names the file it was writing, as the new one, and a quoted path in a part folder is the new one too", async () => {
+  assert.equal(out.reason(new Error("ENOSPC: no space left on device, write")), "no space left on device (ENOSPC)");
+  assert.equal(out.reason(new Error("EACCES: permission denied, mkdir '/a/b'")), "permission denied (EACCES)");
+  assert.equal(out.reason(new Error("ENOSPC, No space left on device '/a/brand'")), "no space left on device (ENOSPC)");
+  assert.equal(out.reason(new Error("the render failed")), "the render failed");
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  const real = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (path.basename(String(file)) === "film.json") throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    return real(file, ...rest);
+  };
+  let part = null;
+  try {
+    const err = await out.within(dir, async (run) => {
+      part = run.part;
+      out.save(run.out("film.json"), "plan");
+    }).catch((e) => e);
+    assert.equal(out.said(err.message), `writing the new ${path.join(dir, "film.json")}: no space left on device (ENOSPC)`);
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.deepEqual(snap(dir), before);
+  assert.equal(out.said(`ENOSPC, No space left on device '${path.join(part, "brand")}'`), `ENOSPC, No space left on device the new '${path.join(dir, "brand")}'`);
 });
 
 test("a temp folder is named for its process and goes with release", () => {

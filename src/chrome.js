@@ -16,7 +16,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
-const { tempDir, release, track, socketFolder, closeProfile } = require("./out");
+const { tempDir, release, track, socketFolder, closeProfile, save } = require("./out");
 
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
@@ -273,11 +273,11 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
 // next to the page.
 async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 1080, scale = 1, fps = 25, onFrame = null }) {
   const dir = tempDir("launch-film-page-");
-  fs.writeFileSync(path.join(dir, "index.html"), html);
+  save(path.join(dir, "index.html"), html);
   for (const [name, data] of Object.entries(files)) {
     const file = path.join(dir, name);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, data);
+    save(file, data);
   }
   const browser = await launch({ W, H });
   const enc = encoder({ output, fps });
@@ -305,8 +305,8 @@ async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 108
 // One still of a page at a time (ms), as PNG: for checks and tests.
 async function stillOf({ html, files = {}, at = 0, W = 1920, H = 1080, scale = 1 }) {
   const dir = tempDir("launch-film-page-");
-  fs.writeFileSync(path.join(dir, "index.html"), html);
-  for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), data);
+  save(path.join(dir, "index.html"), html);
+  for (const [name, data] of Object.entries(files)) save(path.join(dir, name), data);
   const browser = await launch({ W, H });
   try {
     const { page, exceptions } = await openPage(browser, dir, { W, H, scale });
@@ -332,8 +332,8 @@ async function snapshots(pages) {
     for (const p of pages) {
       const dir = tempDir("launch-film-page-");
       try {
-        fs.writeFileSync(path.join(dir, "index.html"), p.html);
-        for (const [name, data] of Object.entries(p.files || {})) fs.writeFileSync(path.join(dir, name), data);
+        save(path.join(dir, "index.html"), p.html);
+        for (const [name, data] of Object.entries(p.files || {})) save(path.join(dir, name), data);
         const { page, exceptions } = await openPage(browser, dir, { W: p.W, H: p.H, scale: p.scale || 1 });
         let at = p.at || 0;
         if (at === "end") at = Math.round(Number(await evaluate(page, "window.__end ? window.__end() : 0")) || 0) + 150;

@@ -10,6 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 const { readPixels } = require("./ffmpeg");
+const { save } = require("./out");
 
 const STORE_HOSTS = /(^|\.)(apple\.com|google\.com|youtube\.com|instagram\.com|x\.com|twitter\.com|facebook\.com|linkedin\.com|tiktok\.com|linktr\.ee)$/i;
 
@@ -36,7 +37,7 @@ async function getJson(url) {
 async function download(url, file) {
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${path.basename(file)}`);
-  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  save(file, Buffer.from(await res.arrayBuffer()));
   return file;
 }
 
@@ -157,7 +158,7 @@ async function storeBrand(url, dir, { runEasybrandkit, log = () => {} }) {
   brand.app = { name: listing.name, by: listing.by, site: listing.seller || "" };
   brand.stores = [store, ...(brand.stores || []).filter((s) => s && s.type !== "appstore")];
   const brandFile = path.join(dir, "brand.json");
-  fs.writeFileSync(brandFile, JSON.stringify(brand, null, 2) + "\n");
+  save(brandFile, JSON.stringify(brand, null, 2) + "\n");
   return { brandFile, words: wordsFromListing(listing), listing };
 }
 

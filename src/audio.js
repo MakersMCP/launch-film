@@ -11,7 +11,7 @@
 // the last chord ringing out. Clip lengths are whole bars, so every cut
 // falls on a downbeat.
 
-const fs = require("fs");
+const { save } = require("./out");
 
 const SR = 48000;
 const TAU = Math.PI * 2;
@@ -588,7 +588,7 @@ function writeWav(file, bus) {
   head.writeUInt16LE(32, 34);
   head.write("data", 36);
   head.writeUInt32LE(data.length, 40);
-  fs.writeFileSync(file, Buffer.concat([head, data]));
+  save(file, Buffer.concat([head, data]));
 }
 
 module.exports = { SR, Bus, MOODS, EFFECTS, TRACK_LUFS, effect, music, trackGain, trackBus, mixFilm, writeWav };

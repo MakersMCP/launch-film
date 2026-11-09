@@ -282,6 +282,20 @@ test("a check that cannot read the sound adds nothing and keeps an earlier repor
   assert.deepEqual(snap(dir), before);
 });
 
+test("a check next to a film in a folder it cannot write in names that folder", { skip: process.platform === "win32" ? "a folder its user may not write in" : process.getuid() === 0 ? "root writes anywhere" : skip }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  fs.chmodSync(dir, 0o555);
+  try {
+    const r = cli(["check", file]);
+    assert.equal(r.status, 1);
+    assert.equal(r.stderr, `launch-film: cannot write in ${dir}: permission denied (EACCES)\n`);
+    assert.deepEqual(fs.readdirSync(dir), ["film.mp4"]);
+  } finally {
+    fs.chmodSync(dir, 0o755);
+  }
+});
+
 test("a check that cannot take over a lock left in its folder says why once", { skip: noShell }, async () => {
   const dir = tmp();
   const file = await film(dir);
