@@ -102,7 +102,9 @@ function failed(err) {
   const message = err && err.message ? err.message : String(err);
   setImmediate(() => setImmediate(() => {
     if (stopping()) return;
-    const folders = aftermath();
+    // A failure that says itself what became of its folder is not told of
+    // twice.
+    const folders = aftermath().filter((f) => !message.includes(f));
     say(`launch-film: ${said(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
     exit(1);
   }));

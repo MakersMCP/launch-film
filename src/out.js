@@ -335,6 +335,10 @@ function lock(dir, base = dir) {
       // Not written yet, or let go meanwhile.
     }
     const s = lstat(at);
+    // Why a lock left behind could not be moved aside: another user's in a
+    // folder with the sticky bit, or one a program holds open on Windows.
+    // Such a lock is waited for as one another run holds, and then refused.
+    let stuck = null;
     if (s && leftBehind(pid, s.mtimeMs)) {
       // Moved aside before it is removed, so of two runs that find it left
       // only one takes it over.
@@ -342,14 +346,17 @@ function lock(dir, base = dir) {
       try {
         fs.renameSync(at, aside);
         remove(aside);
-      } catch {
-        // Taken over by the other.
+        continue;
+      } catch (err) {
+        // Gone meanwhile: the other run took it over.
+        if (err.code === "ENOENT") continue;
+        stuck = err.code || err.message;
       }
-      continue;
     }
     if (Date.now() - since > LOCK_WAIT) {
-      throw Object.assign(new Error(`another launch-film run has been putting its files in ${shown(dir)} for ${LOCK_WAIT / 1000} s. ` +
-        `If no other launch-film run is at work there, remove ${shown(at)} and run again`), { at: null });
+      const whose = s && uid() !== null && s.uid !== uid() ? `, which belongs to another user (uid ${s.uid}),` : "";
+      throw Object.assign(new Error(stuck ? `${shown(at)}${whose} was left by a launch-film run that is gone and cannot be moved aside (${stuck}). Remove it and run again`
+        : `another launch-film run has been putting its files in ${shown(dir)} for ${LOCK_WAIT / 1000} s. If no other launch-film run is at work there, remove ${shown(at)}${whose} and run again`), { at: null });
     }
     pause(20);
   }
@@ -432,7 +439,12 @@ function failed(run, err, stuck, left) {
   // as it is.
   const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${err.message}`;
   const start = `could not put the new files in ${shown(run.dir)}: ${why}.`;
-  if (!stuck.length && !left.length) return new Error(`${start} ${shown(run.dir)} is as it was${held ? "; close the file and run again" : ""}.`);
+  if (!stuck.length && !left.length) {
+    // Told of again by a stop that comes before this failure is: a commit
+    // waits for a lock for a while.
+    if (![...open].some((r) => r !== run && inside(run.dir, r.part))) told.push(`${shown(run.dir)} is as it was`);
+    return new Error(`${start} ${shown(run.dir)} is as it was${held ? "; close the file and run again" : ""}.`);
+  }
   return new Error(`${start}${stuck.length ? ` Some of the earlier files could not be put back; they are in ${keep(run, stuck)}.` : ""}` +
     `${left.length ? ` These new files could not be taken out again: ${left.join(", ")}.` : ""}`);
 }

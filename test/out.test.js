@@ -645,6 +645,36 @@ test("a lock another run may still hold is waited for, and the refusal names it"
   assert.deepEqual(snap(dir), { "film.mp4": "old film", [`${out.LOCK}/`]: "folder", [`${out.LOCK}/pid`]: String(process.ppid) });
 });
 
+test("a lock left by a run that is gone but cannot be moved aside is waited for and refused, not tried again and again", () => {
+  // As another user's lock in a folder with the sticky bit: renaming it is
+  // refused. The clock runs fast after a while, so the wait ends soon; a
+  // run that tried again at once forever never reached the wait.
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film", [`${out.LOCK}/pid`]: "4194000" });
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const real = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (path.basename(from) === out.LOCK) throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  return real(from, to);
+};
+const now = Date.now;
+let calls = 0;
+Date.now = () => now() + (++calls > 200 ? 11000 : 0);
+out.within(process.argv[1], async (run) => fs.writeFileSync(run.out("film.mp4"), "new film"))
+  .then(() => process.stdout.write("committed"), (err) => process.stdout.write(err.message + "\\n" + JSON.stringify(out.aftermath())));
+`;
+  const r = spawnSync(process.execPath, ["-e", script, dir], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.signal, null, "it ended on its own");
+  const lock = path.join(dir, out.LOCK);
+  // A stop that comes while it waits says which folder is as it was too.
+  assert.equal(r.stdout, `could not put the new files in ${dir}: ${lock} was left by a launch-film run that is gone and cannot be moved aside (EPERM). Remove it and run again. ${dir} is as it was.\n` +
+    JSON.stringify([`${dir} is as it was`]));
+  assert.deepEqual(snap(dir), { "film.mp4": "old film", [`${out.LOCK}/`]: "folder", [`${out.LOCK}/pid`]: "4194000" });
+});
+
 test("a lock that cannot get its pid, as on a full disk, is not left", async () => {
   const dir = tmp();
   write(dir, EARLIER);

@@ -282,6 +282,34 @@ test("a check that cannot read the sound adds nothing and keeps an earlier repor
   assert.deepEqual(snap(dir), before);
 });
 
+test("a check that cannot take over a lock left in its folder says why once", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  const lock = path.join(dir, "check", ".launch-film-commit");
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, "pid"), "4194000");
+  // In the CLI's own process, renaming the lock is refused, as for another
+  // user's lock in a folder with the sticky bit, and the clock runs fast
+  // once the commit waits.
+  const stub = path.join(tmp(), "stub.js");
+  fs.writeFileSync(stub, `const fs = require("fs");
+const path = require("path");
+const real = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (path.basename(from) === ".launch-film-commit") throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  return real(from, to);
+};
+const now = Date.now;
+let calls = 0;
+Date.now = () => now() + (++calls > 200 ? 11000 : 0);
+`);
+  const r = cli(["check", file], { NODE_OPTIONS: `--require ${stub}` });
+  assert.equal(r.status, 1);
+  const folder = path.join(dir, "check");
+  assert.equal(r.stderr, `launch-film: could not put the new files in ${folder}: ${lock} was left by a launch-film run that is gone and cannot be moved aside (EPERM). Remove it and run again. ${folder} is as it was.\n`);
+  assert.deepEqual(fs.readdirSync(folder), [".launch-film-commit"]);
+});
+
 test("an ffmpeg killed outright says so", { skip: noShell }, async () => {
   const dir = tmp();
   const file = await film(dir);
