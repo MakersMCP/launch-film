@@ -10,7 +10,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const out = require("../src/out");
 
-const { tmp, shortTmp } = require("./tmp");
+const { tmp, shortTmp, stillRunning, WAITS } = require("./tmp");
 const noSignals = process.platform === "win32" && "POSIX signals";
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -382,7 +382,7 @@ const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js")
 const [dir, how] = process.argv.slice(1);
 out.listen();
 // The child says "on" once it listens; a stubborn one lets SIGTERM go.
-const child = out.track(spawn(process.execPath, ["-e", (how === "stubborn" ? 'process.on("SIGTERM", () => {}); ' : "") + 'process.stdout.write("on"); setInterval(() => {}, 1000)'], { stdio: ["ignore", "pipe", "ignore"] }));
+const child = out.track(spawn(process.execPath, ["-e", (how === "stubborn" ? 'process.on("SIGTERM", () => {}); ' : "") + 'process.stdout.write("on"); ${WAITS}'], { stdio: ["ignore", "pipe", "ignore"] }));
 child.stdout.once("data", () => {
   if (how === "fails") {
     // The run waits on its child, and fails when the stop ends it, as a
@@ -399,7 +399,7 @@ child.stdout.once("data", () => {
   process.stdout.write(\`ready \${child.pid}\\n\`);
   if (how === "exit") process.exit(1);
 });
-setInterval(() => {}, 1000);
+${WAITS}
 `;
 
 function runner(dir, how) {
@@ -494,13 +494,13 @@ const { spawn } = require("child_process");
 const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
 const dir = out.tempDir("launch-film-out-test-");
 const helper = 'const fs = require("fs"); setInterval(() => { fs.mkdirSync(process.argv[1], { recursive: true }); fs.writeFileSync(process.argv[1] + "/state", "on"); }, 20); setTimeout(() => process.exit(0), 3000);';
-const browser = 'const h = require("child_process").spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" }); process.on("SIGTERM", () => { h.kill("SIGKILL"); process.exit(0); }); process.stdout.write("on"); setInterval(() => {}, 1000);';
+const browser = 'const h = require("child_process").spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" }); process.on("SIGTERM", () => { h.kill("SIGKILL"); process.exit(0); }); process.stdout.write("on"); ${WAITS}';
 const child = out.track(spawn(process.execPath, ["-e", browser, helper, dir], { stdio: ["ignore", "pipe", "ignore"] }));
 child.stdout.once("data", () => {
   process.stdout.write(dir);
   setTimeout(() => out.exit(1), 100);
 });
-setInterval(() => {}, 1000);
+${WAITS}
 `;
   const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 20_000 });
   assert.equal(r.status, 1, r.stderr);
@@ -654,10 +654,10 @@ const [dir, how] = process.argv.slice(1);
 const say = (text) => fs.writeSync(1, text + "\\n");
 out.listen();
 const late = () => {
-  const child = out.track(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+  const child = out.track(spawn(process.execPath, ["-e", ${JSON.stringify(WAITS)}], { stdio: "ignore" }));
   child.once("exit", (code, signal) => say("late child ended by " + signal));
 };
-const stubborn = out.track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("on"); setInterval(() => {}, 1000)'], { stdio: ["ignore", "pipe", "ignore"] }));
+const stubborn = out.track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("on"); ${WAITS}'], { stdio: ["ignore", "pipe", "ignore"] }));
 stubborn.stdout.once("data", () => {
   if (how === "late") process.once("SIGTERM", late);
   if (how === "ending") {
@@ -684,7 +684,7 @@ stubborn.stdout.once("data", () => {
   }
   say("ready");
 });
-setInterval(() => {}, 1000);
+${WAITS}
 `;
 
 // Runs AFTER_STOP as `how`, sends SIGTERM once it says ready, and answers
@@ -708,6 +708,34 @@ test("a process started once a stop has begun is ended at once", { skip: noSigna
 
 test("a process started once a failed run is ending is asked to stop", { skip: noSignals }, async () => {
   assert.deepEqual(await afterStop(tmp(), "ending"), { code: 1, signal: null, said: "late child ended by SIGTERM\n" });
+});
+
+test("a process the runs started is killed when the process ends, with no run or temp folder begun", { skip: noSignals }, async () => {
+  // It lets SIGTERM go, so only the kill at exit ends it.
+  const script = `
+const { spawn } = require("child_process");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const child = out.track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("on"); ${WAITS}'], { stdio: ["ignore", "pipe", "ignore"] }));
+child.stdout.once("data", () => {
+  process.stdout.write(String(child.pid));
+  process.exit(1);
+});
+${WAITS}
+`;
+  const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.ok(await gone(Number(r.stdout)), "the child is gone");
+});
+
+test("the check at the end of a test file sees a helper a test left running", { skip: process.platform !== "linux" && "/proc tells which processes the tests started" }, async () => {
+  const helper = spawn(process.execPath, ["-e", WAITS], { stdio: "ignore" });
+  try {
+    assert.ok(stillRunning().includes(helper.pid));
+  } finally {
+    helper.kill("SIGKILL");
+  }
+  assert.ok(await gone(helper.pid), "it is gone");
+  assert.ok(!stillRunning().includes(helper.pid));
 });
 
 test("a run begun once a stop has begun is refused and makes nothing", { skip: noSignals }, async () => {
@@ -749,7 +777,7 @@ fs.mkdirSync(outside);
 const dir = out.tempDir("launch-film-out-test-", (d) => fs.rmSync(fs.readFileSync(path.join(d, "points-to"), "utf8"), { recursive: true }));
 fs.writeFileSync(path.join(dir, "points-to"), outside);
 process.stdout.write(dir);
-setInterval(() => {}, 1000);
+${WAITS}
 `;
   const child = spawn(process.execPath, ["-e", script, base], { stdio: ["ignore", "pipe", "pipe"] });
   const dir = await new Promise((resolve) => child.stdout.once("data", (d) => resolve(String(d))));
@@ -1080,7 +1108,7 @@ test("a lock whose pid is in use again is taken over: this process's own, a proc
   }
   if (!fs.existsSync("/proc/self/stat")) return t.skip("no /proc to tell when a process started");
   // A process started after the lock was made has the pid now.
-  const later = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const later = spawn(process.execPath, ["-e", WAITS], { stdio: "ignore" });
   try {
     dir = tmp();
     write(dir, { "film.mp4": "old film" });
@@ -1258,7 +1286,8 @@ for a in "$@"; do case "$a" in --user-data-dir=*) profile="\${a#--user-data-dir=
 sock=$(mktemp -d "$TMPDIR/com.google.Chrome.XXXXXX")
 : > "$sock/SingletonSocket"
 ln -s "$sock/SingletonSocket" "$profile/SingletonSocket"
-while :; do sleep 1; done
+i=0
+while [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
 `, { mode: 0o755 });
   const script = `
 const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
@@ -1296,7 +1325,7 @@ const sock = fs.mkdtempSync(path.join(process.env.TMPDIR, "com.google.Chrome."))
 fs.writeFileSync(path.join(sock, "SingletonSocket"), "");
 fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(profile, "SingletonSocket"));
 if (process.env.STAND_IN === "helper") {
-  const write = 'process.on("SIGTERM", () => {}); const fs = require("fs"); setInterval(() => { try { fs.mkdirSync(process.argv[1] + "/Default", { recursive: true }); fs.writeFileSync(process.argv[1] + "/Default/state", "on"); } catch {} }, 5);';
+  const write = 'process.on("SIGTERM", () => {}); const fs = require("fs"); setInterval(() => { try { fs.mkdirSync(process.argv[1] + "/Default", { recursive: true }); fs.writeFileSync(process.argv[1] + "/Default/state", "on"); } catch {} }, 5); ${WAITS}';
   const helper = spawn(process.execPath, ["-e", write, profile, "--user-data-dir=" + profile], { stdio: "ignore" });
   fs.writeFileSync(process.env.STAND_IN_PID, String(helper.pid));
 }
@@ -1309,7 +1338,7 @@ fs.createReadStream("", { fd: 3 }).on("data", (d) => {
   buf += d;
   for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) fs.writeSync(4, JSON.stringify({ id: JSON.parse(buf.slice(0, i)).id, result: {} }) + "\\0");
 });
-setInterval(() => {}, 1000);
+${WAITS}
 `, { mode: 0o755 });
   return file;
 }
@@ -1324,7 +1353,7 @@ launch({ W: 100, H: 100 }).then(() => {
   process.stdout.write("up");
   if (process.argv[1] === "fails") setTimeout(() => out.exit(1), 100);
 });
-setInterval(() => {}, 1000);
+${WAITS}
 `;
 
 test("a failed run ends the Chrome helpers that still write in its profile before the profile goes", { skip: process.platform !== "linux" && "/proc tells which processes use a profile" }, async () => {
@@ -1375,7 +1404,7 @@ const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js")
 const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
 out.listen();
 launch({ W: 100, H: 100, network: true }).then(() => process.stdout.write("up"));
-setInterval(() => {}, 1000);
+${WAITS}
 `;
   const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: file } });
   const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));

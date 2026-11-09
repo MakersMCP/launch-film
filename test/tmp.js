@@ -1,13 +1,60 @@
 "use strict";
-// The tests' own folders: each test file makes them inside one folder of its
-// own in the system's temp folder, which goes once its tests have run, so a
-// run of the tests leaves the temp folder as it found it.
+// The tests' own folders and processes. Each test file makes its folders
+// inside one folder of its own in the system's temp folder, which goes once
+// its tests have run, so a run of the tests leaves the temp folder as it
+// found it. Each process a test starts is ended when the file's tests have
+// run, whatever became of the test, so a run of the tests leaves no process
+// running.
 const { after } = require("node:test");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-tests-"));
+
+// What keeps a helper process up until something ends it. A test can die
+// before it ends its helpers, by a kill or a timeout, so a helper ends by
+// itself in time; a bare setInterval ran on for good.
+const WAITS = "setTimeout(() => process.exit(0), 60000);";
+
+// Every process the tests start has this in its environment, however it was
+// started, whatever has become of its parent. Read from /proc, so on Linux
+// only.
+process.env.LAUNCH_FILM_TESTS = root;
+function stillRunning() {
+  let names = [];
+  try {
+    names = fs.readdirSync("/proc");
+  } catch {
+    return [];
+  }
+  return names.filter((name) => /^\d+$/.test(name) && Number(name) !== process.pid).filter((name) => {
+    try {
+      return fs.readFileSync(`/proc/${name}/environ`, "latin1").split("\0").includes(`LAUNCH_FILM_TESTS=${root}`);
+    } catch {
+      return false;
+    }
+  }).map(Number);
+}
+
+// Runs before the folders go, as a helper left running could write in them.
+// A helper killed as its test ended takes a moment to be gone. What is still
+// running then is killed, and fails the file: a test left it behind.
+after(async () => {
+  for (let i = 0; i < 250 && stillRunning().length; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  const left = stillRunning().map((pid) => {
+    let cmd = "";
+    try {
+      cmd = fs.readFileSync(`/proc/${pid}/cmdline`, "latin1").replace(/\0/g, " ").slice(0, 200);
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Gone by now.
+    }
+    return `${pid} ${cmd}`;
+  });
+  if (left.length) throw new Error(`these tests left processes running:\n${left.join("\n")}`);
+});
+
 after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 // A new folder for a test.
@@ -26,4 +73,4 @@ function shortTmp() {
   return dir;
 }
 
-module.exports = { tmp, shortTmp };
+module.exports = { tmp, shortTmp, stillRunning, WAITS };

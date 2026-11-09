@@ -970,6 +970,7 @@ function endTheirs(list) {
 function track(child, { watch: tree = false } = {}) {
   if (!child || !child.pid) return child;
   children.add(child);
+  hook();
   child.once("exit", () => children.delete(child));
   if (tree) watch(child);
   if (stopping) signal(child, "SIGKILL");

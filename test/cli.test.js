@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { tmp, shortTmp } = require("./tmp");
+const { tmp, shortTmp, WAITS } = require("./tmp");
 
 const root = path.join(__dirname, "..");
 const cli = (...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 30_000 });
@@ -250,7 +250,7 @@ process.on("SIGINT", () => {
   setTimeout(() => process.exit(0), 200);
 });
 fs.writeFileSync(process.env.STAND_IN_PID, String(process.pid));
-setInterval(() => {}, 1000);
+${WAITS}
 `);
   const kit = path.join(dir, "easybrandkit.js");
   fs.writeFileSync(kit, `
@@ -259,7 +259,7 @@ const os = require("os");
 const path = require("path");
 const profile = process.env.STAND_IN_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), "easybrandkit-chrome-"));
 require("child_process").spawn(process.execPath, [${JSON.stringify(chrome)}, "--headless=new", "--user-data-dir=" + profile], { stdio: "ignore" });
-setInterval(() => {}, 1000);
+${WAITS}
 `);
   return kit;
 }
