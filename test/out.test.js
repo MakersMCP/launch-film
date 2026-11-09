@@ -597,6 +597,137 @@ test("a copy is made of plain files, whatever links the folder holds", { skip: p
   assert.ok(!fs.existsSync(path.join(from, "brand")));
 });
 
+test("a part folder takes the mode of a folder made there, which a default ACL needs", { skip: process.platform === "win32" && "no modes to tell apart" }, () => {
+  const run = out.begin(tmp());
+  try {
+    assert.equal(fs.statSync(run.part).mode & 0o777, 0o777 & ~process.umask());
+  } finally {
+    run.discard();
+  }
+});
+
+test("a socket folder is read only from a profile of this user's own, and given only when it is Chrome's, this user's own and right in the temp folder", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  const temp = tmp();
+  const profile = (name, target) => {
+    const at = path.join(temp, name);
+    fs.mkdirSync(at);
+    fs.symlinkSync(path.join(target, "SingletonSocket"), path.join(at, "SingletonSocket"));
+    return at;
+  };
+  const socket = path.join(temp, "com.google.Chrome.AbCdEf");
+  const other = path.join(temp, "some-folder");
+  const away = path.join(tmp(), "com.google.Chrome.ZzZzZz");
+  for (const folder of [socket, other, away]) fs.mkdirSync(folder);
+  const good = profile("good", socket);
+  const misnamed = profile("misnamed", other);
+  const elsewhere = profile("elsewhere", away);
+  // In a process of its own, where lstat calls one path another user's.
+  const script = `
+const fs = require("fs");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const [theirs, ...asked] = process.argv.slice(1);
+const real = fs.lstatSync;
+fs.lstatSync = (at, ...rest) => {
+  const s = real(at, ...rest);
+  if (s && at === theirs) s.uid += 1;
+  return s;
+};
+process.stdout.write(JSON.stringify(asked.map((at) => out.socketFolder(at))));
+`;
+  const ask = (theirs, ...asked) => {
+    const r = spawnSync(process.execPath, ["-e", script, theirs, ...asked], { encoding: "utf8", env: { ...process.env, TMPDIR: temp } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.deepEqual(ask("", good, misnamed, elsewhere), [socket, null, null]);
+  assert.deepEqual(ask(good, good), [null], "the profile is another user's");
+  assert.deepEqual(ask(socket, good), [null], "the socket folder is another user's");
+});
+
+// A process that listens for signals and has a child that lets SIGTERM go,
+// so a stop or a failure waits for it. What it does then is `how`.
+const AFTER_STOP = `
+const fs = require("fs");
+const { spawn } = require("child_process");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const [dir, how] = process.argv.slice(1);
+const say = (text) => fs.writeSync(1, text + "\\n");
+out.listen();
+const late = () => {
+  const child = out.track(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+  child.once("exit", (code, signal) => say("late child ended by " + signal));
+};
+const stubborn = out.track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("on"); setInterval(() => {}, 1000)'], { stdio: ["ignore", "pipe", "ignore"] }));
+stubborn.stdout.once("data", () => {
+  if (how === "late") process.once("SIGTERM", late);
+  if (how === "ending") {
+    out.exit(1);
+    late();
+  }
+  if (how === "begin") {
+    process.once("SIGTERM", () => {
+      try {
+        out.begin(dir);
+        say("begun");
+      } catch (err) {
+        say(err.stopped ? "not begun" : err.message);
+      }
+    });
+  }
+  if (how === "commit") {
+    out.within(dir, async (run) => {
+      fs.writeFileSync(run.out("film.mp4"), "new film");
+      say("ready");
+      await new Promise((resolve) => process.once("SIGTERM", resolve));
+    }).then(() => say("committed"), (err) => say(err.stopped ? "not committed" : err.message));
+    return;
+  }
+  say("ready");
+});
+setInterval(() => {}, 1000);
+`;
+
+// Runs AFTER_STOP as `how`, sends SIGTERM once it says ready, and answers
+// with what it said.
+async function afterStop(dir, how) {
+  const child = spawn(process.execPath, ["-e", AFTER_STOP, dir, how], { stdio: ["ignore", "pipe", "ignore"] });
+  let said = "";
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  await new Promise((resolve) => child.stdout.on("data", (d) => {
+    said += d;
+    if (/ready/.test(said)) resolve();
+  }));
+  if (how !== "ending") child.kill("SIGTERM");
+  const end = await ended;
+  return { ...end, said: said.replace("ready\n", "") };
+}
+
+test("a process started once a stop has begun is ended at once", { skip: noSignals }, async () => {
+  assert.deepEqual(await afterStop(tmp(), "late"), { code: null, signal: "SIGTERM", said: "late child ended by SIGKILL\n" });
+});
+
+test("a process started once a failed run is ending is asked to stop", { skip: noSignals }, async () => {
+  assert.deepEqual(await afterStop(tmp(), "ending"), { code: 1, signal: null, said: "late child ended by SIGTERM\n" });
+});
+
+test("a run begun once a stop has begun is refused and makes nothing", { skip: noSignals }, async () => {
+  const dir = tmp();
+  assert.equal((await afterStop(dir, "begin")).said, "not begun\n");
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test("a run that ends well once a stop has begun puts nothing in place", { skip: noSignals }, async () => {
+  // In a folder already there, and in one it makes.
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  assert.equal((await afterStop(dir, "commit")).said, "not committed\n");
+  assert.deepEqual(snap(dir), before);
+  const base = tmp();
+  assert.equal((await afterStop(path.join(base, "film"), "commit")).said, "not committed\n");
+  assert.deepEqual(fs.readdirSync(base), []);
+});
+
 test("a temp folder is named for its process and goes with release", () => {
   const dir = out.tempDir("launch-film-out-test-");
   assert.match(path.basename(dir), new RegExp(`^launch-film-out-test-${process.pid}-`));

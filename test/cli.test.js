@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { tmp } = require("./tmp");
+const { tmp, shortTmp } = require("./tmp");
 
 const root = path.join(__dirname, "..");
 const cli = (...args) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 30_000 });
@@ -181,6 +181,24 @@ test("easybrandkit's own words about the folder it was given name it as the user
   assert.equal(r.stderr.split("\n").slice(-3, -1).join("\n"), `launch-film: easybrandkit failed (exit 1): easybrandkit: ${path.join(dir, "brand")} is not empty and holds no earlier brand kit. Pick another folder with --out.\nlaunch-film: ${dir} is as it was.`);
 });
 
+test("a plan that ends well keeps the files of the user's in the folder's kit", () => {
+  // easybrandkit makes its kit again where one is and leaves the other
+  // files: it is given the run's copy of the folder's brand/.
+  const dir = filmFolder();
+  fs.writeFileSync(path.join(dir, "brand", "my-notes.txt"), "the user's own notes");
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, `const fs = require("fs"); const out = process.argv[process.argv.indexOf("--out") + 1]; fs.cpSync(${JSON.stringify(fixture)}, out, { recursive: true, force: true });`);
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", kit, "--words", path.join(fixture, "words.json"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(dir, "brand", "my-notes.txt"), "utf8"), "the user's own notes");
+});
+
+test("a kit that cannot be copied is named, with the new folder and the reason", { skip: (process.platform === "win32" || process.getuid() === 0) && "a file its user may not read" }, () => {
+  const kit = otherKit();
+  fs.chmodSync(path.join(kit, "logo-header.png"), 0o000);
+  planFails(["--brand", kit, "--words", path.join(fixture, "words.json")], new RegExp(`^launch-film: copying the brand kit ${escape(kit)} to the new .*/brand: permission denied \\(EACCES\\)\\n`));
+});
+
 test("a plan given a kit that cannot be read leaves the folder's kit as it was", () => {
   planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
 });
@@ -238,7 +256,7 @@ setInterval(() => {}, 1000);
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), "easybrandkit-chrome-"));
+const profile = process.env.STAND_IN_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), "easybrandkit-chrome-"));
 require("child_process").spawn(process.execPath, [${JSON.stringify(chrome)}, "--headless=new", "--user-data-dir=" + profile], { stdio: "ignore" });
 setInterval(() => {}, 1000);
 `);
@@ -259,10 +277,11 @@ const alive = (pid) => {
 };
 
 test("a plan stopped while easybrandkit reads the brand ends the Chrome easybrandkit started and removes its profile", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
-  for (const how of ["SIGTERM", "SIGINT"]) {
+  // With a temp folder long enough that easybrandkit keeps to it, and one
+  // short enough for easybrandkit to get a temp folder of the run's own.
+  for (const [how, temp] of [["SIGTERM", tmp()], ["SIGINT", tmp()], ["SIGTERM", shortTmp()], ["SIGINT", shortTmp()]]) {
     const dir = filmFolder();
     const before = snap(dir);
-    const temp = tmp();
     const pidFile = path.join(tmp(), "chrome.pid");
     const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", easybrandkitWithChrome(tmp())],
       { detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile } });
@@ -296,6 +315,70 @@ test("a plan stopped while easybrandkit reads the brand ends the Chrome easybran
         // Gone, as it should be.
       }
     }
+  }
+});
+
+// A plan into the test's film folder whose easybrandkit starts its Chrome,
+// stopped with SIGTERM to launch-film alone once that Chrome is up: the
+// Chrome's pid, what the plan said, and a way to end that Chrome. `stub` is
+// loaded into the CLI first.
+async function planStoppedAtChrome({ temp, env = {}, stub = "" }) {
+  const dir = filmFolder();
+  const before = snap(dir);
+  const work = tmp();
+  const pidFile = path.join(work, "chrome.pid");
+  const stubFile = path.join(work, "stub.js");
+  fs.writeFileSync(stubFile, stub);
+  const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", easybrandkitWithChrome(tmp())],
+    { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile, NODE_OPTIONS: `--require ${stubFile}`, ...env } });
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+  child.kill("SIGTERM");
+  const { signal } = await ended;
+  assert.equal(signal, "SIGTERM", stderr);
+  assert.deepEqual(snap(dir), before);
+  for (let i = 0; i < 50 && alive(chrome); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  return { chrome, stillRuns: alive(chrome), end: () => { try { process.kill(chrome, "SIGKILL"); } catch { /* Gone, as it should be. */ } } };
+}
+
+test("a stop that comes before the first look at what easybrandkit started still ends its Chrome", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+  // The looks four times a second never happen here, so the stop has to
+  // look for itself as it begins, while easybrandkit's tree is whole.
+  const temp = tmp();
+  const plan = await planStoppedAtChrome({ temp, stub: "const real = global.setInterval; global.setInterval = (fn, ms, ...rest) => (ms === 250 ? { unref() {} } : real(fn, ms, ...rest));" });
+  try {
+    assert.ok(!plan.stillRuns, "easybrandkit's Chrome is gone");
+    assert.deepEqual(fs.readdirSync(temp), [], "neither its profile nor its socket folder is left");
+  } finally {
+    plan.end();
+  }
+});
+
+test("a Chrome of easybrandkit's that uses a profile outside the temp folder is ended and its profile left", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+  const profile = path.join(tmp(), "a-chrome-profile-of-the-user's");
+  fs.mkdirSync(profile);
+  fs.writeFileSync(path.join(profile, "Preferences"), "{}");
+  const plan = await planStoppedAtChrome({ temp: tmp(), env: { STAND_IN_PROFILE: profile } });
+  try {
+    assert.ok(!plan.stillRuns, "easybrandkit's Chrome is gone");
+    assert.equal(fs.readFileSync(path.join(profile, "Preferences"), "utf8"), "{}");
+  } finally {
+    plan.end();
+  }
+});
+
+test("a profile in the temp folder that is not this user's is left, whatever a process below easybrandkit names", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+  const temp = tmp();
+  const plan = await planStoppedAtChrome({ temp, stub: `const fs = require("fs"); const path = require("path"); const real = fs.lstatSync; fs.lstatSync = (at, ...rest) => { const s = real(at, ...rest); if (s && path.basename(String(at)).startsWith("easybrandkit-chrome-")) s.uid += 1; return s; };` });
+  try {
+    assert.ok(!plan.stillRuns, "easybrandkit's Chrome is gone");
+    assert.equal(fs.readdirSync(temp).filter((n) => n.startsWith("easybrandkit-chrome-")).length, 1, fs.readdirSync(temp).join(", "));
+  } finally {
+    plan.end();
+    for (const name of fs.readdirSync(temp)) fs.rmSync(path.join(temp, name), { recursive: true, force: true });
   }
 });
 

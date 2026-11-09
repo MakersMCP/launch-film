@@ -267,6 +267,25 @@ test("a film's flat tops are found at any sample rate, also on an ffmpeg that me
   assert.equal(saved.audio.samplePeak, -4);
 });
 
+test("the sound is read for its peaks first, then measured at 48 kHz on every ffmpeg", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  const log = path.join(dir, "args.log");
+  const r = cli(["check", file, "--out", path.join(dir, "c")], { LAUNCH_FILM_FFMPEG: standIn(tmp(), `case "$*" in *ebur128*) echo "$*" >> '${log}';; esac`) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(log, "utf8"), /-af astats=[^,]*Peak_level[^,]*,aresample=48000,ebur128=/);
+});
+
+test("an ffprobe killed outright says so", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await film(dir);
+  const ffprobe = path.join(tmp(), "ffprobe");
+  fs.writeFileSync(ffprobe, "#!/bin/sh\nkill -9 $$\n", { mode: 0o755 });
+  const r = cli(["frames", file], { LAUNCH_FILM_FFPROBE: ffprobe });
+  assert.equal(r.status, 1);
+  assert.equal(r.stderr, `launch-film: reading ${file}: ffprobe was stopped by SIGKILL, most often because the system ran out of memory\n`);
+});
+
 test("a film with no sound in its sound track reads as silent", { skip }, async () => {
   const dir = tmp();
   const file = path.join(dir, "quiet.mp4");

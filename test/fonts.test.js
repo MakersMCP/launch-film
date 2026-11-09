@@ -38,3 +38,25 @@ test("a family is cached whole, and a cached file cut short is fetched again", a
     global.fetch = saved[1];
   }
 });
+
+test("a cached family is whole or not there: a write cut off midway leaves nothing a later run would read", async () => {
+  const saved = [process.env.LAUNCH_FILM_CACHE, global.fetch, fs.writeFileSync];
+  process.env.LAUNCH_FILM_CACHE = tmp();
+  global.fetch = async (url) => ({ ok: true, status: 200, text: async () => CSS, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer, url });
+  // As a disk that fills up, or a run killed, while the cache is written.
+  fs.writeFileSync = (file, data, ...rest) => {
+    saved[2](file, String(data).slice(0, 40), ...rest);
+    throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+  };
+  try {
+    const css = await loadFont("Acme Sans", [400]);
+    assert.match(css, /src: url\(data:font\/woff2;base64,AQID\)/, "the run has its font all the same");
+    fs.writeFileSync = saved[2];
+    assert.deepEqual(fs.readdirSync(cacheDir()), []);
+  } finally {
+    if (saved[0] === undefined) delete process.env.LAUNCH_FILM_CACHE;
+    else process.env.LAUNCH_FILM_CACHE = saved[0];
+    global.fetch = saved[1];
+    fs.writeFileSync = saved[2];
+  }
+});

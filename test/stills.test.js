@@ -123,3 +123,58 @@ test("a stills run that fails keeps the earlier pictures", { skip: noShell, time
   assert.ok(!/launch-film-part/.test(r.stderr), "the message names the picture where it goes");
   assert.deepEqual(snap(dir), before);
 });
+
+// A film of the test brand in a folder of its own: `change` is made to its
+// brand.json first.
+function plannedFolder(change = (kit) => kit) {
+  const dir = tmp();
+  fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
+  const kitFile = path.join(dir, "brand", "brand.json");
+  fs.writeFileSync(kitFile, JSON.stringify(change(JSON.parse(fs.readFileSync(kitFile, "utf8")))));
+  const words = JSON.parse(fs.readFileSync(path.join(fixture, "words.json"), "utf8"));
+  const filmFile = path.join(dir, "film.json");
+  fs.writeFileSync(filmFile, JSON.stringify(planFilm(readBrand(kitFile), words, { filmDir: dir })));
+  return { dir, filmFile };
+}
+
+// A stand-in for ffmpeg that cuts short the picture of that name, as ffmpeg
+// 4.4 does on a full disk while it exits with 0.
+function cuts(name) {
+  const file = path.join(tmp(), "ffmpeg");
+  const real = (process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''");
+  fs.writeFileSync(file, `#!/bin/sh\ncase "$*" in *"-update 1"*${name}) for last; do :; done; '${real}' "$@" || exit $?; size=$(wc -c < "$last"); head -c $((size / 2)) "$last" > "$last.cut" && mv "$last.cut" "$last"; exit 0;; esac\nexec '${real}' "$@"\n`, { mode: 0o755 });
+  return file;
+}
+const stills = (args, env) => spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "stills", ...args], { encoding: "utf8", timeout: 200_000, env: { ...process.env, ...env } });
+
+test("an app icon or a square logo that cannot be written, as on a full disk, fails the stills", { skip: noShell, timeout: 240_000 }, async () => {
+  // The app icon, then a brand with no app and a square logo of its own.
+  let { dir, filmFile } = plannedFolder();
+  let r = stills([filmFile, "--for", "og"], { LAUNCH_FILM_FFMPEG: cuts("icon.png") });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^launch-film: writing a picture: the picture was cut short, most often because the disk is full\n/);
+  assert.ok(!fs.existsSync(path.join(dir, "stills")));
+  const square = tmp();
+  const made = spawnSync(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=white:s=400x400", "-vf", "drawbox=x=100:y=100:w=200:h=200:color=0x5B4FE9:t=fill", "-frames:v", "1", "-update", "1", path.join(square, "logo-square.png")], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  ({ dir, filmFile } = plannedFolder((kit) => ({ ...kit, stores: [], links: [], logos: [...kit.logos, { file: path.join(square, "logo-square.png"), where: "footer", kind: "img", background: "#FFFFFF", width: 400, height: 400 }] })));
+  r = stills([filmFile, "--for", "ph"], { LAUNCH_FILM_FFMPEG: cuts("square.png") });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^launch-film: writing a picture: the picture was cut short, most often because the disk is full\n/);
+  assert.ok(!fs.existsSync(path.join(dir, "stills")));
+});
+
+test("a picture that cannot be saved is named as the new one, with the reason", { skip, timeout: 240_000 }, async () => {
+  const { dir, filmFile } = plannedFolder();
+  const stub = path.join(tmp(), "stub.js");
+  fs.writeFileSync(stub, `const fs = require("fs");
+const real = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (String(file).endsWith(".raw.png")) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+  return real(file, ...rest);
+};
+`);
+  const r = stills([filmFile, "--for", "og"], { NODE_OPTIONS: `--require ${stub}` });
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr.split("\n").slice(-3, -1).join("\n"), `launch-film: making the new ${path.join(dir, "stills", "og.png")}: no space left on device (ENOSPC)\nlaunch-film: ${path.join(dir, "stills")} was not made.`);
+});
