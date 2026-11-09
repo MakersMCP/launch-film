@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { onPath } = require("./chrome");
-const { track } = require("./out");
+const { track, tempDir, tempEnv, release } = require("./out");
 
 // ─── colour ────────────────────────────────────────────────────────────────
 const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
@@ -71,10 +71,13 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
 }
 
 // easybrandkit runs a Chrome of its own, which a stop or a failure of the
-// run ends with it (out.js, watch).
+// run ends with it (out.js, watch). On Linux both get a temp folder of the
+// run's own, so what they leave goes with it.
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
-    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"] }), { watch: true });
+    const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
+    const done = () => temp && release(temp);
+    const child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"], env: tempEnv(temp) }), { watch: true });
     let out = "";
     child.stdout.on("data", (d) => {
       out = (out + d).slice(-3000);
@@ -84,8 +87,12 @@ function runOnce([cmd, ...pre], url, dir, log) {
       out = (out + d).slice(-3000);
       log(String(d));
     });
-    child.on("error", (e) => reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`)));
+    child.on("error", (e) => {
+      done();
+      reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
+    });
     child.on("close", (code) => {
+      done();
       if (code === 0 && fs.existsSync(path.join(dir, "brand.json"))) return resolve(path.join(dir, "brand.json"));
       const said = out.trim().split("\n").filter(Boolean).slice(-2).join(" ");
       // npm's own error lines mean npx could not fetch easybrandkit (no such

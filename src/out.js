@@ -718,6 +718,18 @@ function tempDir(prefix, before = null) {
   return dir;
 }
 
+// The environment for a program whose own temp files should go with the
+// temp folder `folder` of this run's. Chrome makes folders of its own in
+// TMPDIR, and one stopped as it starts leaves some there that nothing ties
+// to it, as does a program that is stopped before it has tidied up. On Linux
+// only, and when Chrome's socket there still fits the 107 characters a
+// socket's path may have: on a Mac that path is tighter, and elsewhere there
+// is no TMPDIR to set.
+const SOCKET_PATH = "/com.google.Chrome.XXXXXX/SingletonSocket";
+function tempEnv(folder) {
+  return folder && process.platform === "linux" && folder.length + SOCKET_PATH.length <= 107 ? { ...process.env, TMPDIR: folder } : process.env;
+}
+
 // The temp folders of a kind that runs killed outright left: this user's
 // own, whose process is gone or has this process's pid now. A folder
 // another user put in a shared temp folder under such a name is left alone,
@@ -815,8 +827,10 @@ function usersOf(profile) {
   return pids;
 }
 
-// Whether a folder is right in the system's temp folder.
+// Whether a folder is right in the system's temp folder, or in a temp folder
+// of this run's that a program was given as its own (tempEnv).
 function inTemp(folder) {
+  if (temps.has(path.dirname(folder))) return true;
   try {
     return fs.realpathSync(path.dirname(folder)) === fs.realpathSync(os.tmpdir());
   } catch {
@@ -1148,5 +1162,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
+module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
   socketFolder, closeProfile, STALE, LOCK };

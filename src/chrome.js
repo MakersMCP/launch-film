@@ -16,7 +16,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
-const { tempDir, release, track, socketFolder, closeProfile, save } = require("./out");
+const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save } = require("./out");
 
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
@@ -77,7 +77,10 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
     "--remote-debugging-pipe", `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "about:blank",
   ];
-  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }));
+  // A Chrome with network access, stopped as it starts, leaves a
+  // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
+  // its profile as TMPDIR, that goes with the profile.
+  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: network ? tempEnv(profile) : process.env }));
   let stderr = "";
   child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
   const pending = new Map();

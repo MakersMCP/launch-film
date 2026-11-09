@@ -3,9 +3,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { easybrandkitCommands, runEasybrandkit } = require("../src/brand");
 
-const { tmp } = require("./tmp");
+const { tmp, shortTmp } = require("./tmp");
 
 // Runs fn with PATH set to dir alone and LAUNCH_FILM_EASYBRANDKIT unset.
 async function withPath(dir, fn) {
@@ -80,4 +81,33 @@ test("an easybrandkit that writes brand.json resolves its path", async () => {
   const fake = path.join(dir, "easybrandkit.js");
   fs.writeFileSync(fake, 'const fs = require("fs"); const out = process.argv[process.argv.indexOf("--out") + 1]; fs.mkdirSync(out, { recursive: true }); fs.writeFileSync(out + "/brand.json", "{}");');
   assert.equal(await runEasybrandkit("https://example.com", path.join(dir, "out"), { command: fake }), path.join(dir, "out", "brand.json"));
+});
+
+test("easybrandkit's temp files go with a temp folder of the run's own, on Linux", { skip: process.platform !== "linux" && "the temp folder is left as it is elsewhere" }, async () => {
+  // It leaves a folder in its temp folder, as a Chrome stopped as it starts
+  // does.
+  const temp = shortTmp();
+  const dir = tmp();
+  const fake = path.join(dir, "easybrandkit.js");
+  fs.writeFileSync(fake, `const fs = require("fs"); const os = require("os"); const path = require("path");
+fs.mkdirSync(path.join(os.tmpdir(), "com.google.Chrome.chrome_chrome_url_fetcher_.AbCdEf"));
+fs.writeFileSync(process.env.SAW, os.tmpdir());
+const out = process.argv[process.argv.indexOf("--out") + 1];
+fs.mkdirSync(out, { recursive: true });
+fs.writeFileSync(out + "/brand.json", "{}");`);
+  const saw = path.join(dir, "saw");
+  const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
+  const r = spawnSync(process.execPath, ["-e", `require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: process.argv[2] }).then((f) => process.stdout.write(f));`, path.join(dir, "out"), fake],
+    { encoding: "utf8", env: { ...process.env, TMPDIR: temp, SAW: saw } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(path.basename(fs.readFileSync(saw, "utf8")), /^launch-film-brand-\d+-/);
+  assert.deepEqual(fs.readdirSync(temp), [], "nothing is left in the temp folder");
+});
+
+test("a temp folder too long for Chrome's socket is not given", { skip: process.platform !== "linux" && "the temp folder is left as it is elsewhere" }, () => {
+  const { tempEnv } = require("../src/out");
+  const room = 107 - "/com.google.Chrome.XXXXXX/SingletonSocket".length;
+  assert.equal(tempEnv("/".padEnd(room, "x")).TMPDIR, "/".padEnd(room, "x"));
+  assert.equal(tempEnv("/".padEnd(room + 1, "x")).TMPDIR, process.env.TMPDIR);
+  assert.equal(tempEnv(null).TMPDIR, process.env.TMPDIR);
 });

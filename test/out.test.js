@@ -10,7 +10,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const out = require("../src/out");
 
-const { tmp } = require("./tmp");
+const { tmp, shortTmp } = require("./tmp");
 const noSignals = process.platform === "win32" && "POSIX signals";
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -1191,6 +1191,28 @@ test("a stop as Chrome starts to close removes the socket folder Chrome made", {
   child.kill("SIGINT");
   assert.equal(await ended, "SIGINT");
   assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
+});
+
+test("a Chrome with network access keeps its temp files in its profile, and they go with it", { skip: process.platform !== "linux" && "the temp folder is left as it is elsewhere" }, async () => {
+  // A stand-in that leaves in its TMPDIR what a real one stopped as it
+  // starts leaves there, with nothing to tie it to that Chrome.
+  const temp = shortTmp();
+  const dir = tmp();
+  const file = standInChrome(dir);
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace('let buf = "";', 'fs.mkdirSync(path.join(process.env.TMPDIR, "com.google.Chrome.chrome_chrome_url_fetcher_.AbCdEf"));\nlet buf = "";'));
+  const script = `
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
+out.listen();
+launch({ W: 100, H: 100, network: true }).then(() => process.stdout.write("up"));
+setInterval(() => {}, 1000);
+`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: file } });
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  child.kill("SIGTERM");
+  assert.equal(await ended, "SIGTERM");
+  assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor anything its Chrome made is left");
 });
 
 test("a run removes the temp folders of runs that are gone", () => {

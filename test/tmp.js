@@ -13,4 +13,17 @@ after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retry
 // A new folder for a test.
 const tmp = (prefix = "t-") => fs.mkdtempSync(path.join(root, prefix));
 
-module.exports = { tmp };
+// A new folder whose path is short enough to hold a temp folder of a run's
+// with Chrome's socket under it (out.js, tempEnv), for a test to give as
+// TMPDIR. It goes when the tests have run too.
+const shorts = [];
+after(() => {
+  for (const dir of shorts) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+function shortTmp() {
+  const dir = fs.mkdtempSync("/tmp/lf-");
+  shorts.push(dir);
+  return dir;
+}
+
+module.exports = { tmp, shortTmp };
