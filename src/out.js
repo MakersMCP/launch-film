@@ -157,12 +157,13 @@ const ESCAPES = { "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
 const plain = (name) => String(name).replace(/[\\\p{Cc}\u2028\u2029]/gu, (c) => ESCAPES[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 // Whether it is gone: a folder another program is still writing to, or
-// holds open (on Windows), may stay.
-function remove(at) {
+// holds open (on Windows), may stay, and why(err) is told the reason.
+function remove(at, why = () => {}) {
   try {
     fs.rmSync(at, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     return true;
-  } catch {
+  } catch (err) {
+    why(err);
     return false;
   }
 }
@@ -645,10 +646,43 @@ function keepFolder(folder, files, what) {
   }
 }
 
+// Makes a folder and the folders in it writable by their owner, none through
+// a link. What is not this user's to change stays as it is.
+function makeWritable(folder) {
+  try {
+    const s = lstat(folder);
+    if (!s || !s.isDirectory()) return;
+    fs.chmodSync(folder, s.mode | 0o700);
+    for (const name of fs.readdirSync(folder)) makeWritable(path.join(folder, name));
+  } catch {
+    // The removal says why.
+  }
+}
+
+// Removes a part folder or a folder of earlier files once its run has ended
+// well. A folder the user made read-only inside one replaced whole (brand/)
+// stops the removal, so the folders among the earlier files are made writable
+// and it is tried again. One that still stays is kept like earlier files that
+// could not be put back, and said, so no later run takes it for what a killed
+// run left.
+function tidy(folder) {
+  if (remove(folder)) return;
+  makeWritable(path.join(folder, ".old"));
+  let why = "";
+  if (remove(folder, (err) => (why = reason(err)))) return;
+  const home = shown(path.dirname(folder));
+  const files = earlier(folder);
+  if (!files.length) {
+    found.push(`${folder}, a folder of this run's in ${home}, could not be removed: ${why}`);
+    return;
+  }
+  const kept = keepFolder(folder, files, `launch-film replaced these earlier files in ${home} and could not remove them (${why})`);
+  found.push(`the earlier files this run replaced in ${home} could not be removed (${why}), so they are in ${kept}; launch-film-kept.txt there lists them`);
+}
+
 function finish(run, names) {
   ended(run);
-  remove(run.part);
-  for (const stage of run.stages) remove(stage);
+  for (const folder of [run.part, ...run.stages]) tidy(folder);
   // A run inside another's part folder: its outputs go in with that run's,
   // and what runs killed outright left is seen to once that run has ended
   // well, so a run that fails after it leaves the folder as it was.

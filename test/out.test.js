@@ -88,6 +88,65 @@ test("a run that fails leaves the folder exactly as it was", async () => {
   assert.deepEqual(snap(dir), before);
 });
 
+test("an earlier folder replaced whole goes, with a folder in it the user made read-only", { skip: (process.platform === "win32" || process.getuid() === 0) && "a folder its user may not write in" }, async () => {
+  const dir = tmp();
+  write(dir, { "brand/brand.json": "old kit", "brand/notes/a.txt": "mine", "brand/notes/deep/b.txt": "mine too", "film.mp4": "old film" });
+  fs.chmodSync(path.join(dir, "brand", "notes", "deep"), 0o000);
+  fs.chmodSync(path.join(dir, "brand", "notes"), 0o555);
+  try {
+    await out.within(dir, async (run) => make(run));
+    assert.deepEqual(snap(dir), { "brand/": "folder", "brand/brand.json": "new kit", "film.mp4": "new film", "frames/": "folder", "frames/clip-1-a.jpg": "new 1" });
+    assert.deepEqual(out.noticed(), []);
+  } finally {
+    // So a test that fails does not stop its folder from going.
+    spawnSync("chmod", ["-R", "u+rwx", dir]);
+  }
+});
+
+// Runs fn with every removal of a folder named as a part folder refused.
+async function withPartStuck(fn) {
+  const real = fs.rmSync;
+  fs.rmSync = (at, ...rest) => {
+    if (path.basename(String(at)).startsWith(".launch-film-part-")) throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${at}'`), { code: "EPERM" });
+    return real(at, ...rest);
+  };
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync = real;
+  }
+}
+
+test("earlier files that still cannot be removed are kept and said, and no later run tells of a killed run", async () => {
+  const dir = tmp();
+  write(dir, { "brand/brand.json": "old kit" });
+  await withPartStuck(() => out.within(dir, async (run) => {
+    fs.mkdirSync(run.folder("brand"));
+    fs.writeFileSync(path.join(run.part, "brand", "brand.json"), "new kit");
+  }));
+  const kept = fs.readdirSync(dir).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1, fs.readdirSync(dir).join(", "));
+  const why = "operation not permitted (EPERM)";
+  assert.deepEqual(out.noticed(), [`the earlier files this run replaced in ${dir} could not be removed (${why}), so they are in ${path.join(dir, kept[0])}; launch-film-kept.txt there lists them`]);
+  const inKept = snap(path.join(dir, kept[0]));
+  assert.equal(inKept[".old/brand/brand.json"], "old kit");
+  assert.match(inKept["launch-film-kept.txt"], new RegExp(`^launch-film replaced these earlier files in ${escape(dir)} and could not remove them \\(${escape(why)}\\):\n {2}brand/brand\\.json\n`));
+  assert.equal(fs.readFileSync(path.join(dir, "brand", "brand.json"), "utf8"), "new kit");
+  // Twenty minutes on, a run that ends well there leaves it alone and says nothing of it.
+  age(path.join(dir, kept[0]));
+  await out.within(dir, async (run) => fs.writeFileSync(run.out("CHECK.md"), "a later check"));
+  assert.deepEqual(out.noticed(), []);
+  assert.ok(fs.existsSync(path.join(dir, kept[0])));
+  // With no earlier files in it, the note names the folder and says why.
+  const other = tmp();
+  let part = null;
+  await withPartStuck(() => out.within(other, async (run) => {
+    part = run.part;
+    fs.writeFileSync(run.out("CHECK.md"), "a check");
+  }));
+  assert.deepEqual(out.noticed(), [`${part}, a folder of this run's in ${other}, could not be removed: ${why}`]);
+});
+
 // fs.renameSync failing on the calls given, as a file held open would.
 async function withRenameFailing(calls, fn) {
   const real = fs.renameSync;
