@@ -76,7 +76,7 @@ function scriptOfNpx() {
   return script && fs.existsSync(script) ? [process.execPath, script] : ["npx.cmd"];
 }
 
-const HOW = "Install easybrandkit (npm install -g easybrandkit), or point LAUNCH_FILM_EASYBRANDKIT (or --easybrandkit) at its scripts/easybrandkit.js, or give a kit you already have with --brand.";
+const HOW = "Install easybrandkit (npm install -g easybrandkit), or point LAUNCH_FILM_EASYBRANDKIT (or --easybrandkit) at its skills/easybrandkit/scripts/easybrandkit.js, or give a kit you already have with --brand.";
 
 // Runs easybrandkit for a URL into a folder. Resolves the path of brand.json.
 // The next command is tried only when npx could not fetch easybrandkit; when

@@ -35,9 +35,9 @@ Options:
   --words <file>       Use a words.json you already have instead of reading
                        the page again.
   --easybrandkit <cmd> The easybrandkit to run: a command, or the path of
-                       its scripts/easybrandkit.js (default:
-                       LAUNCH_FILM_EASYBRANDKIT, an easybrandkit on PATH,
-                       else easybrandkit with npx).
+                       its skills/easybrandkit/scripts/easybrandkit.js
+                       (default: LAUNCH_FILM_EASYBRANDKIT, an easybrandkit on
+                       PATH, else easybrandkit with npx).
                        Install it with npm install -g easybrandkit.
   --look <name>        launch, aurora, gridline, pop or journal (default: picked
                        from the brand).

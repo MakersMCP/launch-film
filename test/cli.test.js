@@ -645,6 +645,15 @@ test("a word that starts with a dash and an argument past the ones a command rea
   assert.doesNotMatch(cli("check", path.join(dir, "no-such.mp4"), "--lufs", "-14").stderr, /needs a value|is not an option/);
 });
 
+test("the texts name easybrandkit's script as its package has it, and --help lists --verbose", () => {
+  const help = cli("--help").stdout;
+  assert.match(help, /--verbose/);
+  for (const text of [help, fs.readFileSync(path.join(root, "src", "brand.js"), "utf8"), fs.readFileSync(path.join(root, "skills", "launch-film", "SKILL.md"), "utf8")]) {
+    assert.match(text, /skills\/easybrandkit\/scripts\/easybrandkit\.js/);
+    assert.doesNotMatch(text, /(?<!skills\/easybrandkit\/)scripts\/easybrandkit\.js/);
+  }
+});
+
 test("every option a command takes gets past the refusal, also as makersmcp gives them", () => {
   const dir = tmp();
   const none = path.join(dir, "none.json");

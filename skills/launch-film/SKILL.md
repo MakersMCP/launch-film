@@ -33,7 +33,7 @@ Then read, in this order:
 
 If the brand looks wrong (a cookie wall, a login page, no logo), tell the user what you got and ask for the logo file or the right page. Do not go on with a wrong brand. If the site answered easybrandkit with a bot check, there is no kit: ask the user for the logo file and the main colors instead of guessing.
 
-If launch-film says easybrandkit could not be fetched, npx could not download it (no network, or a registry without it): tell the user they can install it with `npm install -g easybrandkit`, and use `--easybrandkit <path to easybrandkit's scripts/easybrandkit.js>` when they have a copy.
+If launch-film says easybrandkit could not be fetched, npx could not download it (no network, or a registry without it): tell the user they can install it with `npm install -g easybrandkit`, and use `--easybrandkit <path to easybrandkit's skills/easybrandkit/scripts/easybrandkit.js>` when they have a copy.
 
 ## 2. Pick a look
 
@@ -84,7 +84,7 @@ npx -y launch-film@0.2.1 render film/<name>/film.json
 
 Clips render two at a time; a 30 second film takes one to three minutes. The film is `film/<name>/film.mp4`. If a clip fails, the message names it: fix film.json and render again.
 
-A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again. An earlier file the user made read-only is not replaced: the run names it and stops. A frames, stills or check folder that is a link takes the new files in the folder it leads to.
+A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again. An earlier file the user made read-only is not replaced: the run names it and stops. That does not hold inside `brand/`: a plan replaces that folder whole, so a plan given a kit with `--brand` takes read-only files there away with the rest. A frames, stills or check folder that is a link takes the new files in the folder it leads to. An earlier file that is a link is replaced by a plain file, and what it led to is left alone; a new file has the mode a new file gets on that system, not the one the earlier file was given.
 
 ## 5. Check the film before you hand it over
 
