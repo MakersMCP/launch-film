@@ -683,11 +683,18 @@ test("a lock whose pid is in use again is taken over: this process's own, a proc
   write(dir, { "film.mp4": "old film" });
   leftLock(dir, process.pid);
   await quick(dir, "this process's pid");
-  // Its pid is that of a process that runs, but no commit takes a minute.
+  // Its pid is that of a process that runs and started before it, but no
+  // commit takes a minute: the clock is moved on past that.
   dir = tmp();
   write(dir, { "film.mp4": "old film" });
-  leftLock(dir, process.ppid, 2 * 60 * 1000);
-  await quick(dir, "a lock two minutes old");
+  leftLock(dir, process.ppid);
+  const now = Date.now;
+  Date.now = () => now() + 61 * 1000;
+  try {
+    await quick(dir, "a lock a minute old");
+  } finally {
+    Date.now = now;
+  }
   if (!fs.existsSync("/proc/self/stat")) return t.skip("no /proc to tell when a process started");
   // A process started after the lock was made has the pid now.
   const later = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
