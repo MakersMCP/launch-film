@@ -79,9 +79,10 @@ npx launch-film looks | types | icons <word> | doctor
   --easybrandkit <cmd>  the easybrandkit to run (default: LAUNCH_FILM_EASYBRANDKIT, one on PATH, else easybrandkit with npx)
   --no-music, --no-sfx  plan the film without the music bed or the sound effects (a render reads "music" and "sfx" in film.json)
   --jobs <n>, --keep
+  --verbose             also print what easybrandkit says as it works
 ```
 
-An option a command does not take is refused, by name. `launch-film --help` lists what each one takes.
+A command refuses what it would not read, by name, before anything runs: an option it does not take (the refusal lists the ones it does), an option with no value after it, and an argument past the ones it reads.
 
 A run leaves this behind:
 

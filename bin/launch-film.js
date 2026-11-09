@@ -27,7 +27,9 @@ Usage:
 
 Options:
   --out <dir>          Folder for the brand, film.json and the film
-                       (default: ./launch-film-<site>).
+                       (default: ./launch-film-<site>). With frames, the
+                       folder for the stills (default: frames/ next to the
+                       film).
   --brand <path>       Use a kit you already have: an easybrandkit folder
                        or its brand.json.
   --words <file>       Use a words.json you already have instead of reading
@@ -52,6 +54,8 @@ Options:
   --no-sfx             Plan the film without the sound effects (a render
                        plays what "sfx" in film.json says).
   --keep               Keep the work files (each clip's MP4).
+  --verbose            Also print what easybrandkit says as it works (plan,
+                       the one-go command and stills <url>).
   --output <file>      Where render writes the film (default: film.mp4 next
                        to film.json).
 
@@ -92,36 +96,60 @@ const OPTIONS = {
   doctor: [],
 };
 const SWITCHES = new Set(["keep", "verbose"]);
+// What each command reads besides its options. An argument past that is
+// refused by name, as an option it does not take is. The address of the
+// one-go command stands where a command's name would.
+const ARGUMENTS = { "<url>": "one address", plan: "one address", render: "one film.json", frames: "one film", check: "one film", stills: "one address or film.json",
+  "stills <film.json>": "one address or film.json", looks: "no arguments", types: "no arguments", icons: "one word", doctor: "no arguments" };
 
+// given holds the options as they are written, bare the options that take a
+// value and came without one.
 function parseArgs(argv) {
-  const out = { _: [], flags: {}, given: [] };
+  const out = { _: [], flags: {}, given: [], bare: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") out.flags.help = true;
     else if (a === "--version" || a === "-v") out.flags.version = true;
     else if (/^--no-/.test(a)) {
       out.flags[a.slice(5)] = false;
-      out.given.push(a.slice(2));
+      out.given.push(a);
     } else if (a.startsWith("--")) {
       // The value is all that follows the first =: a folder's name can
-      // hold one.
+      // hold one. Without an =, the next word is the value unless it is
+      // written as an option; one with a single dash is a value (--lufs -14).
       const eq = a.indexOf("=");
       const key = a.slice(2, eq < 0 ? undefined : eq);
-      out.given.push(key);
+      out.given.push(`--${key}`);
       if (SWITCHES.has(key)) out.flags[key] = true;
-      else out.flags[key] = eq < 0 ? argv[++i] : a.slice(eq + 1);
-    } else out._.push(a);
+      else {
+        const value = eq >= 0 ? a.slice(eq + 1) : String(argv[i + 1] || "").startsWith("--") ? "" : argv[++i];
+        if (value) out.flags[key] = value;
+        else out.bare.push(key);
+      }
+    } else if (a.startsWith("-")) out.given.push(a);
+    else out._.push(a);
   }
   return out;
 }
 
+// A list as it is said: "a, b and c".
+const listed = (items) => `${items.slice(0, -1).join(", ")}${items.length > 1 ? " and " : ""}${items[items.length - 1]}`;
+
 // Why an option is not one of `command`'s, or null when all of them are.
 function notTaken(given, command) {
-  const key = given.find((k) => !OPTIONS[command].includes(k));
+  const key = given.find((k) => !OPTIONS[command].includes(k.replace(/^--/, "")));
   if (key === undefined) return null;
-  if (key === "music") return '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute';
-  if (key === "no-music" || key === "no-sfx") return `--${key} is for a plan: a render plays what "${key.slice(3)}" in film.json says. Set it to false there and render again`;
-  return `--${key} is not an option of launch-film ${command}. Run launch-film --help.`;
+  if (key === "--music") return '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute';
+  if (key === "--no-music" || key === "--no-sfx") return `${key} is for a plan: a render plays what "${key.slice(5)}" in film.json says. Set it to false there and render again`;
+  return `${key} is not an option of launch-film ${command}, which takes ${OPTIONS[command].length ? listed(OPTIONS[command].map((k) => `--${k}`)) : "no options"}.`;
+}
+
+// Why an argument past the ones a command reads is refused, or null. A first
+// word that is neither a command nor an address is told of as that, below.
+function oneTooMany(command, takes, rest) {
+  const extra = rest[takes === "<url>" || ARGUMENTS[takes] === "no arguments" ? 0 : 1];
+  if (extra === undefined || (takes === "<url>" && !normaliseUrl(command))) return null;
+  return `launch-film ${takes} takes ${ARGUMENTS[takes]}, so "${extra}" would not be read.`;
 }
 
 const say = (text) => process.stderr.write(text);
@@ -287,20 +315,22 @@ async function frames(file, flags) {
 }
 
 async function main() {
-  const { _: args, flags, given } = parseArgs(process.argv.slice(2));
+  const { _: args, flags, given, bare } = parseArgs(process.argv.slice(2));
   // Ctrl-C or a signal stops the run and leaves its folder as it was.
   listen();
   if (flags.version) {
     process.stdout.write(`${require("../package.json").version}\n`);
     return;
   }
-  if (flags.help || !args.length) {
+  if (flags.help || (!args.length && !given.some((k) => !k.startsWith("--")))) {
     process.stdout.write(HELP);
     return;
   }
   const [command, ...rest] = args;
   const takes = command === "stills" && /\.json$/i.test(rest[0] || "") ? "stills <film.json>" : Object.hasOwn(OPTIONS, command) ? command : "<url>";
-  const refused = notTaken(given, takes);
+  // What a command would not read is refused before anything runs: dropped
+  // without a word, it reads as if it had been done.
+  const refused = notTaken(given, takes) || (bare.length ? `--${bare[0]} needs a value` : null) || oneTooMany(command, takes, rest);
   if (refused) return fail(refused);
   if (flags.look !== undefined && OPTIONS[takes].includes("look")) {
     const { LOOKS } = require("../src/motion");

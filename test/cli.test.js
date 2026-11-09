@@ -507,24 +507,31 @@ test("an option's value is all that follows its first =", () => {
   assert.equal(fs.readFileSync(path.join(base, "my", "film.json"), "utf8"), "another film's plan");
 });
 
+// What each command takes, as its refusal lists it.
+const TAKES = {
+  check: "--out, --expect, --seconds, --lufs, --cues, --cuts and --allow",
+  plan: "--out, --brand, --words, --easybrandkit, --look, --seconds, --aspect, --no-music, --no-sfx and --verbose",
+  url: "--out, --brand, --words, --easybrandkit, --look, --seconds, --aspect, --no-music, --no-sfx, --verbose, --jobs and --keep",
+};
+
 test("an option a command does not take is refused by name, and nothing is made", () => {
   const dir = tmp();
   const film = path.join(dir, "film.json");
   const url = "https://acme-notes.example";
   const out = path.join(dir, "out");
   for (const [args, said] of [
-    [["check", "film.mp4", "--outt", out], "--outt is not an option of launch-film check. Run launch-film --help."],
+    [["check", "film.mp4", "--outt", out], `--outt is not an option of launch-film check, which takes ${TAKES.check}.`],
     [["render", film, "--music", "track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
     [["plan", url, "--out", out, "--music=track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
     [["render", film, "--no-music"], '--no-music is for a plan: a render plays what "music" in film.json says. Set it to false there and render again'],
     [["render", film, "--no-sfx"], '--no-sfx is for a plan: a render plays what "sfx" in film.json says. Set it to false there and render again'],
-    [["render", film, "--out", out], "--out is not an option of launch-film render. Run launch-film --help."],
-    [["plan", url, "--out", out, "--jobs", "1"], "--jobs is not an option of launch-film plan. Run launch-film --help."],
-    [["frames", "film.mp4", "--for", "og"], "--for is not an option of launch-film frames. Run launch-film --help."],
-    [["stills", film, "--look", "pop"], "--look is not an option of launch-film stills <film.json>. Run launch-film --help."],
-    [[url, "--out", out, "--output", path.join(dir, "movie.mp4")], "--output is not an option of launch-film <url>. Run launch-film --help."],
-    [["looks", "--everything"], "--everything is not an option of launch-film looks. Run launch-film --help."],
-    [["plan", url, "--out", out, "--__proto__", "x"], "--__proto__ is not an option of launch-film plan. Run launch-film --help."],
+    [["render", film, "--out", out], "--out is not an option of launch-film render, which takes --jobs, --keep and --output."],
+    [["plan", url, "--out", out, "--jobs", "1"], `--jobs is not an option of launch-film plan, which takes ${TAKES.plan}.`],
+    [["frames", "film.mp4", "--for", "og"], "--for is not an option of launch-film frames, which takes --out."],
+    [["stills", film, "--look", "pop"], "--look is not an option of launch-film stills <film.json>, which takes --for and --easybrandkit."],
+    [[url, "--out", out, "--output", path.join(dir, "movie.mp4")], `--output is not an option of launch-film <url>, which takes ${TAKES.url}.`],
+    [["looks", "--everything"], "--everything is not an option of launch-film looks, which takes no options."],
+    [["plan", url, "--out", out, "--__proto__", "x"], `--__proto__ is not an option of launch-film plan, which takes ${TAKES.plan}.`],
   ]) {
     const r = cli(...args);
     assert.equal(r.status, 1, args.join(" "));
@@ -533,10 +540,76 @@ test("an option a command does not take is refused by name, and nothing is made"
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 
+test("an option given without its value is refused by name, and nothing is made", () => {
+  const dir = tmp();
+  const film = path.join(dir, "film.json");
+  const url = "https://acme-notes.example";
+  const out = path.join(dir, "out");
+  const words = path.join(fixture, "words.json");
+  for (const [args, option] of [
+    [["check", "a.mp4", "--out", "--lufs", "-14"], "--out"],
+    [["check", "a.mp4", "--seconds"], "--seconds"],
+    [["check", "a.mp4", "--out="], "--out"],
+    [["check", "a.mp4", "--out", ""], "--out"],
+    [["plan", url, "--out", out, "--brand", "--words", words], "--brand"],
+    [["plan", url, "--out", out, "--brand=", "--words="], "--brand"],
+    [["plan", url, "--look"], "--look"],
+    [["render", film, "--jobs"], "--jobs"],
+    [["render", film, "--output="], "--output"],
+    [["frames", "a.mp4", "--out"], "--out"],
+    [["stills", film, "--for"], "--for"],
+    [[url, "--aspect", "--no-sfx"], "--aspect"],
+  ]) {
+    const r = cli(...args);
+    assert.equal(r.status, 1, args.join(" "));
+    assert.equal(r.stderr, `launch-film: ${option} needs a value\n`, args.join(" "));
+  }
+  assert.deepEqual(fs.readdirSync(dir), []);
+  // What a command does not take is told of as that first.
+  assert.equal(cli("render", film, "--out").stderr, "launch-film: --out is not an option of launch-film render, which takes --jobs, --keep and --output.\n");
+  // A value given with = can start with two dashes.
+  assert.match(cli("check", path.join(dir, "no-such.mp4"), "--out=--a-folder").stderr, /no-such\.mp4/);
+});
+
+test("a word that starts with a dash and an argument past the ones a command reads are refused by name, and nothing is made", () => {
+  const dir = tmp();
+  const film = path.join(dir, "film.json");
+  const other = path.join(dir, "other");
+  const url = "https://acme-notes.example";
+  for (const [args, said] of [
+    [["check", "a.mp4", "-o", "x"], `-o is not an option of launch-film check, which takes ${TAKES.check}.`],
+    [["plan", url, "-x"], `-x is not an option of launch-film plan, which takes ${TAKES.plan}.`],
+    [["-x"], `-x is not an option of launch-film <url>, which takes ${TAKES.url}.`],
+    [[url, "-"], `- is not an option of launch-film <url>, which takes ${TAKES.url}.`],
+    [["check", "a.mp4", other, "--out", path.join(dir, "out")], `launch-film check takes one film, so "${other}" would not be read.`],
+    [["render", film, other], `launch-film render takes one film.json, so "${other}" would not be read.`],
+    [["frames", "a.mp4", other], `launch-film frames takes one film, so "${other}" would not be read.`],
+    [["stills", film, other], `launch-film stills <film.json> takes one address or film.json, so "${other}" would not be read.`],
+    [["stills", url, other], `launch-film stills takes one address or film.json, so "${other}" would not be read.`],
+    [["plan", url, other], `launch-film plan takes one address, so "${other}" would not be read.`],
+    [[url, other], `launch-film <url> takes one address, so "${other}" would not be read.`],
+    [["looks", other], `launch-film looks takes no arguments, so "${other}" would not be read.`],
+    [["types", other], `launch-film types takes no arguments, so "${other}" would not be read.`],
+    [["doctor", other], `launch-film doctor takes no arguments, so "${other}" would not be read.`],
+    [["icons", "rocket", "launch"], 'launch-film icons takes one word, so "launch" would not be read.'],
+  ]) {
+    const r = cli(...args);
+    assert.equal(r.status, 1, args.join(" "));
+    assert.equal(r.stderr, `launch-film: ${said}\n`, args.join(" "));
+  }
+  assert.deepEqual(fs.readdirSync(dir), []);
+  // A first word that is neither a command nor an address is told of as that.
+  assert.equal(cli("rendr", film).stderr, 'launch-film: "rendr" is not a command or an address. Run launch-film --help.\n');
+  // -h and -v are options of every command, and a value can start with a dash.
+  assert.match(cli("-h").stdout, /^launch-film: a 20-40 second/);
+  assert.equal(cli("-v").stdout, `${require("../package.json").version}\n`);
+  assert.doesNotMatch(cli("check", path.join(dir, "no-such.mp4"), "--lufs", "-14").stderr, /needs a value|is not an option/);
+});
+
 test("every option a command takes gets past the refusal, also as makersmcp gives them", () => {
   const dir = tmp();
   const none = path.join(dir, "none.json");
-  const notAnOption = /is not an option|is for a plan/;
+  const notAnOption = /is not an option|is for a plan|needs a value|would not be read/;
   const url = "https://acme-notes.example";
   const kit = path.join(dir, "no-such-kit");
   const plans = ["--out", path.join(dir, "out"), "--brand", kit, "--words", path.join(fixture, "words.json"), "--easybrandkit", "ebk", "--look", "pop", "--seconds", "20", "--aspect", "9:16", "--no-music", "--no-sfx", "--verbose"];
