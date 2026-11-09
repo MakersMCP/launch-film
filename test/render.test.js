@@ -198,6 +198,46 @@ function standIn(line) {
   return file;
 }
 
+// ffmpeg 4.4 on a full disk writes as much of a picture as fits and exits
+// with 0. This stand-in writes each picture, then cuts it to half.
+const CUTS_PICTURES = `case "$*" in *"-update 1"*) for last; do :; done; '${(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''")}' "$@" || exit $?; ` +
+  `size=$(wc -c < "$last"); head -c $((size / 2)) "$last" > "$last.cut" && mv "$last.cut" "$last"; exit 0;; esac`;
+
+test("a clip whose picture ffmpeg cuts short leaves out the blurred ground, and fails for the phone's screen and the logo", { skip: process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : !available() && "ffmpeg not found" }, () => {
+  // Each clip's page is made as a render makes it, with the stand-in: the
+  // CLI reads LAUNCH_FILM_FFMPEG once, as it starts, so in a process of its
+  // own. The logo's mark cut short is the disk's fault, not the logo's: no
+  // other logo is tried for it.
+  const dir = filmFolder({ clips: [
+    { kind: "screen", seconds: 2.5, image: "brand/screenshot-1.png", mode: "pan" },
+    { kind: "phone", seconds: 2.5, image: "brand/appstore-1.png" },
+    { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" },
+  ] });
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const { loadFilm, buildClip, brandColours } = require(${JSON.stringify(path.join(__dirname, "..", "src", "film.js"))});
+const loaded = loadFilm(process.argv[1]);
+const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", weight: { head: 700, body: 500 } };
+(async () => {
+  const said = [];
+  for (const clip of loaded.clips) {
+    clip.render = clip.seconds;
+    const work = fs.mkdtempSync(path.join(process.argv[2], "work-"));
+    const ctx = { look: "launch", port: false, fonts, colours: brandColours(loaded.brand), work, lang: "", brand: loaded.brand, notes: [] };
+    said.push(await buildClip(clip, ctx).then((page) => ({ files: Object.keys(page.files), soft: page.html.includes("soft.jpg") }), (err) => ({ error: err.message })));
+  }
+  process.stdout.write(JSON.stringify(said));
+})();
+`;
+  const r = spawnSync(process.execPath, ["-e", script, path.join(dir, "film.json"), tmp()], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: standIn(CUTS_PICTURES) } });
+  assert.equal(r.status, 0, r.stderr);
+  const [screen, phone, logo] = JSON.parse(r.stdout);
+  assert.deepEqual(screen, { files: ["capture.png"], soft: false });
+  assert.deepEqual(phone, { error: "clip 2: the picture was cut short, most often because the disk is full" });
+  assert.deepEqual(logo, { error: "writing a picture: the picture was cut short, most often because the disk is full" });
+});
+
 test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);

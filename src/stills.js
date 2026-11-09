@@ -104,8 +104,9 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   if (brand && brand.appIcon) {
     try {
       icon = await prepareIcon(brand.appIcon.file, path.join(work, "icon.png"));
-    } catch {
-      // The mark serves.
+    } catch (err) {
+      // The mark serves, when the icon is what could not be used.
+      if (!err.refused) throw err;
     }
   }
   // The square thumbnail's mark: the app's icon, else a square logo
@@ -118,8 +119,9 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
     try {
       square = await prepareLogo(l.file, path.join(work, "square.png"));
       break;
-    } catch {
-      // The next one.
+    } catch (err) {
+      // The next one, when this capture is what could not be used.
+      if (!err.refused) throw err;
     }
   }
 

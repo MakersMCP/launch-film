@@ -229,7 +229,10 @@ async function buildClip(clip, ctx) {
 // other logo captures, else its app icon. A capture that cannot close (cut
 // off, too small, not a logo) is passed over with a note. Returns the
 // prepared mark ({ file, w, h, ground, icon }), or { refused } when none
-// would do.
+// would do. A failure that is not the capture's (a full disk where the mark
+// is written, an ffmpeg the system stopped) fails the run instead: it says
+// nothing about the capture, and passed over for it, the film closed on
+// another logo.
 async function markFor({ logoFile = null, iconFile = null, brand = null, out, portrait = false, notes = [], what }) {
   const tries = iconFile ? [{ icon: iconFile }] : [...(logoFile ? [{ logo: logoFile }] : []),
     ...(brand ? brand.logos.map((l) => ({ logo: l.file })).filter((t) => t.logo !== logoFile) : []),
@@ -241,6 +244,7 @@ async function markFor({ logoFile = null, iconFile = null, brand = null, out, po
       if (refused.length) notes.push(`${what} uses ${path.basename(t.icon || t.logo)}: ${refused.join("; ")}.`);
       return mark;
     } catch (err) {
+      if (!err.refused) throw err;
       refused.push(`${path.basename(t.icon || t.logo)} was passed over (${err.message})`);
     }
   }

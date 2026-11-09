@@ -5,9 +5,23 @@
 // recoloured. A capture is checked before it is used: one whose mark runs
 // off an edge (a header cut through the icon), one that is a photo or a
 // page, and one too small to close on sharply are refused, so the next
-// capture is tried.
+// capture is tried. Such a refusal is marked as one (refused); any other
+// failure, as a full disk where the prepared mark is written or an ffmpeg
+// the system stopped, is the run's, and no other capture is tried for it.
 
 const { readPixels, writePng } = require("./ffmpeg");
+
+const refuse = (why) => Object.assign(new Error(why), { refused: true });
+
+// A capture's pixels: one that ffmpeg cannot read as a picture is refused.
+function pixelsOf(file, max) {
+  try {
+    return readPixels(file, max);
+  } catch (err) {
+    if (err.signal) throw err;
+    throw Object.assign(err, { refused: true });
+  }
+}
 
 const hexOf = (c) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 const lumOf = (c) => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255;
@@ -97,7 +111,7 @@ function borderColour(px, sw, sh) {
 // used. A see-through capture is set on white under a dark mark and on
 // near-black under a light one first.
 async function prepareLogo(input, output, { portrait = false } = {}) {
-  const full = readPixels(input);
+  const full = pixelsOf(input);
   const { width: W0, height: H0 } = full;
   const px = Buffer.from(full.data);
   let clear = 0;
@@ -133,7 +147,7 @@ async function prepareLogo(input, output, { portrait = false } = {}) {
   }
   const bg = borderColour(small, sw, sh);
   const { box, keep, trimmed } = measure(small, sw, sh, bg);
-  if (!box) throw new Error("the picture is one colour");
+  if (!box) throw refuse("the picture is one colour");
   const [x0, y0, x1, y1] = box;
   // A mark that runs off one edge, with an empty margin on the other side,
   // is cut off (a tight crop touches both sides and passes).
@@ -143,7 +157,7 @@ async function prepareLogo(input, output, { portrait = false } = {}) {
     y1 >= sh - 2 && y0 > 0.25 * sh && "bottom",
     y0 <= 1 && y1 < 0.75 * sh && "top",
   ].find(Boolean);
-  if (off) throw new Error(`its mark runs off the ${off} edge`);
+  if (off) throw refuse(`its mark runs off the ${off} edge`);
   // A logo is drawn in a few flat colours: its eight commonest tones cover
   // most of it. A photo or a page is spread over hundreds.
   const tones = new Map();
@@ -158,11 +172,11 @@ async function prepareLogo(input, output, { portrait = false } = {}) {
     }
   }
   const common = [...tones.values()].sort((a, b) => b - a).slice(0, 8).reduce((a, b) => a + b, 0);
-  if (tones.size > 150 && common < 0.6 * marked) throw new Error("it is a photo or a page, not a logo");
+  if (tones.size > 150 && common < 0.6 * marked) throw refuse("it is a photo or a page, not a logo");
   const bw = (x1 - x0 + 1) / k;
   const bh = (y1 - y0 + 1) / k;
   const shape = Math.max(W0, H0) / Math.min(W0, H0);
-  if (Math.min(W0, H0) > 700 && shape >= 1.25 && shape <= 2.5 && bw * bh > 0.5 * W0 * H0) throw new Error("it is a screenshot of a page, not a logo");
+  if (Math.min(W0, H0) > 700 && shape >= 1.25 && shape <= 2.5 && bw * bh > 0.5 * W0 * H0) throw refuse("it is a screenshot of a page, not a logo");
   const room = Math.min((x0 - keep.x0) / k, (keep.x1 - x1) / k, (y0 - keep.y0) / k, (keep.y1 - y1) / k);
   const margin = trimmed ? Math.max(0, Math.min(Math.max(6, 0.15 * Math.min(bw, bh)), room)) : Math.max(6, 0.15 * Math.min(bw, bh));
   const cx = Math.max(0, Math.floor(x0 / k - margin));
@@ -173,7 +187,7 @@ async function prepareLogo(input, output, { portrait = false } = {}) {
   // (9:16: 70% and 14%), and at most twice its captured size.
   const [PW, PH] = portrait ? [1080, 1920] : [1920, 1080];
   const scale = Math.min(((portrait ? 0.7 : 0.42) * PW) / bw, ((portrait ? 0.14 : 0.24) * PH) / bh, 2);
-  if (Math.max(bw, bh) * scale < 0.15 * Math.min(PW, PH)) throw new Error(`its mark is too small to close on (${Math.round(bw)}x${Math.round(bh)} px)`);
+  if (Math.max(bw, bh) * scale < 0.15 * Math.min(PW, PH)) throw refuse(`its mark is too small to close on (${Math.round(bw)}x${Math.round(bh)} px)`);
   // A neutral mid-grey ground is a page dimmed by an open overlay, not the
   // brand's: the ground becomes white under a dark mark and near-black under
   // a light one.
@@ -217,9 +231,9 @@ async function prepareLogo(input, output, { portrait = false } = {}) {
 // An app's store icon for the close: square art shown whole, with rounded
 // corners drawn by the page.
 async function prepareIcon(input, output) {
-  const p = readPixels(input, 1024);
-  if (Math.abs(p.width / p.height - 1) > 0.05) throw new Error("an app icon is square");
-  if (p.width < 240) throw new Error("the icon is too small");
+  const p = pixelsOf(input, 1024);
+  if (Math.abs(p.width / p.height - 1) > 0.05) throw refuse("an app icon is square");
+  if (p.width < 240) throw refuse("the icon is too small");
   await writePng(output, p);
   return { file: output, w: 360, h: 360, ground: hexOf(borderColour(p.data, p.width, p.height)), icon: true };
 }
