@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { onPath } = require("./chrome");
-const { track, tempDir, tempEnv, release } = require("./out");
+const { track, tempDir, tempEnv, release, stopping } = require("./out");
 
 // ─── colour ────────────────────────────────────────────────────────────────
 const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
@@ -97,11 +97,14 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
 // run ends with it (out.js, watch). On Linux both get a temp folder of the
 // run's own, so what they leave goes with it. easybrandkit's own words name
 // the folder it was given as the user knows it (ownWords): that is the run's
-// copy of the folder's brand/, not a new file.
+// copy of the folder's brand/, not a new file. A stop removes the temp folder
+// itself once what uses it has been killed: removed here while Chrome still
+// writes there, the removal's retries would hold the stop up past the moment
+// a supervisor kills the run.
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
     const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
-    const done = () => temp && release(temp);
+    const done = () => temp && !stopping() && release(temp);
     const unstarted = (e) => {
       done();
       reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));

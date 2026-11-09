@@ -408,6 +408,56 @@ test("a profile in the temp folder that is not this user's is left, whatever a p
   }
 });
 
+test("a stop while a process still writes in easybrandkit's temp folder ends within a second", { skip: process.platform !== "linux" && "easybrandkit gets a temp folder of the run's own on Linux" }, async () => {
+  // easybrandkit, with no handler for a signal, ends at the stop, while the
+  // process it started writes on in its temp folder, as its Chrome does: a
+  // removal then waits through all its retries. makersmcp kills a canceled
+  // kit a second after the stop. Three tries, as a loaded machine can take
+  // that long by itself; a removal that waits takes 1.5 s every time.
+  const writer = `const fs = require("fs"); const path = require("path");
+const at = (i) => path.join(process.env.TMPDIR, "f" + (i % 2000));
+for (let i = 0; i < 2000; i++) fs.writeFileSync(at(i), "x");
+fs.writeFileSync(process.env.STAND_IN_PID, String(process.pid));
+for (let i = 0, t = Date.now(); Date.now() - t < 20000; i++) { try { fs.writeFileSync(at(i), "x"); } catch {} }`;
+  let took = Infinity;
+  for (let t = 0; t < 3 && took >= 1000; t++) {
+    const work = tmp();
+    const kit = path.join(work, "easybrandkit.js");
+    fs.writeFileSync(kit, `require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(writer)}], { stdio: "ignore" });\n${WAITS}`);
+    const dir = filmFolder();
+    const before = snap(dir);
+    const temp = shortTmp();
+    const pidFile = path.join(work, "writer.pid");
+    const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", kit],
+      { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile } });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+    for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    const writing = Number(fs.readFileSync(pidFile, "utf8"));
+    try {
+      assert.match(fs.readdirSync(temp).join(" "), /launch-film-brand-\d+-/, "it writes in the run's own temp folder");
+      const sent = Date.now();
+      child.kill("SIGTERM");
+      const { signal } = await ended;
+      took = Date.now() - sent;
+      assert.equal(signal, "SIGTERM", stderr);
+      assert.ok(stderr.endsWith(`launch-film: stopped, so ${dir} is as it was\n`), stderr);
+      for (let i = 0; i < 50 && alive(writing); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.ok(!alive(writing), "what wrote there is gone");
+      assert.deepEqual(fs.readdirSync(temp), [], "nothing is left in the temp folder");
+      assert.deepEqual(snap(dir), before);
+    } finally {
+      try {
+        process.kill(writing, "SIGKILL");
+      } catch {
+        // Gone, as it should be.
+      }
+    }
+  }
+  assert.ok(took < 1000, `it ended ${took} ms after the stop`);
+});
+
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
   // A kit whose brand.json names its screen by an absolute path outside it.
   const kit = otherKit();
