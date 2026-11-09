@@ -21,11 +21,12 @@
 // one that ends later replaces the other's files whole. A run that adds its
 // files to a folder already there (frames/, stills/, check/) takes that
 // folder's lock as well, so it takes turns with a run that puts its files in
-// that folder alone. A folder the files go into that is on another disk (one
-// a link leads to) takes them through a part folder of its own, so every
-// move is a rename on one disk. The earlier files a run moves aside go in
-// the .old of a part folder that is in the folder they come from, by their
-// paths from it.
+// that folder alone. Only the wait for a turn gives way to a stop; the moves
+// come after all of it, synchronously. A folder the files go into that is on
+// another disk (one a link leads to) takes them through a part folder of its
+// own, so every move is a rename on one disk. The earlier files a run moves
+// aside go in the .old of a part folder that is in the folder they come
+// from, by their paths from it.
 //
 // A stop (Ctrl-C, SIGTERM, SIGHUP) passes its signal on to the Chrome,
 // ffmpeg and easybrandkit the runs started, kills those still running after
@@ -57,6 +58,12 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32"
 const LOCK = ".launch-film-commit";
 const LOCK_WAIT = 10 * 1000;
 const LOCK_STALE = 60 * 1000;
+// The folder a run makes for the few moments it moves aside a lock left
+// behind, how old it is once a run killed in those moments left it, and what
+// such a run or one killed just after can leave next to the lock.
+const TAKING = `${LOCK}-taking`;
+const TAKING_STALE = 5 * 1000;
+const LEFT = /^\.launch-film-commit-(?:taking|\d+-[0-9a-f]{8})$/;
 
 // The runs begun and not ended, the temp folders (each with what to do
 // before it is removed) and the processes to stop with them, and every part
@@ -65,6 +72,8 @@ const open = new Set();
 const temps = new Map();
 const children = new Set();
 const places = [];
+// What lets go of each commit lock this process holds.
+const locks = new Set();
 // What became of the folders of the runs a stop or a failure ended, and
 // what the runs that ended well found left by runs killed outright.
 const told = [];
@@ -89,6 +98,7 @@ const inside = (at, folder) => {
 };
 const partName = () => `.launch-film-part-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const uid = () => (typeof process.getuid === "function" ? process.getuid() : null);
 
 // Whether `at` is a folder of this user's own, and not a link to one. A
@@ -256,7 +266,7 @@ async function within(dir, fn) {
   const run = begin(dir);
   try {
     const result = await fn(run);
-    run.commit();
+    await run.commit();
     return result;
   } catch (err) {
     run.discard();
@@ -309,9 +319,6 @@ function place(ctx, from, to, rel, whole) {
   if (there && isFolder && !isDir(to)) throw Object.assign(new Error("a file is where this run puts a folder"), { at: rel });
   if (there && !isFolder && there.isDirectory()) throw Object.assign(new Error("a folder is where this run puts a file"), { at: rel });
   if (there && isFolder && !whole) {
-    // A run that puts its files in this folder alone (frames, stills or
-    // check on their own) takes turns with this one.
-    ctx.unlocks.push(lock(to, ctx.run.dir));
     let into = ctx;
     let source = from;
     if (fs.statSync(to).dev !== fs.statSync(from).dev) {
@@ -368,62 +375,131 @@ function leftBehind(pid, made) {
   return started !== null && started > made + 2000;
 }
 
+// What is in the lock at `at`: the pid it holds (0 when it has none yet) and
+// its stat, null once it is gone.
+function readLock(at) {
+  let pid = 0;
+  try {
+    pid = Number(fs.readFileSync(path.join(at, "pid"), "utf8")) || 0;
+  } catch {
+    // Not written yet, or let go meanwhile.
+  }
+  return { pid, s: lstat(at) };
+}
+
+// Moves aside a lock a run killed outright left. One run at a time does:
+// another may have done it first and yet another have taken the lock since,
+// and a run that moved "the" lock on what it read before would move that
+// live lock and commit alongside it. So it makes the folder TAKING, reads the
+// lock again, the pid and the time from the one lock, and moves it only if it
+// is still one left behind. A folder TAKING that a run killed in those few
+// moments left is removed by its age. Returns true when the lock is gone,
+// null when it is still there (for this run to wait for), or, for a lock left
+// behind that cannot be moved aside, why not: another user's in a folder with
+// the sticky bit, or one a program holds open on Windows.
+function takeOver(at) {
+  const taking = path.join(path.dirname(at), TAKING);
+  try {
+    fs.mkdirSync(taking);
+  } catch (err) {
+    if (err.code !== "EEXIST") return err.code || err.message;
+    const s = lstat(taking);
+    if (s && Date.now() - s.mtimeMs > TAKING_STALE) {
+      try {
+        fs.rmdirSync(taking);
+      } catch {
+        // Another run's by now, or not this user's to remove.
+      }
+    }
+    return null;
+  }
+  const aside = `${at}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+  let moved = false;
+  try {
+    const { pid, s } = readLock(at);
+    if (!s) return true;
+    if (!leftBehind(pid, s.mtimeMs)) return null;
+    fs.renameSync(at, aside);
+    moved = true;
+  } catch (err) {
+    // Gone meanwhile: the run that held it let go.
+    return err.code === "ENOENT" ? true : err.code || err.message;
+  } finally {
+    try {
+      fs.rmdirSync(taking);
+    } catch {
+      // Taken for one left behind: the run that did goes on regardless.
+    }
+  }
+  if (moved) remove(aside);
+  return true;
+}
+
 // Takes the commit lock of `dir`: a folder named LOCK in it, holding the pid
 // of the process that has it. A lock left by a process killed outright is
-// taken over (leftBehind). Errors name the lock by its path from `base`, the
+// taken over (leftBehind, takeOver). Waits for its turn, and gives up when
+// the run is stopped. Errors name the lock by its path from `base`, the
 // run's folder. Returns what lets it go.
-function lock(dir, base = dir) {
+async function lock(dir, base = dir) {
   const at = path.join(dir, LOCK);
   const since = Date.now();
   for (;;) {
+    if (stopping) throw stoppedError();
     let made = false;
     try {
       fs.mkdirSync(at);
       made = true;
       fs.writeFileSync(path.join(at, "pid"), String(process.pid));
-      return () => remove(at);
+      const letGo = () => {
+        locks.delete(letGo);
+        remove(at);
+      };
+      locks.add(letGo);
+      return letGo;
     } catch (err) {
-      // One that could not get its pid, as on a full disk, is not left.
-      if (made) remove(at);
-      if (made || err.code !== "EEXIST") throw Object.assign(err, { at: path.relative(base, at) });
+      // Taken over before it got its pid, its run held up for seconds: it
+      // is lost, and the next try is as good as the first.
+      if (!(made && err.code === "ENOENT")) {
+        // One that could not get its pid, as on a full disk, is not left.
+        if (made) remove(at);
+        if (made || err.code !== "EEXIST") throw Object.assign(err, { at: path.relative(base, at) });
+      }
     }
-    let pid = 0;
-    try {
-      pid = Number(fs.readFileSync(path.join(at, "pid"), "utf8")) || 0;
-    } catch {
-      // Not written yet, or let go meanwhile.
-    }
-    const s = lstat(at);
-    // Why a lock left behind could not be moved aside: another user's in a
-    // folder with the sticky bit, or one a program holds open on Windows.
-    // Such a lock is waited for as one another run holds, and then refused.
+    const { pid, s } = readLock(at);
+    // Why a lock left behind could not be moved aside. Such a lock is waited
+    // for as one another run holds, and then refused.
     let stuck = null;
     if (s && leftBehind(pid, s.mtimeMs)) {
-      // Moved aside before it is removed, so of two runs that find it left
-      // only one takes it over.
-      const aside = path.join(dir, `${LOCK}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
-      try {
-        fs.renameSync(at, aside);
-        remove(aside);
-        continue;
-      } catch (err) {
-        // Gone meanwhile: the other run took it over.
-        if (err.code === "ENOENT") continue;
-        stuck = err.code || err.message;
-      }
+      const taken = takeOver(at);
+      if (taken === true) continue;
+      stuck = taken;
     }
     if (Date.now() - since > LOCK_WAIT) {
       const whose = s && uid() !== null && s.uid !== uid() ? `, which belongs to another user (uid ${s.uid}),` : "";
       throw Object.assign(new Error(stuck ? `${shown(at)}${whose} was left by a launch-film run that is gone and cannot be moved aside (${stuck}). Remove it and run again`
         : `another launch-film run has been putting its files in ${shown(dir)} for ${LOCK_WAIT / 1000} s. If no other launch-film run is at work there, remove ${shown(at)}${whose} and run again`), { at: null });
     }
-    pause(20);
+    await sleep(20);
   }
 }
 
-// Puts the run's outputs in place, synchronously, so no stop comes in the
-// middle of it. A move that fails puts back what was moved.
-function commit(run) {
+// The folders already there that take the outputs' files one by one, which a
+// run takes turns for, read before anything moves (found).
+function survey(from, to, whole, found) {
+  const there = lstat(to);
+  if (!there) return found;
+  const isFolder = fs.lstatSync(from).isDirectory();
+  if (isFolder && !whole && isDir(to)) {
+    found.folders.push(to);
+    for (const name of fs.readdirSync(from)) if (!name.startsWith(".")) survey(path.join(from, name), path.join(to, name), false, found);
+  }
+  return found;
+}
+
+// Puts the run's outputs in place. Only the wait for its turn gives way: the
+// moves are synchronous, so no stop comes in the middle of them. A move that
+// fails puts back what was moved.
+async function commit(run) {
   if (run.ended) return;
   if (stopping) throw stoppedError();
   const { part, dir } = run;
@@ -441,18 +517,36 @@ function commit(run) {
     }
   }
   // Another run putting its files here waits for this one, and this one for
-  // it: what each finds there is read once it has its turn.
-  let unlock;
+  // it, and a run that puts its files in a folder here alone (frames, stills
+  // or check on their own) takes turns with this one: what each finds there
+  // is read once it has its turn, and read again until no new folder has
+  // come up meanwhile. All the locks are held before the first move.
+  const letGo = [];
+  const free = () => {
+    for (const go of letGo.reverse()) go();
+    letGo.length = 0;
+  };
+  let found;
   try {
-    unlock = lock(dir);
+    letGo.push(await lock(dir));
+    const taken = new Set();
+    for (;;) {
+      found = { folders: [] };
+      for (const name of names) survey(path.join(part, name), path.join(dir, name), run.outputs.get(name), found);
+      const more = found.folders.filter((folder) => !taken.has(folder));
+      if (!more.length) break;
+      for (const folder of more) {
+        letGo.push(await lock(folder, dir));
+        taken.add(folder);
+      }
+    }
   } catch (err) {
+    free();
+    if (err.stopped) throw err;
     throw failed(run, err, [], []);
   }
-  // The locks of the folders already there that take files one by one,
-  // held until the files are in place or put back.
-  const unlocks = [];
   try {
-    const ctx = { run, old: null, home: dir, moved: [], unlocks };
+    const ctx = { run, old: null, home: dir, moved: [] };
     try {
       // The earlier files go aside in a part folder in this folder: the
       // run's own, or, when the run's is next to it (the folder was made
@@ -483,8 +577,7 @@ function commit(run) {
       throw failed(run, err, stuck, left);
     }
   } finally {
-    for (const letGo of unlocks.reverse()) letGo();
-    unlock();
+    free();
   }
   finish(run, names);
 }
@@ -890,6 +983,7 @@ function endAll() {
   const now = note([...below0, ...below([...watched].map((c) => c.pid))].filter(same));
   for (const child of children) signal(child, "SIGKILL");
   endTheirs(now);
+  for (const letGo of [...locks]) letGo();
   for (const run of [...open].reverse()) discard(run);
   for (const dir of temps.keys()) clear(dir);
   temps.clear();
@@ -1019,6 +1113,8 @@ function sweep(folder) {
   for (const entry of entries) {
     const m = PART.exec(entry.name);
     const at = path.join(folder, entry.name);
+    // What a run killed as it took over a lock left next to it.
+    if (LEFT.test(entry.name) && mine(at) && Date.now() - touched(at) >= STALE) remove(at);
     if (!m || !entry.isDirectory() || ours.has(at) || !mine(at)) continue;
     const pid = Number(m[1]);
     if (Date.now() - touched(at) < STALE || (pid !== process.pid && running(pid))) continue;
