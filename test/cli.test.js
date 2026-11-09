@@ -458,6 +458,25 @@ for (let i = 0, t = Date.now(); Date.now() - t < 20000; i++) { try { fs.writeFil
   assert.ok(took < 1000, `it ended ${took} ms after the stop`);
 });
 
+test("--verbose shows easybrandkit's words with the folder as it will be, not the part folder", () => {
+  // A site's address, and a store listing, which easybrandkit reads too.
+  for (const url of ["https://acme-notes.example", "https://apps.apple.com/us/app/acme-notes/id1234567"]) {
+    const dir = filmFolder();
+    const kit = path.join(tmp(), "easybrandkit.js");
+    fs.writeFileSync(kit, `const fs = require("fs"); const out = process.argv[process.argv.indexOf("--out") + 1];
+fs.cpSync(${JSON.stringify(fixture)}, out, { recursive: true, force: true });
+const brand = JSON.parse(fs.readFileSync(out + "/brand.json", "utf8"));
+brand.stores = [{ type: "appstore", ok: true, name: "Acme Notes" }];
+fs.writeFileSync(out + "/brand.json", JSON.stringify(brand));
+console.log("Saved the kit to " + out);
+console.log("Read " + out + "/BRAND.md for the details.");`);
+    const r = cli("plan", url, "--out", dir, "--easybrandkit", kit, "--words", path.join(fixture, "words.json"), "--verbose");
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stderr.includes(`Saved the kit to ${path.join(dir, "brand")}\nRead ${path.join(dir, "brand", "BRAND.md")} for the details.\n`), r.stderr);
+    assert.ok(!r.stderr.includes(".launch-film-part-"), r.stderr);
+  }
+});
+
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
   // A kit whose brand.json names its screen by an absolute path outside it.
   const kit = otherKit();

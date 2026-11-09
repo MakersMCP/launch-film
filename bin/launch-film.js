@@ -225,7 +225,7 @@ async function makePlan(url, flags, run) {
       // lookup API.
       say(`Reading the store listing with easybrandkit...\n`);
       try {
-        brandFile = await runEasybrandkit(url, local, { command: flags.easybrandkit, log: (t) => flags.verbose && say(t) });
+        brandFile = await runEasybrandkit(url, local, { command: flags.easybrandkit, log: (t) => flags.verbose && say(shown(t)) });
         const kit = JSON.parse(fs.readFileSync(brandFile, "utf8"));
         const listing = (kit.stores || []).find((s) => s && /appstore|googleplay/i.test(String(s.type)) && s.ok !== false);
         if (!listing) throw new Error("easybrandkit read no store listing from it");
@@ -240,7 +240,7 @@ async function makePlan(url, flags, run) {
       }
     } else {
       say(`Reading the brand of ${url} with easybrandkit...\n`);
-      brandFile = await runEasybrandkit(url, local, { command: flags.easybrandkit, log: (t) => flags.verbose && say(t) });
+      brandFile = await runEasybrandkit(url, local, { command: flags.easybrandkit, log: (t) => flags.verbose && say(shown(t)) });
     }
   }
   const brand = readBrand(brandFile);
