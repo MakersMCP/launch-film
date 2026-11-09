@@ -72,7 +72,9 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
 
 // easybrandkit runs a Chrome of its own, which a stop or a failure of the
 // run ends with it (out.js, watch). On Linux both get a temp folder of the
-// run's own, so what they leave goes with it.
+// run's own, so what they leave goes with it. easybrandkit's own words name
+// the folder it was given as the user knows it (ownWords): that is the run's
+// copy of the folder's brand/, not a new file.
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
     const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
@@ -99,8 +101,8 @@ function runOnce([cmd, ...pre], url, dir, log) {
       // package, no network) before it ran; easybrandkit never prints them.
       const npm = /^npm (?:error|ERR!) code \S+/m.exec(out) || /^npm (?:error|ERR!) .+/m.exec(out);
       if (npm) reject(Object.assign(new Error(`easybrandkit could not be fetched (${npm[0].trim()}). ${HOW}`), { unfetched: true }));
-      else if (/bot check/i.test(out)) reject(new Error(`${said} The brand could not be read: ask for the logo file and the main colors, or give a kit with --brand.`));
-      else reject(new Error(`easybrandkit failed (exit ${code})${said ? `: ${said}` : ""}`));
+      else if (/bot check/i.test(out)) reject(Object.assign(new Error(`${said} The brand could not be read: ask for the logo file and the main colors, or give a kit with --brand.`), { ownWords: true }));
+      else reject(Object.assign(new Error(`easybrandkit failed (exit ${code})${said ? `: ${said}` : ""}`), { ownWords: true }));
     });
   });
 }

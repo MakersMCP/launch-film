@@ -170,6 +170,17 @@ test("a plan makes the folder's brand/ of plain files, however the kit it was gi
   assert.equal(fs.readdirSync(shared).length, 2);
 });
 
+test("easybrandkit's own words about the folder it was given name it as the user knows it", () => {
+  // The run gives it its copy of brand/; the folder it speaks of is the
+  // user's own, not a new one.
+  const dir = filmFolder();
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, 'const out = process.argv[process.argv.indexOf("--out") + 1]; process.stderr.write("easybrandkit: " + out + " is not empty and holds no earlier brand kit. Pick another folder with --out.\\n"); process.exit(1);');
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", kit);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr.split("\n").slice(-3, -1).join("\n"), `launch-film: easybrandkit failed (exit 1): easybrandkit: ${path.join(dir, "brand")} is not empty and holds no earlier brand kit. Pick another folder with --out.\nlaunch-film: ${dir} is as it was.`);
+});
+
 test("a plan given a kit that cannot be read leaves the folder's kit as it was", () => {
   planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
 });

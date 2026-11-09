@@ -145,7 +145,7 @@ function failed(err) {
     // A failure that says itself what became of its folder is not told of
     // twice.
     const folders = aftermath().filter((f) => !message.includes(f));
-    say(`launch-film: ${said(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
+    say(`launch-film: ${err && err.ownWords ? shown(message) : said(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
     exit(1);
   }));
 }
@@ -233,7 +233,7 @@ async function makePlan(url, flags, run) {
         save(brandFile, JSON.stringify(kit, null, 2) + "\n");
       } catch (err) {
         if (!appStoreId(url)) throw err;
-        say(`easybrandkit could not read the listing (${err.message.split(". ")[0]}); reading it from the App Store instead.\n`);
+        say(`easybrandkit could not read the listing (${shown(err.message.split(". ")[0])}); reading it from the App Store instead.\n`);
         fs.rmSync(local, { recursive: true, force: true });
         const made = await storeBrand(url, local, { runEasybrandkit: (u, d, o) => runEasybrandkit(u, d, { ...o, command: flags.easybrandkit }), log: say });
         brandFile = made.brandFile;
