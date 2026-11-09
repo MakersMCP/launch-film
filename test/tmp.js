@@ -37,9 +37,25 @@ function stillRunning() {
   }).map(Number);
 }
 
-// Runs before the folders go, as a helper left running could write in them.
+// A new folder for a test.
+const tmp = (prefix = "t-") => fs.mkdtempSync(path.join(root, prefix));
+
+// A new folder whose path is short enough to hold a temp folder of a run's
+// with Chrome's socket under it (out.js, tempEnv), for a test to give as
+// TMPDIR. It goes when the tests have run too.
+const shorts = [];
+function shortTmp() {
+  const dir = fs.mkdtempSync("/tmp/lf-");
+  shorts.push(dir);
+  return dir;
+}
+
+// One hook, as Node runs no further after hook once one has failed. The
+// processes come first, as a helper left running could write in the folders.
 // A helper killed as its test ended takes a moment to be gone. What is still
-// running then is killed, and fails the file: a test left it behind.
+// running then is killed, and fails the file: a test left it behind. That is
+// said last, so that the folders go all the same, each whatever becomes of
+// the others.
 after(async () => {
   for (let i = 0; i < 250 && stillRunning().length; i++) await new Promise((resolve) => setTimeout(resolve, 20));
   const left = stillRunning().map((pid) => {
@@ -52,25 +68,15 @@ after(async () => {
     }
     return `${pid} ${cmd}`;
   });
-  if (left.length) throw new Error(`these tests left processes running:\n${left.join("\n")}`);
+  const failed = left.length ? [`these tests left processes running:\n${left.join("\n")}`] : [];
+  for (const dir of [root, ...shorts]) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      failed.push(error.message);
+    }
+  }
+  if (failed.length) throw new Error(failed.join("\n"));
 });
-
-after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
-
-// A new folder for a test.
-const tmp = (prefix = "t-") => fs.mkdtempSync(path.join(root, prefix));
-
-// A new folder whose path is short enough to hold a temp folder of a run's
-// with Chrome's socket under it (out.js, tempEnv), for a test to give as
-// TMPDIR. It goes when the tests have run too.
-const shorts = [];
-after(() => {
-  for (const dir of shorts) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-});
-function shortTmp() {
-  const dir = fs.mkdtempSync("/tmp/lf-");
-  shorts.push(dir);
-  return dir;
-}
 
 module.exports = { tmp, shortTmp, stillRunning, WAITS };
