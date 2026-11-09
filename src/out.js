@@ -38,7 +38,9 @@
 // process is gone and nothing in it has changed for STALE. One killed while
 // it put its files in place can hold earlier files in its .old: that part
 // folder is never removed, but kept under a name no run removes, with a
-// note of what is in it (sweep).
+// note of what is in it (sweep). Only this user's own part folders and temp
+// folders are looked at: in a folder others write to as well (/tmp), what
+// another user left, or put there to look like a run's, is left alone.
 
 const fs = require("fs");
 const os = require("os");
@@ -87,6 +89,19 @@ const inside = (at, folder) => {
 };
 const partName = () => `.launch-film-part-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const uid = () => (typeof process.getuid === "function" ? process.getuid() : null);
+
+// Whether `at` is a folder of this user's own, and not a link to one. A
+// system without users (Windows) has every folder its user's.
+function mine(at) {
+  const s = lstat(at);
+  return Boolean(s) && s.isDirectory() && (uid() === null || s.uid === uid());
+}
+
+// A name on one line: a line break or another control character in it,
+// and a backslash, are written escaped.
+const ESCAPES = { "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
+const plain = (name) => String(name).replace(/[\\\p{Cc}\u2028\u2029]/gu, (c) => ESCAPES[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 // Whether it is gone: a folder another program is still writing to, or
 // holds open (on Windows), may stay.
@@ -440,12 +455,15 @@ function keep(run, stuck) {
 // Keeps a part folder whose .old holds earlier files `files` (their paths
 // from the folder it is in), under a name no run removes, with a note that
 // starts with `what`. Returns where the files are: a folder that cannot be
-// renamed keeps its own name, and sweep never removes it either.
+// renamed keeps its own name, and sweep never removes it either. The note
+// is made as a new file, so a link or a file of its name already there is
+// never written through; the folder is kept without it then. Each file is
+// listed on a line of its own, whatever its name holds.
 function keepFolder(folder, files, what) {
   const home = shown(path.dirname(folder));
   try {
-    fs.writeFileSync(path.join(folder, "launch-film-kept.txt"), `${what}:\n${files.map((f) => `  ${f}`).join("\n")}\n` +
-      `They are in .old here, each by its path from ${home}. Put back the ones you want, then remove this folder: launch-film leaves it alone.\n`);
+    fs.writeFileSync(path.join(folder, "launch-film-kept.txt"), `${what}:\n${files.map((f) => `  ${plain(f)}`).join("\n")}\n` +
+      `They are in .old here, each by its path from ${home}. Put back the ones you want, then remove this folder: launch-film leaves it alone.\n`, { flag: "wx" });
   } catch {
     // Kept all the same.
   }
@@ -521,6 +539,10 @@ function tempDir(prefix, before = null) {
   return dir;
 }
 
+// The temp folders of a kind that runs killed outright left: this user's
+// own, whose process is gone or has this process's pid now. A folder
+// another user put in a shared temp folder under such a name is left alone,
+// and before() never runs on it: a profile's link there can lead anywhere.
 function sweepTemps(prefix, before) {
   const named = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d+)-[A-Za-z0-9]{6}$`);
   let entries = [];
@@ -532,7 +554,7 @@ function sweepTemps(prefix, before) {
   for (const entry of entries) {
     const m = named.exec(entry.name);
     const at = path.join(os.tmpdir(), entry.name);
-    if (!m || !entry.isDirectory() || temps.has(at)) continue;
+    if (!m || !entry.isDirectory() || temps.has(at) || !mine(at)) continue;
     const pid = Number(m[1]);
     if (pid !== process.pid && running(pid)) continue;
     if (before) {
@@ -627,11 +649,14 @@ function inTemp(folder) {
 // of its own (com.google.Chrome.XXXXXX), and removes both as it closes. One
 // stopped while it closes, or killed outright, leaves that folder behind,
 // so the folder is read from the link while Chrome is up, and goes with the
-// profile. Returns it, or null.
+// profile. Returns it, or null. Only a profile of this user's own is read,
+// and only a folder of this user's own is given: a profile another user
+// left in a shared temp folder can link anywhere.
 function socketFolder(profile) {
   try {
+    if (!mine(profile)) return null;
     const folder = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket")));
-    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && inTemp(folder)) return folder;
+    if (/^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w+$/.test(path.basename(folder)) && inTemp(folder) && mine(folder)) return folder;
   } catch {
     // No such link.
   }
@@ -749,7 +774,7 @@ function endTheirs(list) {
   below0.length = 0;
   for (const [profile, socket] of theirs) {
     closeProfile(profile, socket);
-    remove(profile);
+    if (mine(profile)) remove(profile);
   }
   theirs.clear();
 }
@@ -903,12 +928,12 @@ function earlier(part) {
   return list;
 }
 
-// Removes the part folders in `folder` that runs killed outright left: not
-// a run's of this process that has not ended, nothing in them changed for
-// STALE, and their process gone, or its pid now this process's (in a
-// container every run can have the same pid). One whose .old holds earlier
-// files (the run was killed while it put its files in place) is kept for
-// them instead, and said once the run ends (noticed).
+// Removes the part folders in `folder` that runs killed outright left: this
+// user's own, not a run's of this process that has not ended, nothing in
+// them changed for STALE, and their process gone, or its pid now this
+// process's (in a container every run can have the same pid). One whose
+// .old holds earlier files (the run was killed while it put its files in
+// place) is kept for them instead, and said once the run ends (noticed).
 function sweep(folder) {
   let entries = [];
   try {
@@ -920,7 +945,7 @@ function sweep(folder) {
   for (const entry of entries) {
     const m = PART.exec(entry.name);
     const at = path.join(folder, entry.name);
-    if (!m || !entry.isDirectory() || ours.has(at)) continue;
+    if (!m || !entry.isDirectory() || ours.has(at) || !mine(at)) continue;
     const pid = Number(m[1]);
     if (Date.now() - touched(at) < STALE || (pid !== process.pid && running(pid))) continue;
     const files = earlier(at);

@@ -231,6 +231,82 @@ test("a run whose folder was made while it worked puts the earlier files aside i
   out.noticed();
 });
 
+// A part folder as a run killed while it put its files in place leaves it,
+// 20 minutes ago, in `dir`, with earlier files `names` in its .old.
+function leftWithEarlier(dir, names) {
+  const at = path.join(dir, ".launch-film-part-4194000-0badc0de");
+  for (const name of names) write(at, { [`.old/${name}`]: "earlier" });
+  age(at);
+  return at;
+}
+
+test("a part folder's note is never written through a link, and each earlier file is listed on a line of its own", { skip: process.platform === "win32" && "links need rights on Windows" }, async () => {
+  // As another user could leave it in a folder both write to, such as /tmp:
+  // the note's name links to a file of the user's, and a name in .old holds
+  // line breaks.
+  const shared = tmp();
+  const theirs = path.join(tmp(), "authorized_keys");
+  fs.writeFileSync(theirs, "the user's own key\n");
+  const left = leftWithEarlier(shared, ["film.mp4", "x\nssh-ed25519 AAAA added\nx"]);
+  fs.symlinkSync(theirs, path.join(left, "launch-film-kept.txt"));
+  const when = Date.now() / 1000 - 20 * 60;
+  fs.lutimesSync(path.join(left, "launch-film-kept.txt"), when, when);
+  fs.utimesSync(left, when, when);
+  await out.within(path.join(shared, "check"), async (run) => fs.writeFileSync(run.out("CHECK.md"), "a check"));
+  assert.equal(fs.readFileSync(theirs, "utf8"), "the user's own key\n");
+  const kept = fs.readdirSync(shared).filter((n) => n.startsWith("launch-film-kept-"));
+  assert.equal(kept.length, 1, "the earlier files are kept all the same");
+  assert.ok(fs.lstatSync(path.join(shared, kept[0], "launch-film-kept.txt")).isSymbolicLink(), "the link is left as it was");
+  out.noticed();
+  // Without the link, the note lists each name escaped, on its own line.
+  const other = tmp();
+  leftWithEarlier(other, ["film.mp4", "x\nssh-ed25519 AAAA added\nx"]);
+  await out.within(path.join(other, "check"), async (run) => fs.writeFileSync(run.out("CHECK.md"), "a check"));
+  const note = fs.readFileSync(path.join(other, fs.readdirSync(other).find((n) => n.startsWith("launch-film-kept-")), "launch-film-kept.txt"), "utf8").split("\n");
+  assert.deepEqual(note.slice(1, 3), ["  film.mp4", "  x\\nssh-ed25519 AAAA added\\nx"]);
+  assert.match(note[3], /^They are in \.old here/);
+  out.noticed();
+});
+
+test("a part folder or a temp folder that is not this user's own is left alone", { skip: process.platform === "win32" && "no users to tell apart" }, () => {
+  // Run as if by another user, in a process of its own: every folder the
+  // tests made belongs to someone else then. A part folder left with earlier
+  // files is neither kept nor removed, and a temp folder named as a Chrome
+  // profile a killed run left, whose link leads to a socket folder the user
+  // has, is not followed.
+  const shared = tmp();
+  const left = leftWithEarlier(shared, ["film.mp4"]);
+  const plain = path.join(shared, ".launch-film-part-4194001-0badc0de");
+  write(plain, { "film.mp4": "half a film" });
+  age(plain);
+  const temp = tmp();
+  const socket = path.join(temp, "com.google.Chrome.UsErSk");
+  write(socket, { SingletonSocket: "" });
+  const planted = path.join(temp, "launch-film-chrome-4194000-aB3dE6");
+  fs.mkdirSync(planted);
+  fs.symlinkSync(path.join(socket, "SingletonSocket"), path.join(planted, "SingletonSocket"));
+  const before = [snap(shared), snap(temp)];
+  const script = `
+const fs = require("fs");
+const uid = process.getuid() + 1;
+process.getuid = () => uid;
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { closeProfile } = out;
+out.within(process.argv[1] + "/check", async (run) => fs.writeFileSync(run.out("CHECK.md"), "a check")).then(() => {
+  const made = out.tempDir("launch-film-chrome-", (dir) => closeProfile(dir));
+  out.release(made);
+  process.stdout.write(JSON.stringify(out.noticed()));
+});
+`;
+  const r = spawnSync(process.execPath, ["-e", script, shared], { encoding: "utf8", timeout: 20_000, env: { ...process.env, TMPDIR: temp } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "[]");
+  const { "check/": made, "check/CHECK.md": report, ...rest } = snap(shared);
+  assert.deepEqual([made, report], ["folder", "a check"]);
+  assert.deepEqual([rest, snap(temp)], before);
+  assert.ok(fs.existsSync(left));
+});
+
 test("a run inside another's part folder goes in with it, or not at all", async () => {
   for (const ends of ["well", "badly"]) {
     const dir = tmp();
