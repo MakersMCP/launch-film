@@ -94,7 +94,7 @@ async function withRenameFailing(calls, fn) {
   let n = 0;
   fs.renameSync = (from, to) => {
     n++;
-    if (calls.includes(n)) throw Object.assign(new Error("i/o error"), { code: "EIO" });
+    if (calls.includes(n)) throw Object.assign(new Error(`EIO: i/o error, rename '${from}' -> '${to}'`), { code: "EIO" });
     return real(from, to);
   };
   try {
@@ -111,7 +111,7 @@ test("a commit that cannot finish puts every earlier file back", async () => {
   // The outputs go in the order they were named: film.mp4 aside, the new
   // one in, then the third move, the earlier frame aside, fails.
   await withRenameFailing([3], () => assert.rejects(out.within(dir, async (run) => make(run)),
-    /^Error: could not put the new files in .*: .*frames\/clip-1-a\.jpg: i\/o error\. .* is as it was\.$/));
+    /^Error: could not put the new files in .*: .*frames\/clip-1-a\.jpg: i\/o error \(EIO\)\. .* is as it was\.$/));
   assert.deepEqual(snap(dir), before);
 });
 
@@ -141,6 +141,8 @@ test("a commit whose undo fails and whose folder cannot be kept by name says whe
   const parts = fs.readdirSync(dir).filter((n) => n.startsWith(".launch-film-part-"));
   assert.equal(parts.length, 1);
   assert.ok(err.message.endsWith(`Some of the earlier files could not be put back; they are in ${path.join(dir, parts[0])}.`), err.message);
+  // As the CLI says it: that folder stays where it is, under its own name.
+  assert.equal(out.said(err.message), err.message);
   assert.equal(fs.readFileSync(path.join(dir, parts[0], ".old", "film.mp4"), "utf8"), "old film");
   // A later run that ends well there keeps that folder for them.
   age(path.join(dir, parts[0]));
@@ -950,7 +952,7 @@ test("a lock that cannot get its pid, as on a full disk, is not left", async () 
     return real(file, ...rest);
   };
   try {
-    await assert.rejects(out.within(dir, async (run) => make(run)), new RegExp(`ENOSPC: no space left on device, write\\. ${escape(dir)} is as it was\\.$`));
+    await assert.rejects(out.within(dir, async (run) => make(run)), new RegExp(`no space left on device \\(ENOSPC\\)\\. ${escape(dir)} is as it was\\.$`));
   } finally {
     fs.writeFileSync = real;
   }

@@ -589,7 +589,7 @@ function failed(run, err, stuck, left) {
   const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
   // A message that names its own paths (a lock another run holds) is said
   // as it is.
-  const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${err.message}`;
+  const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${reason(err)}`;
   const start = `could not put the new files in ${shown(run.dir)}: ${why}.`;
   if (!stuck.length && !left.length) {
     // Told of again by a stop that comes before this failure is: a commit
@@ -613,6 +613,9 @@ function keep(run, stuck) {
   }
   // The rest of what the run made goes.
   for (const folder of [run.part, ...run.stages]) if (lstat(folder) && !kept.includes(folder)) remove(folder);
+  // A folder kept under its own name stays where it is: said by that path.
+  const at = places.findIndex(([part]) => part === run.part);
+  if (at >= 0) places.splice(at, 1);
   return kept.join(" and ");
 }
 
