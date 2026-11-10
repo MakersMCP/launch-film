@@ -516,6 +516,46 @@ test("a render stops on a track it refuses, before any Chrome is started", { ski
   assert.ok(!fs.existsSync(started), "no Chrome was started");
 });
 
+// A Chrome that notes it was started and fails, in place of the real one.
+function noteChrome() {
+  const started = path.join(tmp(), "chrome-started");
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, `#!/bin/sh\n: > "${started}"\nexit 1\n`, { mode: 0o755 });
+  return { chrome, started: () => fs.existsSync(started) };
+}
+
+test("a render refuses an --output it could not write the film to before any Chrome is started", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
+  const dir = filmFolder();
+  fs.rmSync(path.join(dir, "film.mp4"));
+  fs.mkdirSync(path.join(dir, "adir"));
+  fs.writeFileSync(path.join(dir, "adir", "notes.txt"), "the user's");
+  const chrome = noteChrome();
+  const before = snap(dir);
+  const render = (...args) => cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"), ...args);
+  const out = (name) => path.join(dir, name);
+  for (const [name, said] of [
+    [".launch-film-x.mp4", `--output ${out(".launch-film-x.mp4")}: a name that starts with .launch-film- is one of launch-film's own: give another`],
+    ["adir", `--output ${out("adir")} is a folder: give the film's file in it, such as ${path.join(out("adir"), "film.mp4")}`],
+    ["noext", `--output ${out("noext")} has no extension, so ffmpeg cannot tell what kind of file to write: give a name that ends in .mp4`],
+    ["film.webm", `--output ${out("film.webm")}: ffmpeg cannot write the film as a .webm file (H.264 video and AAC sound): give a name that ends in .mp4, .mov or .mkv`],
+  ]) {
+    const r = render("--output", out(name));
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${said}\n`, name);
+  }
+  // The film's own place, when a folder holds it.
+  fs.mkdirSync(out("film.mp4"));
+  const taken = render();
+  assert.equal(taken.stderr, `launch-film: ${out("film.mp4")} is a folder, where the film goes: move it, or give --output another file\n`);
+  fs.rmdirSync(out("film.mp4"));
+  assert.ok(!chrome.started(), "no Chrome was started");
+  assert.deepEqual(snap(dir), before);
+  // A kind of file ffmpeg writes the film in goes on to the render.
+  const avi = render("--output", out("film.avi"));
+  assert.match(avi.stderr, /^launch-film: rendering clip 1: Chrome stopped \(exit 1\)/);
+  assert.ok(chrome.started());
+});
+
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
   // A kit whose brand.json names its screen by an absolute path outside it.
   const kit = otherKit();

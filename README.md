@@ -80,10 +80,11 @@ npx launch-film looks | types | icons <word> | doctor
   --no-music, --no-sfx  plan the film without the music bed or the sound effects (a render reads "music" and "sfx" in film.json)
   --jobs <n>            clips rendered at once, 1 to 4 (default 2)
   --keep                keep the work files, each clip's MP4
+  --output <file>       where render writes the film (default film.mp4 next to film.json)
   --verbose             also print what easybrandkit says as it works
 ```
 
-A command refuses what it would not read, by name, before anything runs: an option it does not take (the refusal lists the ones it does), an option with no value after it, an argument past the ones it reads, and a value it cannot use: an `--aspect` other than 16:9 or 9:16, a `--seconds` outside 20 to 40 for a plan, a `--jobs` other than 1 to 4, a value given to `--keep` or `--verbose`, and a size or frame rate of 0 in `--expect`.
+A command refuses what it would not read, by name, before anything runs: an option it does not take (the refusal lists the ones it does), an option with no value after it, an argument past the ones it reads, and a value it cannot use: an `--aspect` other than 16:9 or 9:16, a `--seconds` outside 20 to 40 for a plan, a `--jobs` other than 1 to 4, a value given to `--keep` or `--verbose`, and a size or frame rate of 0 in `--expect`. A render refuses an `--output` it could not write the film to before any clip renders: a folder, a name with no extension, a name that starts with `.launch-film-`, or a kind of file ffmpeg cannot put H.264 video and AAC sound in, such as .webm.
 
 A run leaves this behind:
 

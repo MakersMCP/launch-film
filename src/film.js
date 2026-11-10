@@ -326,14 +326,47 @@ async function pool(items, jobs, fn) {
   return results;
 }
 
+// The kinds of file the film is written as without a try first: H.264 and
+// AAC with faststart, as the last ffmpeg call writes them.
+const FILM_KINDS = new Set([".mp4", ".m4v", ".mov", ".mkv"]);
+
+// Why the film cannot be written to `out` (--output when `given`), or null.
+// Read before anything renders: the name was first used once every clip had
+// rendered, and the run failed then. Another kind of file than FILM_KINDS is
+// tried on a frame of nothing, in the film's own codecs, so a kind ffmpeg
+// writes them in is taken and one it does not (.webm) refused.
+async function outputProblem(out, given) {
+  const named = given ? `--output ${out}` : out;
+  if (path.basename(out).startsWith(".launch-film-")) return `${named}: a name that starts with .launch-film- is one of launch-film's own: give another`;
+  let folder = false;
+  try {
+    folder = fs.statSync(out).isDirectory();
+  } catch {
+    // Not there yet, as a new film is not.
+  }
+  if (folder) return given ? `${named} is a folder: give the film's file in it, such as ${path.join(out, "film.mp4")}` : `${named} is a folder, where the film goes: move it, or give --output another file`;
+  const kind = path.extname(out).toLowerCase();
+  if (FILM_KINDS.has(kind)) return null;
+  if (!kind) return `${named} has no extension, so ffmpeg cannot tell what kind of file to write: give a name that ends in .mp4`;
+  const work = tempDir("launch-film-work-");
+  try {
+    const tried = await run(["-f", "lavfi", "-i", "color=c=black:s=16x16:r=25", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-frames:v", "1", "-t", "0.04",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", path.join(work, `film${kind}`)]);
+    return tried.code === 0 ? null : `${named}: ffmpeg cannot write the film as a ${kind} file (H.264 video and AAC sound): give a name that ends in .mp4, .mov or .mkv`;
+  } finally {
+    release(work);
+  }
+}
+
 // Renders film.json to an MP4. Returns { output, seconds, clips, notes }.
 async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep = false, offline = false } = {}) {
+  const out = path.resolve(output || path.join(path.dirname(path.resolve(file)), "film.mp4"));
+  const unfit = await outputProblem(out, Boolean(output));
+  if (unfit) throw new Error(unfit);
   const loaded = loadFilm(file);
   if (loaded.problems.length) throw new Error(`film.json has problems:\n  - ${loaded.problems.join("\n  - ")}`);
   const { track, problems } = await checkMusic(loaded);
   if (problems.length) throw new Error(`film.json has problems:\n  - ${problems.join("\n  - ")}`);
-  const { dir } = loaded;
-  const out = path.resolve(output || path.join(dir, "film.mp4"));
   // The clips are made in a work folder outside the film's folder; the film
   // and its timeline go in next to film.json only once both are whole. The
   // run is begun here, so a stop while the clips render says which folder
