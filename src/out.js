@@ -82,7 +82,15 @@ let ending = false;
 let hooked = false;
 let listening = false;
 
-const lstat = (at) => fs.lstatSync(at, { throwIfNoEntry: false });
+// Undefined when nothing is there, a path through a file included.
+const lstat = (at) => {
+  try {
+    return fs.lstatSync(at, { throwIfNoEntry: false });
+  } catch (err) {
+    if (err.code === "ENOTDIR") return undefined;
+    throw err;
+  }
+};
 const isDir = (at) => {
   try {
     return fs.statSync(at).isDirectory();
@@ -215,6 +223,10 @@ function begin(dir) {
   const made = [];
   // Up to the root at most: on Windows a drive that is not there has none.
   for (let at = home; !fs.existsSync(at) && path.dirname(at) !== at; at = path.dirname(at)) made.push(at);
+  // The first folder there, which the new ones go in: a file in its place
+  // is told of as for the folder itself.
+  const base = made.length ? path.dirname(made[made.length - 1]) : home;
+  if (lstat(base) && !isDir(base)) throw new Error(`${shown(base)} is a file, not a folder`);
   const part = path.join(home, partName());
   try {
     fs.mkdirSync(home, { recursive: true });
@@ -229,7 +241,7 @@ function begin(dir) {
         break;
       }
     }
-    throw new Error(`cannot write in ${shown(made.length ? path.dirname(made[made.length - 1]) : home)}: ${reason(err)}`);
+    throw new Error(`cannot write in ${shown(base)}: ${reason(err)}`);
   }
   places.push([part, target]);
   const run = {

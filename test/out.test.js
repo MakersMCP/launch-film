@@ -638,6 +638,13 @@ test("a folder the run cannot write in is named in the refusal, not the part fol
   }
 });
 
+test("a folder asked for inside a file is refused as the file it is", () => {
+  const dir = tmp();
+  write(dir, { afile: "the user's" });
+  for (const at of ["afile", "afile/sub", "afile/sub/deeper"]) assert.throws(() => out.begin(path.join(dir, at)), { message: `${path.join(dir, "afile")} is a file, not a folder` }, at);
+  assert.deepEqual(snap(dir), { afile: "the user's" });
+});
+
 test("a write that fails names the file it was writing, as the new one, and a quoted path in a part folder is the new one too", async () => {
   assert.equal(out.reason(new Error("ENOSPC: no space left on device, write")), "no space left on device (ENOSPC)");
   assert.equal(out.reason(new Error("EACCES: permission denied, mkdir '/a/b'")), "permission denied (EACCES)");

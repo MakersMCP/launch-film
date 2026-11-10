@@ -556,6 +556,17 @@ test("a render refuses an --output it could not write the film to before any Chr
   assert.ok(chrome.started());
 });
 
+test("a folder asked for inside a file is refused as the file it is, and nothing is made", () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "afile"), "the user's");
+  for (const out of [path.join(dir, "afile", "sub"), path.join(dir, "afile", "sub", "deeper")]) {
+    const r = cli("plan", "https://acme-notes.example", "--out", out, "--brand", fixture, "--words", path.join(fixture, "words.json"));
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${path.join(dir, "afile")} is a file, not a folder\n`);
+  }
+  assert.deepEqual(fs.readdirSync(dir), ["afile"]);
+});
+
 test("a plan into a folder already there writes the path of a file outside the kit so the film finds it", () => {
   // A kit whose brand.json names its screen by an absolute path outside it.
   const kit = otherKit();
