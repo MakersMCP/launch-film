@@ -553,12 +553,31 @@ const TAKES = {
   url: "--out, --brand, --words, --easybrandkit, --look, --seconds, --aspect, --no-music, --no-sfx, --verbose, --jobs and --keep",
 };
 
-test("an option a command does not take is refused by name, and nothing is made", () => {
+test("an option a command does not take, or a value it cannot use, is refused by name, and nothing is made", () => {
   const dir = tmp();
   const film = path.join(dir, "film.json");
   const url = "https://acme-notes.example";
   const out = path.join(dir, "out");
+  const plan = ["plan", url, "--out", out, "--brand", fixture, "--words", path.join(fixture, "words.json")];
   for (const [args, said] of [
+    // Values that were put right or dropped without a word.
+    [[...plan, "--aspect", "4:3"], '--aspect "4:3": choose 16:9 or 9:16'],
+    [[...plan, "--aspect", "9:16 "], '--aspect "9:16 ": choose 16:9 or 9:16'],
+    [[...plan, "--seconds", "abc"], '--seconds "abc": give a length from 20 to 40 seconds, such as 30'],
+    [[...plan, "--seconds", "1e9"], '--seconds "1e9": give a length from 20 to 40 seconds, such as 30'],
+    [[...plan, "--seconds", "15"], '--seconds "15": give a length from 20 to 40 seconds, such as 30'],
+    [[url, "--out", out, "--seconds", "41"], '--seconds "41": give a length from 20 to 40 seconds, such as 30'],
+    [["stills", url, "--out", out, "--aspect", "1:1"], '--aspect "1:1": choose 16:9 or 9:16'],
+    [["render", film, "--jobs", "0"], '--jobs "0": give a whole number from 1 to 4'],
+    [["render", film, "--jobs", "abc"], '--jobs "abc": give a whole number from 1 to 4'],
+    [["render", film, "--jobs", "8"], '--jobs "8": give a whole number from 1 to 4'],
+    [[url, "--out", out, "--jobs", "1.5"], '--jobs "1.5": give a whole number from 1 to 4'],
+    [["render", film, "--keep=false"], "--keep takes no value: give it alone, or leave it out"],
+    [[...plan, "--verbose=yes"], "--verbose takes no value: give it alone, or leave it out"],
+    [["check", "film.mp4", "--expect", "0x0@0"], '--expect "0x0@0": the size and the frame rate must be above 0, as in 1920x1080@30'],
+    [["check", "film.mp4", "--expect", "1920x1080@0"], '--expect "1920x1080@0": the size and the frame rate must be above 0, as in 1920x1080@30'],
+    [["check", "film.mp4", "--expect", "0x1080"], '--expect "0x1080": the size and the frame rate must be above 0, as in 1920x1080@30'],
+    // Options a command does not take.
     [["check", "film.mp4", "--outt", out], `--outt is not an option of launch-film check, which takes ${TAKES.check}.`],
     [["render", film, "--music", "track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
     [["plan", url, "--out", out, "--music=track.wav"], '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute'],
@@ -657,12 +676,15 @@ test("the texts name easybrandkit's script as its package has it, and --help lis
 test("every option a command takes gets past the refusal, also as makersmcp gives them", () => {
   const dir = tmp();
   const none = path.join(dir, "none.json");
-  const notAnOption = /is not an option|is for a plan|needs a value|would not be read/;
+  // An option the command does not take, or a value it cannot use.
+  const notAnOption = /is not an option|is for a plan|needs a value|would not be read|takes no value|choose 16:9 or 9:16|from 20 to 40|from 1 to 4|above 0/;
   const url = "https://acme-notes.example";
   const kit = path.join(dir, "no-such-kit");
   const plans = ["--out", path.join(dir, "out"), "--brand", kit, "--words", path.join(fixture, "words.json"), "--easybrandkit", "ebk", "--look", "pop", "--seconds", "20", "--aspect", "9:16", "--no-music", "--no-sfx", "--verbose"];
   for (const args of [
     [url, ...plans, "--jobs", "2", "--keep"],
+    [url, "--out", path.join(dir, "out"), "--brand", kit, "--seconds", "40", "--aspect", "16:9", "--jobs", "4"],
+    ["plan", url, "--out", path.join(dir, "out"), "--brand", kit, "--seconds", "30.5"],
     ["plan", url, ...plans],
     ["stills", url, ...plans, "--for", "og"],
     ["stills", none, "--for", "og", "--easybrandkit", "ebk"],

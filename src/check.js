@@ -48,6 +48,8 @@ function parseExpect(text) {
   if (!text) return {};
   const m = /^(?:(\d+)\s*[x\u00d7]\s*(\d+))?\s*(?:@\s*(\d+(?:\.\d+)?))?$/i.exec(String(text).trim());
   if (!m || (!m[1] && !m[3])) throw new Error(`--expect "${text}" should look like 1920x1080@30`);
+  // A size or a rate of 0 was taken for none given, and passed.
+  if ([m[1], m[2], m[3]].some((v) => v !== undefined && !(Number(v) > 0))) throw new Error(`--expect "${text}": the size and the frame rate must be above 0, as in 1920x1080@30`);
   return { width: m[1] ? Number(m[1]) : null, height: m[2] ? Number(m[2]) : null, fps: m[3] ? Number(m[3]) : null };
 }
 
@@ -185,15 +187,17 @@ function nearest(list, t, fps) {
 // Checks a film. opts: { out, expect, seconds, lufs, cues, cuts, allow }
 // (the command's options as given). Returns { pass, checks, dir, files }.
 async function checkFilm(file, opts = {}) {
-  const film = path.resolve(file);
-  if (!fs.existsSync(film)) throw new Error(`${file} is not a file`);
-  const info = probe(film);
-  if (!info.duration || !info.width) throw new Error(`${file} could not be read as a video`);
+  // What the check is asked for is read first: a value it cannot use is
+  // refused before the film is.
   const expect = parseExpect(opts.expect);
   const seconds = parseSeconds(opts.seconds);
   const target = opts.lufs === undefined || opts.lufs === null || opts.lufs === "" ? null : Number(opts.lufs);
   if (target !== null && !(target < 0 && target > -70)) throw new Error(`--lufs "${opts.lufs}" should be a loudness like -14`);
   const allow = parseAllow(opts.allow);
+  const film = path.resolve(file);
+  if (!fs.existsSync(film)) throw new Error(`${file} is not a file`);
+  const info = probe(film);
+  if (!info.duration || !info.width) throw new Error(`${file} could not be read as a video`);
   const cues = opts.cues ? readCues(path.resolve(opts.cues)) : null;
   const dir = path.resolve(opts.out || path.join(path.dirname(film), "check"));
   // The report and its pictures take the place of an earlier check's once

@@ -43,7 +43,7 @@ Options:
                        from the brand).
   --seconds <n>        Aim for this length, 20-40 (default 30).
   --aspect <ratio>     16:9 (default) or 9:16.
-  --jobs <n>           Clips rendered at once (default 2).
+  --jobs <n>           Clips rendered at once, 1 to 4 (default 2).
   --no-music           Plan the film without the music bed (plan, the
                        one-go command and stills <url>; a render plays what
                        "music" in film.json says). In film.json, "music" is
@@ -103,9 +103,9 @@ const ARGUMENTS = { "<url>": "one address", plan: "one address", render: "one fi
   "stills <film.json>": "one address or film.json", looks: "no arguments", types: "no arguments", icons: "one word", doctor: "no arguments" };
 
 // given holds the options as they are written, bare the options that take a
-// value and came without one.
+// value and came without one, valued the switches given one with =.
 function parseArgs(argv) {
-  const out = { _: [], flags: {}, given: [], bare: [] };
+  const out = { _: [], flags: {}, given: [], bare: [], valued: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") out.flags.help = true;
@@ -120,8 +120,10 @@ function parseArgs(argv) {
       const eq = a.indexOf("=");
       const key = a.slice(2, eq < 0 ? undefined : eq);
       out.given.push(`--${key}`);
-      if (SWITCHES.has(key)) out.flags[key] = true;
-      else {
+      if (SWITCHES.has(key)) {
+        out.flags[key] = true;
+        if (eq >= 0) out.valued.push(key);
+      } else {
         const value = eq >= 0 ? a.slice(eq + 1) : String(argv[i + 1] || "").startsWith("--") ? "" : argv[++i];
         if (value) out.flags[key] = value;
         else out.bare.push(key);
@@ -142,6 +144,20 @@ function notTaken(given, command) {
   if (key === "--music") return '--music is not an option: a film plays what "music" in film.json says. Give the path of the track there, from film.json\'s folder or absolute';
   if (key === "--no-music" || key === "--no-sfx") return `${key} is for a plan: a render plays what "${key.slice(5)}" in film.json says. Set it to false there and render again`;
   return `${key} is not an option of launch-film ${command}, which takes ${OPTIONS[command].length ? listed(OPTIONS[command].map((k) => `--${k}`)) : "no options"}.`;
+}
+
+// Why a value given to one of `command`'s options cannot be used, or null:
+// put right without a word (an --aspect of 4:3 planned 16:9), it read as if
+// it had been used. The --seconds of check is a length to check against,
+// read there.
+function unusable(flags, command) {
+  const takes = (key) => flags[key] !== undefined && OPTIONS[command].includes(key);
+  if (takes("aspect") && !["16:9", "9:16"].includes(flags.aspect)) return `--aspect "${flags.aspect}": choose 16:9 or 9:16`;
+  if (takes("seconds") && command !== "check" && !(/^\d+(?:\.\d+)?$/.test(flags.seconds) && flags.seconds >= 20 && flags.seconds <= 40)) {
+    return `--seconds "${flags.seconds}": give a length from 20 to 40 seconds, such as 30`;
+  }
+  if (takes("jobs") && !/^[1-4]$/.test(flags.jobs)) return `--jobs "${flags.jobs}": give a whole number from 1 to 4`;
+  return null;
 }
 
 // Why an argument past the ones a command reads is refused, or null. A first
@@ -315,7 +331,7 @@ async function frames(file, flags) {
 }
 
 async function main() {
-  const { _: args, flags, given, bare } = parseArgs(process.argv.slice(2));
+  const { _: args, flags, given, bare, valued } = parseArgs(process.argv.slice(2));
   // Ctrl-C or a signal stops the run and leaves its folder as it was.
   listen();
   if (flags.version) {
@@ -330,12 +346,15 @@ async function main() {
   const takes = command === "stills" && /\.json$/i.test(rest[0] || "") ? "stills <film.json>" : Object.hasOwn(OPTIONS, command) ? command : "<url>";
   // What a command would not read is refused before anything runs: dropped
   // without a word, it reads as if it had been done.
-  const refused = notTaken(given, takes) || (bare.length ? `--${bare[0]} needs a value` : null) || oneTooMany(command, takes, rest);
+  const refused = notTaken(given, takes) || (bare.length ? `--${bare[0]} needs a value` : null) ||
+    (valued.length ? `--${valued[0]} takes no value: give it alone, or leave it out` : null) || oneTooMany(command, takes, rest);
   if (refused) return fail(refused);
   if (flags.look !== undefined && OPTIONS[takes].includes("look")) {
     const { LOOKS } = require("../src/motion");
     if (!Object.hasOwn(LOOKS, flags.look)) return fail(`--look "${flags.look}": choose from ${Object.keys(LOOKS).join(", ")}`);
   }
+  const unfit = unusable(flags, takes);
+  if (unfit) return fail(unfit);
   if (command === "looks") {
     const { LOOKS } = require("../src/motion");
     for (const [name, look] of Object.entries(LOOKS)) process.stdout.write(`${name.padEnd(9)} ${look.about}. Suits ${look.suits}.\n`);
