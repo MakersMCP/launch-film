@@ -14,6 +14,19 @@ Tools that make videos with code usually start from a brief: you describe the pr
 
 Read the story behind it on my blog: [launch-film: A Launch Film From Your Website](https://eminbudak.com/blog/launch-film-from-your-website/).
 
+## Requirements
+
+- Node.js 22 or newer.
+- ffmpeg and ffprobe 4.4 or newer, Ubuntu 22.04's 4.4.2 included. To render a film ffmpeg needs libx264, the only H.264 encoder launch-film uses, which Ubuntu's ffmpeg has; `plan`, `check`, `frames` and `stills` need none. The filters it uses are ffmpeg's own, and so is the AAC encoder. `brew install ffmpeg` and `winget install ffmpeg` give a new enough one, and so does `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer. Set `LAUNCH_FILM_FFMPEG` and `LAUNCH_FILM_FFPROBE` to use another build, each as a path or a name on your PATH, and set both: launch-film does not look for ffprobe next to the ffmpeg you name.
+- Google Chrome or Chromium, which draws the film frame by frame and the stills, and reads the site's words for a plan when the page's HTML does not hold them; `check` and `frames` start none. It has been tested with Google Chrome only: 155 on Ubuntu 26.04, 157 on Ubuntu 22.04 and the one GitHub's ubuntu-latest runner comes with. No test has run with Chromium. launch-film looks for both on your PATH and where macOS installs them; on Windows it looks only where Chrome installs itself. Set `LAUNCH_FILM_CHROME` or `CHROME_PATH` to use another build, as a path. easybrandkit, which reads the brand, takes only `CHROME_PATH`.
+- A font on the machine for letters outside the Latin alphabet and for most Vietnamese letters with tone marks, as launch-film fetches only the faces Google Fonts makes for the other Latin letters. A letter no font has is drawn as a box, as Japanese is on a server with no Japanese font; `fonts-noto-cjk` gives Debian and Ubuntu one.
+- [easybrandkit](https://github.com/EminBudak/easybrandkit), which reads the brand when you plan from a site's address: install it with `npm install -g easybrandkit`, or launch-film runs it with `npx -y easybrandkit@0.4.0`. This release was tested with easybrandkit 0.4.0, and runs one on your PATH before it tries npx, whatever its release. Set `LAUNCH_FILM_EASYBRANDKIT` to use a copy of your own.
+- Linux, where it is tested: on Ubuntu 22.04 with its ffmpeg 4.4.2 on every push, in a container as root and without Chrome, so the tests that need Chrome, a user other than root or a network namespace of their own are skipped, and on GitHub's ubuntu-latest runner (Ubuntu 24.04 with ffmpeg 6.1 at this release), on every push and before every release. This release has also run on Ubuntu 26.04 with ffmpeg 8.0, and on Ubuntu 22.04 with Chrome. It is written for macOS and Windows as well, but this release has not been run on either.
+- Room on the disk for the files of a run and those of the run before it, as the earlier files stay until the new ones are in place. A 30 second film takes 8 to 25 MB, by its look, and its frames, stills and check 3 to 10 MB more; until the render ends, its work files take 30 to 90 MB in the temp folder. Each Chrome that renders the film or draws the stills keeps a profile of about 3 MB there. The ones that read the site for a plan, easybrandkit's and the one that reads the words, also keep what the site loads: up to 15 MB for easybrandkit's on a small test site.
+- Network access for a plan, which reads the site unless you give it both `--brand` and `--words`, and for npx to fetch easybrandkit when it is not installed. A render and stills fetch the film's typefaces from Google Fonts and keep them in `~/.cache/launch-film/fonts`; offline they use the ones kept there, and the system's own for the rest. `check` and `frames` need no network. Installing it needs the network, and `npx launch-film@latest` asks npm for the newest version each time it runs. No account and no API key.
+
+`npx launch-film@latest doctor` checks Node, Chrome and ffmpeg: it exits with 1 when Node is older than 22, when it finds no Chrome, or when ffmpeg is missing or older than 4.4. It does not check ffprobe, libx264, the fonts, easybrandkit or the network.
+
 ## Use it with your agent
 
 launch-film ships as an [Agent Skill](https://agentskills.io). Your agent gets the brand, picks a look, writes the scenes from the page's words, renders the film, checks it and hands you the MP4, with the launch pictures if you ask for them.
@@ -76,6 +89,7 @@ npx launch-film looks | types | icons <word> | doctor
   --seconds <n>         aim for 20 to 40 seconds (default 30)
   --aspect 9:16         a vertical film (default 16:9)
   --brand <dir>         use an easybrandkit folder you already have
+  --words <file>        use a words.json you already have instead of reading the page
   --easybrandkit <cmd>  the easybrandkit to run (default: LAUNCH_FILM_EASYBRANDKIT, one on PATH, else easybrandkit with npx)
   --no-music, --no-sfx  plan the film without the music bed or the sound effects (a render reads "music" and "sfx" in film.json)
   --jobs <n>            clips rendered at once, 1 to 4 (default 2)
@@ -211,19 +225,11 @@ Words between asterisks are set in the brand's accent color. A bar is one bar of
 | `pop` | full color fields that change with the cuts, sticker cards with hard shadows | consumer apps, food, games, social |
 | `journal` | warm paper, newspaper rules, large serif headlines | editorial brands, publications |
 
-## Requirements
-
-- Node 22 or newer
-- Google Chrome or Chromium (set `LAUNCH_FILM_CHROME` to use another build)
-- ffmpeg 4.4 or newer (set `LAUNCH_FILM_FFMPEG` and `LAUNCH_FILM_FFPROBE` to use another build)
-- [easybrandkit](https://github.com/EminBudak/easybrandkit): install it with `npm install -g easybrandkit`, or launch-film runs it with `npx -y easybrandkit@0.4.0` (set `LAUNCH_FILM_EASYBRANDKIT` to use a copy of your own)
-
-Run `npx launch-film@latest doctor` to check. It has been tested on Linux with Chrome 155 and ffmpeg 8.0, and on Ubuntu 22.04 with Chrome 157 and the ffmpeg 4.4.2 it ships.
-
 ## Limits
 
 - The film says what the site says. A page with few section titles gives a thin first plan; edit `film.json` or let your agent write the scenes.
 - A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which.
+- Letters outside the Latin alphabet, such as Cyrillic or Japanese, and most Vietnamese letters with tone marks are drawn in the machine's own fonts, not in the film's typefaces, and no note says so.
 - easybrandkit needs a site that opens in a headless browser. A bot check or a login wall gets no kit, and a social profile is not a brand's site.
 - A 30 second film takes one to three minutes to render on a laptop. On a machine too busy for Chrome, a clip can fail with "Chrome did not answer ... within 60 s" or "the page did not load within 30 s": render again once it is less busy, or with `--jobs 1`. A `LAUNCH_FILM_CHROME` that names something that cannot be run, such as the folder Google Chrome.app, fails the run with that reason.
 - The music is simple by design. To use your own track, give its path as `music` in film.json and render again. The cuts still fall on the bars of the look's own tempo (launch 112 BPM, aurora 96, gridline 120, pop 124, journal 90), so a track's beats meet every cut when a bar of the look holds a whole number of the track's beats, with its hit on a cut such as the logo close: four at the look's own tempo, two at half of it, eight at twice it, or five for a 120 BPM track in aurora. So read the track's tempo with `npx musicfit@latest track.mp3 --analyze` before you plan the film, and fit the track once the film is rendered.
