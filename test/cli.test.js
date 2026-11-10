@@ -995,15 +995,66 @@ test("a look or a place named as one of JavaScript's own properties is refused",
   assert.match(parseScene({ type: "features", items: [{ icon: "constructor", title: "A" }, { icon: "constructor", title: "B" }] }).problems[0], /"constructor" is not an icon/);
 });
 
+// A Chrome that answers every call on the DevTools pipe and ends when it is
+// asked to close.
+function answeringChrome() {
+  const file = path.join(tmp(), "chrome");
+  fs.writeFileSync(file, `#!${process.execPath}
+const fs = require("fs");
+let buf = "";
+fs.createReadStream("", { fd: 3 }).on("data", (d) => {
+  buf += d;
+  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) {
+    const msg = JSON.parse(buf.slice(0, i));
+    fs.writeSync(4, JSON.stringify({ id: msg.id, result: {} }) + "\\0");
+    if (msg.method === "Browser.close") process.exit(0);
+  }
+});
+${WAITS}
+`, { mode: 0o755 });
+  return file;
+}
+// An ffmpeg that says it is this version.
+function ffmpegOf(version) {
+  const file = path.join(tmp(), "ffmpeg");
+  fs.writeFileSync(file, `#!/bin/sh\necho 'ffmpeg version ${version} Copyright (c) 2000-2022 the FFmpeg developers'\n`, { mode: 0o755 });
+  return file;
+}
+const doctor = (env) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "doctor"], { encoding: "utf8", timeout: 90_000, env: { ...process.env, ...env } });
+
 test("doctor says when ffmpeg is older than 4.4, and passes a version it cannot read", { skip: process.platform === "win32" && "the stand-in ffmpeg is a shell script" }, () => {
-  const dir = tmp();
-  const doctor = (version) => {
-    const ffmpeg = path.join(dir, `ffmpeg-${version}`);
-    fs.writeFileSync(ffmpeg, `#!/bin/sh\necho 'ffmpeg version ${version} Copyright (c) 2000-2022 the FFmpeg developers'\n`, { mode: 0o755 });
-    return spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "doctor"], { encoding: "utf8", timeout: 30_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
-  };
-  const old = doctor("4.2.7-0ubuntu0.1");
+  const chrome = answeringChrome();
+  const old = doctor({ LAUNCH_FILM_FFMPEG: ffmpegOf("4.2.7-0ubuntu0.1"), LAUNCH_FILM_CHROME: chrome });
   assert.match(old.stdout, /^ffmpeg {2}4\.2\.7-0ubuntu0\.1 \(4\.4 or newer is needed\)$/m);
   assert.equal(old.status, 1);
-  for (const version of ["4.4.2-0ubuntu0.22.04.1", "n7.1", "N-112233-gabcdef0"]) assert.match(doctor(version).stdout, new RegExp(`^ffmpeg {2}${escape(version)}$`, "m"));
+  for (const version of ["4.4.2-0ubuntu0.22.04.1", "n7.1", "N-112233-gabcdef0"]) {
+    const r = doctor({ LAUNCH_FILM_FFMPEG: ffmpegOf(version), LAUNCH_FILM_CHROME: chrome });
+    assert.match(r.stdout, new RegExp(`^ffmpeg {2}${escape(version)}$`, "m"));
+    assert.equal(r.status, 0, r.stdout);
+  }
+});
+
+// Since Chrome keeps its sandbox, a Chrome that cannot start one fails every
+// render and stills, and doctor, which only looked for the file, passed.
+test("doctor starts Chrome, and fails with what to do when Chrome cannot start its sandbox", { skip: process.platform === "win32" && "the stand-ins are scripts" }, () => {
+  const ffmpeg = ffmpegOf("4.4.2-0ubuntu0.22.04.1");
+  const sandbox = path.join(tmp(), "chrome");
+  fs.writeFileSync(sandbox, "#!/bin/sh\necho '[14:14:1110/174151.699093:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:242] Zygote process exited prematurely with exit code 82 (setuid sandbox: failed to move to new namespaces)' >&2\nkill -ABRT $$\n", { mode: 0o755 });
+  const temp = tmp();
+  const failed = doctor({ LAUNCH_FILM_FFMPEG: ffmpeg, LAUNCH_FILM_CHROME: sandbox, TMPDIR: temp });
+  assert.equal(failed.status, 1, failed.stdout);
+  assert.match(failed.stdout, new RegExp(`^chrome {2}${escape(sandbox)}: Chrome could not start its sandbox \\(Zygote process exited prematurely with exit code 82 \\(setuid sandbox: failed to move to new namespaces\\)\\)\\. ` +
+    "Run launch-film where Chrome's sandbox can start: Google Chrome's own package sets it up, and a container needs --security-opt seccomp=unconfined$", "m"));
+  // One that starts passes, and leaves no profile behind.
+  const started = doctor({ LAUNCH_FILM_FFMPEG: ffmpeg, LAUNCH_FILM_CHROME: answeringChrome(), TMPDIR: temp });
+  assert.equal(started.status, 0, started.stdout);
+  assert.deepEqual(fs.readdirSync(temp), []);
+  // And so does this machine's own Chrome, where it keeps its sandbox.
+  const { findChrome } = require("../src/chrome");
+  if (findChrome() && process.platform === "linux" && process.getuid() !== 0) {
+    const real = doctor({ LAUNCH_FILM_FFMPEG: ffmpeg, TMPDIR: temp });
+    assert.equal(real.status, 0, real.stdout);
+    assert.match(real.stdout, new RegExp(`^chrome {2}${escape(findChrome())}$`, "m"));
+    assert.deepEqual(fs.readdirSync(temp), []);
+  }
 });

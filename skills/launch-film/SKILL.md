@@ -13,7 +13,7 @@ The tool is the `launch-film` npm package. It needs Node 22 or newer, Chrome or 
 npx -y launch-film@0.2.1 doctor
 ```
 
-If ffmpeg is missing or older than 4.4, tell the user how to install it (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer) and stop.
+If ffmpeg is missing or older than 4.4, tell the user how to install it (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer) and stop. doctor also starts Chrome once: if it finds no Chrome, or says that Chrome could not start its sandbox or did not start, tell the user what it says and stop.
 
 ## 1. Get the brand and a first plan
 
