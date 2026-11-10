@@ -102,8 +102,12 @@ const IN_PAGE = String.raw`(() => {
   return out;
 })()`;
 
+// A page Chrome cannot open is shown as Chrome's own error page, whose words
+// are Chrome's ("Press space to play" offline), so it is a page not read:
+// one whose address failed, and one that went on to an address that failed.
 async function fromChrome(url) {
   const browser = await launch({ W: 1440, H: 900, network: true });
+  const unread = (why) => Object.assign(new Error(why), { unread: true });
   try {
     const page = await browser.page();
     await page.call("Page.enable");
@@ -118,10 +122,12 @@ async function fromChrome(url) {
       browser.on(on);
       setTimeout(() => resolve(false), 30_000).unref();
     });
-    await page.call("Page.navigate", { url });
+    const { errorText } = await page.call("Page.navigate", { url });
+    if (errorText) throw unread(errorText);
     await loaded;
     // Pages that fetch their text after load get a moment more.
     await new Promise((r) => setTimeout(r, 2500));
+    if (/^chrome-error:/.test(await evaluate(page, "document.URL"))) throw unread("it led to an address that could not be opened");
     return await evaluate(page, IN_PAGE);
   } finally {
     browser.close();
@@ -129,18 +135,26 @@ async function fromChrome(url) {
 }
 
 // The page's words: from its HTML, or from Chrome when the HTML has no
-// headline.
+// headline. A page neither of them could read stops the plan, which went on
+// with no words of the page's, or with those of Chrome's error page.
 async function readWords(url, { log = () => {} } = {}) {
   let words = null;
+  // Why the page was not read: what Chrome said of an address it could not
+  // open, else what the fetch said.
+  let why = "";
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Accept-Language": "en;q=0.9,*;q=0.5" },
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
     });
-    if (res.ok && /html/i.test(res.headers.get("content-type") || "")) words = fromHtml(await res.text());
+    const type = res.headers.get("content-type") || "";
+    if (res.ok && /html/i.test(type)) words = fromHtml(await res.text());
+    else why = res.ok ? `${type || "a file of no type"}, not HTML` : `HTTP ${res.status}`;
   } catch (err) {
-    log(`The page could not be fetched (${err.message}); reading it in Chrome.\n`);
+    // Node says "fetch failed", and why in its cause.
+    why = (err.cause && err.cause.message) || err.message;
+    log(`The page could not be fetched (${why}); reading it in Chrome.\n`);
   }
   const enough = (w) => w && w.headings.some((h) => h.level === 1) && w.headings.length >= 3;
   if (!enough(words)) {
@@ -148,10 +162,12 @@ async function readWords(url, { log = () => {} } = {}) {
       const seen = await fromChrome(url);
       if (seen && (!words || seen.headings.length > words.headings.length)) words = { ...(words || {}), ...seen, jsonld: (words && words.jsonld) || [] };
     } catch (err) {
+      if (err.unread) why = err.message;
       log(`Chrome could not read the page (${err.message}).\n`);
     }
   }
-  return words || fromHtml("");
+  if (!words) throw new Error(`the page ${url} could not be read (${why}): check the address and the network, or give a words.json with --words`);
+  return words;
 }
 
 module.exports = { readWords, fromHtml, decode };

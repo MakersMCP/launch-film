@@ -1,7 +1,12 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { fromHtml, decode } = require("../src/words");
+const http = require("http");
+const net = require("net");
+const { fromHtml, decode, readWords } = require("../src/words");
+const { findChrome } = require("../src/chrome");
+// Ends what the tests start and removes their temp folders: Chrome's too.
+require("./tmp");
 
 const PAGE = `<!doctype html><html lang="en-US"><head>
 <title>Acme Notes | Notes that think with you</title>
@@ -33,4 +38,29 @@ test("the words of a page are read from its HTML", () => {
 
 test("entities are decoded", () => {
   assert.equal(decode("a &amp; b &#39;c&#x27; &rsquo;"), "a & b 'c' \u2019");
+});
+
+// A page with no headline is read in Chrome as well. One that goes on to an
+// address Chrome cannot open ends on Chrome's own error page, whose words
+// were taken for the page's: "This site can't be reached".
+test("a page that leads Chrome to its error page keeps the words its HTML holds", { skip: !findChrome() && "Chrome not found" }, async () => {
+  const closed = net.createServer();
+  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const dead = `http://127.0.0.1:${closed.address().port}/`;
+  await new Promise((resolve) => closed.close(resolve));
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html lang="en"><title>Acme Notes</title><p>Write once and find it anywhere.</p><script>location.href = "${dead}";</script>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const said = [];
+    const words = await readWords(`http://127.0.0.1:${server.address().port}/`, { log: (text) => said.push(text) });
+    assert.equal(said.join(""), "Chrome could not read the page (it led to an address that could not be opened).\n");
+    assert.equal(words.title, "Acme Notes");
+    assert.deepEqual(words.headings, []);
+    assert.deepEqual(words.paragraphs, ["Write once and find it anywhere."]);
+  } finally {
+    server.close();
+  }
 });

@@ -206,6 +206,40 @@ test("a plan given a kit that cannot be read leaves the folder's kit as it was",
   planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
 });
 
+// A plan given a kit and no words reads the words on the page. Offline it
+// took the words of Chrome's own error page, "Press space to play", and
+// ended well. Offline is a network namespace of the plan's own, where
+// unshare can make one.
+const offline = process.platform === "linux" && spawnSync("unshare", ["-rn", "true"]).status === 0;
+// A port on this machine that nothing listens on.
+async function closedPort() {
+  const server = require("net").createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+for (const where of ["offline", "at an address that does not answer"]) {
+  test(`a plan given a kit and no words that cannot read the page ${where} is refused by name and leaves the folder as it was`, { skip: where === "offline" && !offline && "unshare cannot make a network namespace here" }, async () => {
+    const dir = filmFolder();
+    const before = snap(dir);
+    let url = "https://acme-notes.example/";
+    let kit = otherKit();
+    if (where !== "offline") {
+      url = `http://127.0.0.1:${await closedPort()}/`;
+      kit = otherKit(JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(fixture, "brand.json"), "utf8")), url }));
+    }
+    const run = [path.join(root, "bin", "launch-film.js"), "plan", url, "--out", dir, "--brand", kit];
+    const r = where === "offline" ? spawnSync("unshare", ["-rn", process.execPath, ...run], { encoding: "utf8", timeout: 60_000 })
+      : spawnSync(process.execPath, run, { encoding: "utf8", timeout: 60_000 });
+    assert.equal(r.status, 1, r.stderr);
+    // Chrome says why it could not open the page; with no Chrome, the fetch says.
+    const why = require("../src/chrome").findChrome() ? "net::ERR_[A-Z_]+" : "[^)]+";
+    assert.match(r.stderr, new RegExp(`\\nlaunch-film: the page ${escape(url)} could not be read \\(${why}\\): check the address and the network, or give a words\\.json with --words\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
+    assert.deepEqual(snap(dir), before);
+  });
+}
+
 test("a plan that fails makes no folder", () => {
   const base = tmp();
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));
