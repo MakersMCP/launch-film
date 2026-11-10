@@ -218,7 +218,7 @@ Words between asterisks are set in the brand's accent color. A bar is one bar of
 - ffmpeg 4.4 or newer (set `LAUNCH_FILM_FFMPEG` and `LAUNCH_FILM_FFPROBE` to use another build)
 - [easybrandkit](https://github.com/EminBudak/easybrandkit): install it with `npm install -g easybrandkit`, or launch-film runs it with `npx -y easybrandkit@0.4.0` (set `LAUNCH_FILM_EASYBRANDKIT` to use a copy of your own)
 
-Run `npx launch-film@latest doctor` to check. It has been tested on macOS with Chrome 156 and ffmpeg 7.1, on Linux with Chrome 155 and ffmpeg 8.0, and on Ubuntu 22.04 with Chrome 157 and the ffmpeg 4.4.2 it ships.
+Run `npx launch-film@latest doctor` to check. It has been tested on Linux with Chrome 155 and ffmpeg 8.0, and on Ubuntu 22.04 with Chrome 157 and the ffmpeg 4.4.2 it ships.
 
 ## Limits
 
