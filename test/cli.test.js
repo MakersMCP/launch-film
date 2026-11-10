@@ -261,6 +261,36 @@ test("a plan refuses a kit whose address is a file of the machine's, before anyt
   assert.deepEqual(snap(dir), before);
 });
 
+// Where launch-film runs for others, LAUNCH_FILM_CONFINE keeps a film.json
+// and a brand.json to the files in their own folders. A name made to slip
+// past a check of its length drew a file of the machine's into the film.
+test("with LAUNCH_FILM_CONFINE set, a render, stills and a plan refuse a file named outside its folder before anything renders", () => {
+  const dir = filmFolder();
+  const elsewhere = path.join(tmp(), "private.png");
+  fs.copyFileSync(path.join(fixture, "screenshot-1.png"), elsewhere);
+  const name = `/${"./".repeat(2100)}${elsewhere.slice(1)}`;
+  const said = `${name.slice(0, 50)}...${name.slice(-40)}`;
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: "brand/brand.json", look: "launch", clips: [
+    { kind: "screen", seconds: 2.5, image: name }, { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }));
+  const before = snap(dir);
+  for (const command of ["render", "stills"]) {
+    const r = cliWith({ LAUNCH_FILM_CONFINE: "1", LAUNCH_FILM_CHROME: "/nonexistent" }, command, path.join(dir, "film.json"));
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, new RegExp(`^launch-film: film\\.json has problems:\\n  - clips\\[0\\]\\.image "${escape(said)}" is outside film\\.json's folder, and LAUNCH_FILM_CONFINE allows only files in it\\n`), command);
+    assert.deepEqual(snap(dir), before, command);
+  }
+  // A plan given a kit that names one.
+  const raw = JSON.parse(fs.readFileSync(path.join(fixture, "brand.json"), "utf8"));
+  raw.logos[0].file = name;
+  const kit = otherKit(JSON.stringify(raw));
+  const r = cliWith({ LAUNCH_FILM_CONFINE: "1" }, "plan", "https://acme-notes.example", "--out", dir, "--brand", kit, "--words", path.join(fixture, "words.json"));
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, `launch-film: brand.json names files outside its folder, which LAUNCH_FILM_CONFINE does not allow: logos[0].file "${said}" is outside brand.json's folder\nlaunch-film: ${dir} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
+  // Run by its user, the same plan ends well.
+  assert.equal(cli("plan", "https://acme-notes.example", "--out", dir, "--brand", kit, "--words", path.join(fixture, "words.json")).status, 0);
+});
+
 test("a plan that fails makes no folder", () => {
   const base = tmp();
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));

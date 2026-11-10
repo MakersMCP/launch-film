@@ -10,6 +10,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { onPath } = require("./chrome");
 const { track, tempDir, tempEnv, release, stopping } = require("./out");
+const confine = require("./confine");
 
 // ─── colour ────────────────────────────────────────────────────────────────
 const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
@@ -161,13 +162,21 @@ function wordsOf(text) {
 }
 
 // brand.json read and put in the shape the film uses. Files that are
-// missing are left out with a note.
+// missing are left out with a note. With LAUNCH_FILM_CONFINE set, a file
+// named outside the kit's folder makes the kit one that cannot be read
+// (confine.js).
 function readBrand(file) {
   const dir = path.dirname(path.resolve(file));
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
   const notes = [];
-  const fileOf = (rel) => {
+  const outside = [];
+  const fileOf = (rel, where) => {
     if (!rel || typeof rel !== "string") return null;
+    const out = confine.outside(dir, rel, path.basename(file));
+    if (out) {
+      outside.push(`${where} "${confine.said(rel)}" ${out}`);
+      return null;
+    }
     const abs = path.resolve(dir, rel);
     if (!fs.existsSync(abs)) {
       notes.push(`${rel} is listed in brand.json but missing`);
@@ -193,12 +202,12 @@ function readBrand(file) {
   const dark = colors.filter((c) => luminance(c.hex) < 0.04).map((c) => c.hex);
   const fonts = raw.fonts && typeof raw.fonts === "object" ? raw.fonts : {};
   const logos = (Array.isArray(raw.logos) ? raw.logos : [])
-    .map((l) => ({ file: fileOf(l && l.file), where: String((l && l.where) || ""), kind: String((l && l.kind) || ""), background: normHex(l && l.background), alt: String((l && l.alt) || "") }))
+    .map((l, i) => ({ file: fileOf(l && l.file, `logos[${i}].file`), where: String((l && l.where) || ""), kind: String((l && l.kind) || ""), background: normHex(l && l.background), alt: String((l && l.alt) || "") }))
     .filter((l) => l.file);
   const screens = (Array.isArray(raw.screenshots) ? raw.screenshots : [])
-    .map((s) => ({ file: fileOf(s && s.file), width: Number(s && s.width) || 0, height: Number(s && s.height) || 0 }))
+    .map((s, i) => ({ file: fileOf(s && s.file, `screenshots[${i}].file`), width: Number(s && s.width) || 0, height: Number(s && s.height) || 0 }))
     .filter((s) => s.file);
-  const stores = (Array.isArray(raw.stores) ? raw.stores : []).filter((s) => s && s.ok !== false).map((s) => ({
+  const stores = (Array.isArray(raw.stores) ? raw.stores : []).map((s, i) => [s, i]).filter(([s]) => s && s.ok !== false).map(([s, i]) => ({
     type: String(s.type || ""),
     url: String(s.url || ""),
     name: String(s.name || ""),
@@ -206,8 +215,9 @@ function readBrand(file) {
     description: String(s.description || ""),
     // A listing names the maker's own site.
     site: String(s.site || ""),
-    assets: (Array.isArray(s.assets) ? s.assets : []).map((a) => ({ file: fileOf(a && a.file), kind: String((a && a.kind) || ""), width: Number(a && a.width) || 0, height: Number(a && a.height) || 0 })).filter((a) => a.file),
+    assets: (Array.isArray(s.assets) ? s.assets : []).map((a, k) => ({ file: fileOf(a && a.file, `stores[${i}].assets[${k}].file`), kind: String((a && a.kind) || ""), width: Number(a && a.width) || 0, height: Number(a && a.height) || 0 })).filter((a) => a.file),
   }));
+  if (outside.length) throw new Error(`${path.basename(file)} names files outside its folder, which LAUNCH_FILM_CONFINE does not allow: ${outside.join(", ")}`);
   const appStores = stores.filter((s) => /appstore|googleplay|play/i.test(s.type));
   const phoneScreens = appStores.flatMap((s) => s.assets.filter((a) => /screen/i.test(a.kind) && a.height > a.width));
   const appIcon = appStores.flatMap((s) => s.assets.filter((a) => /icon/i.test(a.kind)))[0] || null;

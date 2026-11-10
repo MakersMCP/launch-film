@@ -74,6 +74,8 @@ Stills options (the pictures and STILLS.md go to stills/ next to film.json):
   --for <targets>      Any of ph, og, x, play, chrome (default: all of them).
 
 A run that fails or is stopped leaves the folder it writes to as it was.
+Set LAUNCH_FILM_CONFINE=1 when others give launch-film their film.json or
+brand.json: each may then name only files in its own folder.
 Everything renders on this machine with Chrome and ffmpeg. No account or key.
 `;
 

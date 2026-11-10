@@ -16,6 +16,7 @@ const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
 const { within, tempDir, release, save, reason } = require("./out");
+const confine = require("./confine");
 
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
@@ -35,8 +36,13 @@ function loadFilm(file) {
   const knownLook = Object.hasOwn(motion.LOOKS, String(film.look));
   if (!knownLook) problems.push(`"look" must be one of ${Object.keys(motion.LOOKS).join(", ")}`);
   if (film.aspect && !["16:9", "9:16"].includes(film.aspect)) problems.push('"aspect" must be "16:9" or "9:16"');
+  // With LAUNCH_FILM_CONFINE set, a file named outside the film's folder is
+  // a problem like any other (confine.js).
+  const outside = (name) => confine.outside(dir, name, "film.json");
+  const unconfined = (name, what) => `${what} "${confine.said(name)}" ${outside(name)}, and LAUNCH_FILM_CONFINE allows only files in it`;
   let brand = null;
-  if (film.brand) {
+  if (film.brand && outside(film.brand)) problems.push(unconfined(film.brand, '"brand"'));
+  else if (film.brand) {
     try {
       brand = readBrand(path.resolve(dir, film.brand));
     } catch (err) {
@@ -57,6 +63,10 @@ function loadFilm(file) {
     const seconds = c.seconds !== undefined ? Number(c.seconds) : Number(c.bars || 2) * bar;
     if (!(seconds >= 2 && seconds <= 12)) problems.push(`${at} must last 2-12 seconds (it is ${seconds.toFixed(2)})`);
     const fileOf = (rel, what) => {
+      if (rel && outside(rel)) {
+        problems.push(unconfined(rel, `${at}.${what}`));
+        return null;
+      }
       const abs = rel ? path.resolve(dir, rel) : null;
       if (!abs || !fs.existsSync(abs)) problems.push(`${at}.${what} "${rel || ""}" is not a file`);
       return abs;
@@ -153,6 +163,8 @@ async function checkMusic(loaded) {
   const at = `"music" ${JSON.stringify(music.name)}`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
+  const outside = confine.outside(dir, music.name, "film.json");
+  if (outside) return refuse(`"music" "${confine.said(music.name)}" ${outside}, and LAUNCH_FILM_CONFINE allows only files in it`);
   const instead = "give the path of a track (true plays the look's own music, false none)";
   let kind = null;
   let missed = null;

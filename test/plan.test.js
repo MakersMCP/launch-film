@@ -178,6 +178,70 @@ test("a track's path that leads to something other than a file is refused as wha
   }
 });
 
+// Where launch-film runs for others, who give it the film.json or the
+// brand.json, LAUNCH_FILM_CONFINE is set and such a file may name only files
+// in its own folder. A name made to slip past a check of its length, "/" and
+// then "./" thousands of times, or one that climbs with "..", drew a file of
+// the machine's into the film.
+test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file outside its own folder is refused", { skip: process.platform === "win32" && "links need rights on Windows" }, async () => {
+  const { dir } = filmWithMusic();
+  const elsewhere = path.join(tmp(), "private.png");
+  fs.copyFileSync(path.join(fixture, "screenshot-1.png"), elsewhere);
+  fs.copyFileSync(path.join(fixture, "brand.json"), path.join(path.dirname(elsewhere), "brand.json"));
+  const long = `/${"./".repeat(2100)}${elsewhere.slice(1)}`;
+  const climb = `${"../".repeat(30)}${elsewhere.slice(1)}`;
+  const said = (name) => (name.length > 100 ? `${name.slice(0, 50)}...${name.slice(-40)}` : name);
+  // A folder in the film's folder that a link leads out of.
+  fs.symlinkSync(path.dirname(elsewhere), path.join(dir, "linked"));
+  const film = { brand: "brand/brand.json", look: "launch", clips: [
+    { kind: "screen", seconds: 2.5, image: long },
+    { kind: "screen", seconds: 2.5, image: climb },
+    // An absolute name in the folder is taken, and so is one that climbs back in.
+    { kind: "shots", seconds: 2.5, images: [path.join(dir, "brand", "appstore-1.png"), "linked/private.png"] },
+    { kind: "logo", seconds: 2.5, logo: "brand/../brand/logo-header.png" }] };
+  const file = path.join(dir, "film.json");
+  fs.writeFileSync(file, JSON.stringify(film));
+  const saved = process.env.LAUNCH_FILM_CONFINE;
+  try {
+    // Run by its user, launch-film reads any file, as before.
+    for (const value of [undefined, "", "0"]) {
+      if (value === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+      else process.env.LAUNCH_FILM_CONFINE = value;
+      assert.deepEqual(loadFilm(file).problems, [], String(value));
+    }
+    process.env.LAUNCH_FILM_CONFINE = "1";
+    const rule = "and LAUNCH_FILM_CONFINE allows only files in it";
+    assert.deepEqual(loadFilm(file).problems, [
+      `clips[0].image "${said(long)}" is outside film.json's folder, ${rule}`,
+      `clips[1].image "${said(climb)}" is outside film.json's folder, ${rule}`,
+      `clips[2].images[1] "linked/private.png" leads out of film.json's folder through a link, ${rule}`]);
+    // The brand and the track, which only a render reads, whether or not a
+    // file is there.
+    const brand = `${"../".repeat(30)}${path.join(path.dirname(elsewhere), "brand.json").slice(1)}`;
+    for (const music of [long, "../no-such-track.wav"]) {
+      fs.writeFileSync(file, JSON.stringify({ ...film, brand, music, clips: film.clips.slice(3) }));
+      const loaded = loadFilm(file);
+      assert.deepEqual(loaded.problems, [`"brand" "${said(brand)}" is outside film.json's folder, ${rule}`]);
+      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "${said(music)}" is outside film.json's folder, ${rule}`]);
+    }
+    // A kit's files, by each place brand.json names one.
+    const kit = path.join(dir, "brand", "brand.json");
+    const raw = JSON.parse(fs.readFileSync(kit, "utf8"));
+    fs.symlinkSync(elsewhere, path.join(dir, "brand", "shot.png"));
+    raw.logos[0].file = climb;
+    raw.screenshots[0].file = "shot.png";
+    raw.stores[0].assets[0].file = long;
+    fs.writeFileSync(kit, JSON.stringify(raw));
+    assert.throws(() => readBrand(kit), { message: `brand.json names files outside its folder, which LAUNCH_FILM_CONFINE does not allow: logos[0].file "${said(climb)}" is outside brand.json's folder, ` +
+      `screenshots[0].file "shot.png" leads out of brand.json's folder through a link, stores[0].assets[0].file "${said(long)}" is outside brand.json's folder` });
+    delete process.env.LAUNCH_FILM_CONFINE;
+    assert.equal(readBrand(kit).logos[0].file, elsewhere);
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+    else process.env.LAUNCH_FILM_CONFINE = saved;
+  }
+});
+
 test("a path goes into a command line as one word the shell takes as it is", () => {
   assert.equal(shellWord("/films/acme-notes/music", "linux"), "/films/acme-notes/music");
   assert.equal(shellWord("/films/Emin's films `touch PWNED` $HOME/music", "darwin"), "'/films/Emin'\\''s films `touch PWNED` $HOME/music'");
