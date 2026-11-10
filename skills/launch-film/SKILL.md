@@ -82,7 +82,7 @@ Words between asterisks are set in the accent color. Rules for the words:
 npx -y launch-film@0.2.1 render film/<name>/film.json
 ```
 
-Clips render two at a time; a 30 second film takes one to three minutes. The film is `film/<name>/film.mp4`. If a clip fails, the message names it: fix film.json and render again. When it says that Chrome did not answer in time or that the page did not load, the machine was too busy: render again with `--jobs 1`.
+Clips render two at a time; a 30 second film takes one to three minutes. The film is `film/<name>/film.mp4`. If a clip fails, the message names it: fix film.json and render again. When it says that Chrome did not answer in time or that the page did not load, the machine was too busy: render again with `--jobs 1`. When it says that Chrome could not start its sandbox, tell the user what the message says to do, and stop.
 
 A run that fails or is stopped changes nothing in the folder: the last good plan, brand, film, frames, stills and check stay. Fix the cause and run it again. An earlier file the user made read-only is not replaced: the run names it and stops. That does not hold inside `brand/`: a plan replaces that folder whole, so a plan given a kit with `--brand` takes read-only files there away with the rest. A frames, stills or check folder that is a link takes the new files in the folder it leads to. An earlier file that is a link is replaced by a plain file, and what it led to is left alone; a new file has the mode a new file gets on that system, not the one the earlier file was given.
 

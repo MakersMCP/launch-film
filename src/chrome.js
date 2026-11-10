@@ -63,6 +63,19 @@ function findChrome() {
   return null;
 }
 
+// Why Chrome stopped. A sandbox it could not start ends Chrome at once,
+// whatever signal or code it ends with, and is said as that, with what to do:
+// as root Chrome runs without one, but anyone else gets it.
+function stoppedWhy(code, signal, stderr) {
+  const fatal = /^.*:FATAL:[^\]]*\]\s*(.*\bsandbox\b.*)$/im.exec(stderr || "");
+  if (fatal) {
+    const said = fatal[1].split(/(?<=!)\s|\.\s/)[0].replace(/!$/, "").slice(0, 160);
+    return `Chrome could not start its sandbox (${said}). Run launch-film where Chrome's sandbox can start: Google Chrome's own package sets it up, and a container needs --security-opt seccomp=unconfined`;
+  }
+  if (signal) return `Chrome was stopped by ${signal}${signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`;
+  return `Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`;
+}
+
 // What Chrome is started with: the browser that renders the clips' pages
 // (offline), or the one that reads a site's words (network).
 function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
@@ -75,7 +88,10 @@ function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
     // A clip's page reads the files next to it. The browser that reads a
     // site's words may read none: a page there is the site's, not ours.
     ...(network ? [] : ["--allow-file-access-from-files"]),
-    ...(process.platform === "linux" ? ["--no-sandbox", "--disable-dev-shm-usage"] : []),
+    // Chrome's sandbox does not start as root; anyone else keeps it, so a
+    // page that breaks into Chrome's renderer is held there.
+    ...(process.getuid && process.getuid() === 0 ? ["--no-sandbox"] : []),
+    ...(process.platform === "linux" ? ["--disable-dev-shm-usage"] : []),
     ...(process.env.LAUNCH_FILM_GPU === "0" ? ["--disable-gpu"] : []),
     // Pages render offline: they carry their fonts and pictures with them.
     ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
@@ -103,15 +119,26 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   let id = 0;
   let buf = Buffer.alloc(0);
   let dead = null;
+  let exited = false;
   let closing = false;
   const end = (err) => {
     dead = err;
     for (const w of pending.values()) w.reject(dead);
     pending.clear();
   };
+  // What Chrome printed last can come in after it exits, from a helper that
+  // holds its stderr: what is said of it waits for that, a second at most.
   child.on("exit", (code, signal) => {
-    end(new Error(signal ? `Chrome was stopped by ${signal}${signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`
-      : `Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`));
+    exited = true;
+    let told = false;
+    const tell = () => {
+      if (told) return;
+      told = true;
+      end(new Error(stoppedWhy(code, signal, stderr)));
+    };
+    if (child.stderr.readableEnded) return tell();
+    child.stderr.once("end", tell);
+    setTimeout(tell, 1000).unref();
   });
   // A Chrome that cannot be started at all (a file that may not be run, or
   // the folder Google Chrome.app) has no process to end, so its calls fail
@@ -166,7 +193,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
       if (closing) return;
       closing = true;
       const gone = () => release(profile);
-      if (dead) return gone();
+      if (dead || exited) return gone();
       child.once("exit", gone);
       const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
       timer.unref();
