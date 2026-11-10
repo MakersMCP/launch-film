@@ -556,6 +556,28 @@ test("a render refuses an --output it could not write the film to before any Chr
   assert.ok(chrome.started());
 });
 
+test("a clip's picture that is no picture is refused before the clip renders, and the folder is left as it was", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
+  // A screen clip once rendered an empty page here, and the render ended
+  // well. The phone clip already refused such a file.
+  const dir = filmFolder();
+  fs.writeFileSync(path.join(dir, "notes.png"), "not a picture");
+  const film = JSON.parse(fs.readFileSync(path.join(dir, "film.json"), "utf8"));
+  const chrome = noteChrome();
+  for (const clip of [{ kind: "screen", seconds: 2.5, image: "notes.png" }, { kind: "shots", seconds: 2.5, images: ["notes.png"] }, { kind: "phone", seconds: 2.5, image: "notes.png" }]) {
+    fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...film, clips: [clip] }));
+    const before = snap(dir);
+    const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+    assert.equal(r.stderr, `launch-film: ${path.join(dir, "notes.png")} could not be read as a picture\nlaunch-film: ${dir} is as it was.\n`, clip.kind);
+    assert.deepEqual(snap(dir), before);
+  }
+  // The stills draw the film's screen too.
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...film, clips: [{ kind: "screen", seconds: 2.5, image: "notes.png" }, ...film.clips] }));
+  const stills = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "stills", path.join(dir, "film.json"), "--for", "og");
+  assert.equal(stills.stderr, `launch-film: ${path.join(dir, "notes.png")} could not be read as a picture\nlaunch-film: ${path.join(dir, "stills")} was not made.\n`);
+  assert.ok(!fs.existsSync(path.join(dir, "stills")));
+  assert.ok(!chrome.started(), "no Chrome was started");
+});
+
 test("a folder asked for inside a file is refused as the file it is, and nothing is made", () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, "afile"), "the user's");

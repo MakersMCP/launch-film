@@ -13,7 +13,7 @@ const motion = require("./motion");
 const { loadFilm, buildClip, markFor, brandColours } = require("./film");
 const { resolveFonts } = require("./scene");
 const { snapshots } = require("./chrome");
-const { probe, coverPng } = require("./ffmpeg");
+const { probe, pictureSize, coverPng } = require("./ffmpeg");
 const { prepareIcon, prepareLogo } = require("./logo");
 const { markEnd } = require("./plan");
 const { within, reason, save } = require("./out");
@@ -125,9 +125,10 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
     }
   }
 
-  // The real screens: the site's, else the store screenshots.
+  // The real screens: the site's, else the store screenshots. A file that is
+  // no picture is refused, as the render refuses it.
   const serve = (file, as) => {
-    const info = probe(file);
+    const info = pictureSize(file);
     return { file: `${as}${path.extname(file).toLowerCase() === ".png" ? ".png" : ".jpg"}`, w: info.width, h: info.height, src: file };
   };
   const screenClip = clips.find((c) => c.kind === "screen");

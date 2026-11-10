@@ -11,7 +11,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage } = require("./chrome");
-const { input, picture, whole, writePicture, run, mustRun, probe, readPixels, readSound, loudnessOf } = require("./ffmpeg");
+const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -245,7 +245,7 @@ async function buildClip(clip, ctx) {
     return { html: page.html, files: {}, cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "screen") {
-    const info = probe(clip.imageFile);
+    const info = pictureSize(clip.imageFile);
     const ext = path.extname(clip.imageFile).toLowerCase() === ".png" ? ".png" : ".jpg";
     const soft = path.join(work, `soft-${clip.index}.jpg`);
     const blurred = await run([...input(clip.imageFile), "-vf", "scale='min(1400,iw)':-2,gblur=sigma=12", "-q:v", "5", ...picture(soft)]);
@@ -259,14 +259,14 @@ async function buildClip(clip, ctx) {
   }
   if (clip.kind === "shots") {
     const images = clip.imageFiles.map((file, k) => {
-      const info = probe(file);
+      const info = pictureSize(file);
       return { file: `shot-${k}${path.extname(file).toLowerCase() === ".png" ? ".png" : ".jpg"}`, w: info.width, h: info.height, src: file };
     });
     const page = motion.galleryHtml({ look, port, seconds, accent: brandAccent, brand: colours, images, fonts });
     return { html: page.html, files: Object.fromEntries(images.map((im) => [im.file, fs.readFileSync(im.src)])), cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "phone" || clip.kind === "scroll") {
-    const info = probe(clip.imageFile);
+    const info = pictureSize(clip.imageFile);
     const page = motion.deviceHtml({ mode: clip.kind, look, port, seconds, accent: brandAccent, brand: colours, image: { file: "screen.png", w: info.width, h: info.height },
       top: topColour(clip.imageFile), fonts });
     // The capture cut to what shows and made no larger than the page draws

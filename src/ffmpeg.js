@@ -200,11 +200,19 @@ function coverPng(from, output, W, H) {
     "-frames:v", "1", "-pix_fmt", "rgb24"], output, `making ${output}`);
 }
 
+// A picture's size, from probe(): a file in which ffprobe finds no picture
+// (a text file, a page saved as .png) fails, where its size of 0 x 0 made a
+// clip that showed nothing.
+function pictureSize(file) {
+  const info = probe(file);
+  if (!info.width || !info.height) throw new Error(`${file} could not be read as a picture`);
+  return info;
+}
+
 // A picture's pixels as RGBA, at most `max` px on its long side when given:
 // { data, width, height }.
 function readPixels(file, max = 0) {
-  const info = probe(file);
-  if (!info.width || !info.height) throw new Error(`${file} could not be read as a picture`);
+  const info = pictureSize(file);
   const k = max ? Math.min(1, max / Math.max(info.width, info.height)) : 1;
   const width = Math.max(1, Math.round(info.width * k));
   const height = Math.max(1, Math.round(info.height * k));
@@ -251,4 +259,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, pictureSize, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
