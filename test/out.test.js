@@ -702,6 +702,36 @@ test("a copy is made of plain files, whatever links the folder holds", { skip: p
   assert.ok(!fs.existsSync(path.join(from, "brand")));
 });
 
+// With LAUNCH_FILM_CONFINE set, a plan copies a kit held to its folder: a
+// link in it to a file outside made that file the kit's own, in brand/ and
+// in the film.
+test("a copy held to its folder refuses a link out of it before anything is copied, and follows the links that stay in it", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  const base = tmp();
+  const from = path.join(base, "kit");
+  const elsewhere = path.join(base, "elsewhere");
+  write(from, { "brand.json": "{}", "logo.png": "logo", "deep/inner/page.md": "page" });
+  write(elsewhere, { "secret.png": "secret", "folder/a.txt": "a" });
+  // Links that stay in the folder, the folder itself reached through one.
+  fs.symlinkSync(path.join(from, "logo.png"), path.join(from, "logo-link.png"));
+  fs.symlinkSync("inner", path.join(from, "deep", "inner-link"));
+  fs.symlinkSync(from, path.join(base, "link-to-kit"));
+  const to = path.join(base, "copy");
+  out.copyPlain(path.join(base, "link-to-kit"), to, { held: true });
+  assert.deepEqual(snap(to), { "brand.json": "{}", "deep/": "folder", "deep/inner/": "folder", "deep/inner/page.md": "page", "deep/inner-link/": "folder", "deep/inner-link/page.md": "page",
+    "logo-link.png": "logo", "logo.png": "logo" });
+  // A link to a file out of it, and one to a folder out of it, deep in it.
+  for (const [link, target, rel] of [["logo-01.png", path.join(elsewhere, "secret.png"), "logo-01.png"], [path.join("deep", "inner", "more"), path.join(elsewhere, "folder"), path.join("deep", "inner", "more")]]) {
+    fs.symlinkSync(target, path.join(from, link));
+    const into = path.join(base, `copy-${path.basename(link)}`);
+    assert.throws(() => out.copyPlain(from, into, { held: true }), (err) => err.held === rel && err.message === `${path.join(from, rel)} leads out of ${from} through a link`);
+    assert.ok(!fs.existsSync(into), "nothing is copied");
+    // Without the hold, what it leads to is copied as a plain file or folder.
+    out.copyPlain(from, into);
+    assert.ok(fs.existsSync(path.join(into, rel)) && !fs.lstatSync(path.join(into, rel)).isSymbolicLink());
+    fs.rmSync(path.join(from, link));
+  }
+});
+
 test("a part folder takes the mode of a folder made there, which a default ACL needs", { skip: process.platform === "win32" && "no modes to tell apart" }, () => {
   const run = out.begin(tmp());
   try {

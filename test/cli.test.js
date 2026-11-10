@@ -291,6 +291,68 @@ test("with LAUNCH_FILM_CONFINE set, a render, stills and a plan refuse a file na
   assert.equal(cli("plan", "https://acme-notes.example", "--out", dir, "--brand", kit, "--words", path.join(fixture, "words.json")).status, 0);
 });
 
+// A plan copies the kit as plain files, every link followed: a link in the
+// kit to a file outside it made that file the film's logo, in brand/ and in
+// film.json, which a confined render then took as the kit's own.
+test("with LAUNCH_FILM_CONFINE set, a plan refuses a kit with a link that leads out of it, given with --brand or the folder's own brand/, before anything is copied", { skip: process.platform === "win32" && "links need rights on Windows" }, () => {
+  const outside = tmp();
+  fs.copyFileSync(path.join(fixture, "logo-header.png"), path.join(outside, "secret.png"));
+  fs.mkdirSync(path.join(outside, "pages"));
+  fs.writeFileSync(path.join(outside, "pages", "home.md"), "a page of the machine's");
+  const words = ["--words", path.join(fixture, "words.json")];
+  const confined = (...args) => cliWith({ LAUNCH_FILM_CONFINE: "1" }, "plan", "https://acme-notes.example", ...args);
+  const rule = "leads out of the kit's folder through a link, and LAUNCH_FILM_CONFINE allows only files in it";
+  // A kit whose logo is a link to a file outside, and one with a link to a
+  // folder outside that nothing names.
+  const logo = otherKit();
+  fs.rmSync(path.join(logo, "logo-header.png"));
+  fs.symlinkSync(path.join(outside, "secret.png"), path.join(logo, "logo-header.png"));
+  const folder = otherKit();
+  fs.symlinkSync(path.join(outside, "pages"), path.join(folder, "pages"));
+  for (const [kit, name] of [[logo, "logo-header.png"], [folder, "pages"]]) {
+    const dir = filmFolder();
+    const before = snap(dir);
+    const r = confined("--out", dir, "--brand", kit, ...words);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${path.join(kit, name)} ${rule}\nlaunch-film: ${dir} is as it was.\n`);
+    assert.deepEqual(snap(dir), before);
+    // Into a new folder, none is made.
+    const fresh = path.join(tmp(), "film");
+    assert.equal(confined("--out", fresh, "--brand", kit, ...words).status, 1);
+    assert.ok(!fs.existsSync(fresh));
+    // Run by its user, the plan ends well and copies what the link leads to.
+    assert.equal(cli("plan", "https://acme-notes.example", "--out", dir, "--brand", kit, ...words).status, 0);
+    assert.ok(fs.existsSync(path.join(dir, "brand", name)) && !fs.lstatSync(path.join(dir, "brand", name)).isSymbolicLink());
+  }
+  // A link that stays in the kit is followed, confined too.
+  const inner = otherKit();
+  fs.symlinkSync("logo-header.png", path.join(inner, "logo-link.png"));
+  const dir = filmFolder();
+  assert.equal(confined("--out", dir, "--brand", inner, ...words).status, 0);
+  assert.equal(fs.readFileSync(path.join(dir, "brand", "logo-link.png")).length, fs.statSync(path.join(fixture, "logo-header.png")).size);
+  // The folder's own brand/, which a plan without --brand copies for
+  // easybrandkit: a link in it, and brand/ itself a link out of the folder.
+  // The stand-in easybrandkit says so if it is ever run.
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, 'process.stderr.write("easybrandkit ran\\n"); process.exit(1);');
+  const own = filmFolder();
+  fs.rmSync(path.join(own, "brand", "logo-header.png"));
+  fs.symlinkSync(path.join(outside, "secret.png"), path.join(own, "brand", "logo-header.png"));
+  const linked = filmFolder();
+  fs.renameSync(path.join(linked, "brand"), path.join(outside, "kit"));
+  fs.symlinkSync(path.join(outside, "kit"), path.join(linked, "brand"));
+  const theirs = snap(outside);
+  for (const [film, said] of [[own, `${path.join(own, "brand", "logo-header.png")} ${rule}`],
+    [linked, `${path.join(linked, "brand")} leads out of the film's folder through a link, and LAUNCH_FILM_CONFINE allows only files in it`]]) {
+    const before = snap(film, { links: true });
+    const r = confined("--out", film, "--easybrandkit", kit, ...words);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${said}\nlaunch-film: ${film} is as it was.\n`);
+    assert.deepEqual(snap(film, { links: true }), before);
+  }
+  assert.deepEqual(snap(outside), theirs);
+});
+
 test("a plan that fails makes no folder", () => {
   const base = tmp();
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));

@@ -74,8 +74,9 @@ Stills options (the pictures and STILLS.md go to stills/ next to film.json):
   --for <targets>      Any of ph, og, x, play, chrome (default: all of them).
 
 A run that fails or is stopped leaves the folder it writes to as it was.
-Set LAUNCH_FILM_CONFINE=1 when others give launch-film their film.json or
-brand.json: each may then name only files in its own folder.
+Set LAUNCH_FILM_CONFINE=1 when others give launch-film their film.json,
+brand.json or kit: each may then name only files in its own folder, and a
+kit may hold no link out of it.
 Everything renders on this machine with Chrome and ffmpeg. No account or key.
 `;
 
@@ -244,12 +245,18 @@ async function makePlan(url, flags, run) {
   // The film refers to the brand by a path from its own folder. A kit is
   // copied as plain files, every link in it followed, so nothing this run
   // does to the copy reaches where a link leads (a brand/ that links to a
-  // kit other films share, or a kit with a link in it).
+  // kit other films share, or a kit with a link in it). With
+  // LAUNCH_FILM_CONFINE set, a link may lead only to a file in the kit, as
+  // a brand.json may name only those: the copy would make what it leads to
+  // the kit's own.
+  const confine = require("../src/confine");
+  const held = confine.confined();
   const local = run.folder("brand");
   const copy = (from) => {
     try {
-      copyPlain(from, local);
+      copyPlain(from, local, { held });
     } catch (err) {
+      if (err.held) throw new Error(`${path.join(from, err.held)} leads out of the kit's folder through a link, and LAUNCH_FILM_CONFINE allows only files in it`);
       throw new Error(`copying the brand kit ${from} to ${local}: ${reason(err)}`);
     }
   };
@@ -263,8 +270,15 @@ async function makePlan(url, flags, run) {
     brandFile = path.join(local, path.basename(brandFile));
   } else {
     // easybrandkit makes its kit again where an earlier one is, keeping the
-    // files that are not a kit's: it works on a copy of the folder's own.
-    if (isDir(path.join(run.dir, "brand"))) copy(path.join(run.dir, "brand"));
+    // files that are not a kit's: it works on a copy of the folder's own,
+    // which with LAUNCH_FILM_CONFINE set may not be a link out of the folder,
+    // as film.json's brand may not.
+    const own = path.join(run.dir, "brand");
+    if (isDir(own)) {
+      const out = held && confine.outside(run.dir, "brand", "the film");
+      if (out) throw new Error(`${own} ${out}, and LAUNCH_FILM_CONFINE allows only files in it`);
+      copy(own);
+    }
     if (isStoreUrl(url)) {
       // easybrandkit reads a store listing and the maker's site it names.
       // When it cannot, an App Store listing is read here from Apple's

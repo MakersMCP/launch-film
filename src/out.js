@@ -132,21 +132,16 @@ function save(file, data) {
   }
 }
 
-// Copies a folder as plain files and folders, every link in it followed and
-// what it leads to copied, at any depth (fs.cpSync's dereference follows only
-// a link at the top), so what works on the copy never reaches through a link.
-// Left out are a link that leads nowhere or back to a folder the copy is
-// inside of, sockets and the like, and what launch-film's own runs keep
-// there. The folders take the mode and the default ACL of where they are
-// made, as the part folder does. A folder cannot be copied into itself.
-function copyPlain(from, to, above = []) {
-  const real = fs.realpathSync(from);
-  if (!above.length && inside(path.join(fs.realpathSync(path.dirname(to)), path.basename(to)), real)) throw new Error(`${to} is inside ${from}`);
-  fs.mkdirSync(to, { recursive: true });
-  const trail = [...above, real];
-  for (const name of fs.readdirSync(from)) {
+// The files and folders a plain copy of `from` holds, every link followed,
+// at any depth: visit(source, rel, folder) for each, in the order of their
+// names, a folder before what is in it. Left out are a link that leads nowhere or back to a folder the copy
+// is inside of, sockets and the like, and what launch-film's own runs keep
+// there.
+function eachPlain(from, visit, rel = "", trail = [fs.realpathSync(from)]) {
+  for (const name of fs.readdirSync(from).sort()) {
     if (name.startsWith(".launch-film-")) continue;
     const source = path.join(from, name);
+    const at = rel ? path.join(rel, name) : name;
     let s;
     try {
       s = fs.statSync(source);
@@ -154,9 +149,40 @@ function copyPlain(from, to, above = []) {
       if (err.code === "ENOENT" || err.code === "ELOOP") continue;
       throw err;
     }
-    if (s.isFile()) fs.copyFileSync(source, path.join(to, name));
-    else if (s.isDirectory() && !trail.includes(fs.realpathSync(source))) copyPlain(source, path.join(to, name), trail);
+    if (s.isFile()) visit(source, at, false);
+    else if (s.isDirectory()) {
+      const real = fs.realpathSync(source);
+      if (trail.includes(real)) continue;
+      visit(source, at, true);
+      eachPlain(source, visit, at, [...trail, real]);
+    }
   }
+}
+
+// Copies a folder as plain files and folders, every link in it followed and
+// what it leads to copied, at any depth (fs.cpSync's dereference follows only
+// a link at the top), so what works on the copy never reaches through a link.
+// What eachPlain leaves out is left out. The folders take the mode and the
+// default ACL of where they are made, as the part folder does. A folder
+// cannot be copied into itself. With `held`, as LAUNCH_FILM_CONFINE asks of
+// a kit (bin/launch-film.js), a file or a folder in it that a link leads to
+// outside it is refused before anything is copied, as no file of the
+// folder's: the error's `held` is its path from the folder. Links that stay
+// in the folder are followed as ever.
+function copyPlain(from, to, { held = false } = {}) {
+  const real = fs.realpathSync(from);
+  if (inside(path.join(fs.realpathSync(path.dirname(to)), path.basename(to)), real)) throw new Error(`${to} is inside ${from}`);
+  const out = (source, rel) => {
+    if (held && !inside(fs.realpathSync(source), real)) throw Object.assign(new Error(`${path.join(from, rel)} leads out of ${from} through a link`), { held: rel });
+  };
+  if (held) eachPlain(from, out);
+  fs.mkdirSync(to, { recursive: true });
+  eachPlain(from, (source, rel, folder) => {
+    // Looked at again as it is copied, in case a link changed since.
+    out(source, rel);
+    if (folder) fs.mkdirSync(path.join(to, rel), { recursive: true });
+    else fs.copyFileSync(source, path.join(to, rel));
+  });
 }
 
 // A name on one line: a line break or another control character in it,
