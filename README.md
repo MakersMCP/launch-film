@@ -230,7 +230,7 @@ Words between asterisks are set in the brand's accent color. A bar is one bar of
 ## Limits
 
 - The film says what the site says. A page with few section titles gives a thin first plan; edit `film.json` or let your agent write the scenes.
-- A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which.
+- A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which. launch-film asks Google for it again a day later.
 - Letters outside the Latin alphabet, such as Cyrillic or Japanese, and most Vietnamese letters with tone marks are drawn in the machine's own fonts, not in the film's typefaces, and no note says so.
 - easybrandkit needs a site that opens in a headless browser. A bot check or a login wall gets no kit, and a social profile is not a brand's site.
 - A 30 second film takes one to three minutes to render on a laptop. On a machine too busy for Chrome, a clip can fail with "Chrome did not answer ... within 60 s" or "the page did not load within 30 s": render again once it is less busy, or with `--jobs 1`. A `LAUNCH_FILM_CHROME` that names something that cannot be run, such as the folder Google Chrome.app, fails the run with that reason.

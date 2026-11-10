@@ -3,13 +3,22 @@
 // Typefaces come from Google Fonts by family name and are embedded in the
 // pages as data URLs (latin and latin-ext faces, so accented letters are
 // covered). Each family is fetched once and kept in the cache folder;
-// a family Google does not have is remembered as missing. A cached file is
-// written under a name of its own and renamed into place once whole, since
-// runs at the same time share the folder and a run may be killed mid-write.
+// a family Google does not have is remembered as missing for a day. A
+// cached file is written under a name of its own and renamed into place once
+// whole, since runs at the same time share the folder and a run may be
+// killed mid-write.
+//
+// Runs share the cache, those of other films and, where launch-film runs for
+// others, other people's: a name is asked for, kept and noted as missing in
+// one form, so that a name spelt otherwise, with two spaces, which Google
+// refuses, notes no other family as missing.
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
+
+const MISSING_FOR = 24 * 60 * 60 * 1000;
 
 function cacheDir() {
   const base = process.env.LAUNCH_FILM_CACHE || path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "launch-film");
@@ -30,11 +39,11 @@ async function get(url) {
 // @font-face CSS for the family at the weights asked (the nearest it has
 // when it lacks one), or "" when it cannot be had.
 async function loadFont(family, weights = [400, 700]) {
-  const name = String(family || "").trim();
+  const name = String(family || "").trim().replace(/\s+/g, " ");
   if (!/^[A-Za-z0-9 ]{2,60}$/.test(name)) return "";
   const dir = cacheDir();
-  const key = `${name.replace(/[^A-Za-z0-9]+/g, "_")}-${weights.join("_")}`;
-  const file = path.join(dir, `${key}.css`);
+  const stem = name.replace(/ /g, "_");
+  const file = path.join(dir, `${stem}-${weights.join("_")}.css`);
   try {
     const cached = fs.readFileSync(file, "utf8");
     // A file cut short (by an older release killed mid-write) is fetched again.
@@ -42,8 +51,14 @@ async function loadFont(family, weights = [400, 700]) {
   } catch {
     // Not fetched yet.
   }
-  const missing = path.join(dir, `${name.replace(/[^A-Za-z0-9]+/g, "_")}.missing`);
-  if (fs.existsSync(missing)) return "";
+  // Google tells names apart by case, as the file names of a Mac or of
+  // Windows do not: the note carries a digest of the name as it is asked.
+  const missing = path.join(dir, `${stem}.${crypto.createHash("sha256").update(name).digest("hex").slice(0, 12)}.missing`);
+  try {
+    if (Date.now() - fs.statSync(missing).mtimeMs < MISSING_FOR) return "";
+  } catch {
+    // Not noted as missing.
+  }
   const base = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(name).replace(/%20/g, "+")}`;
   let css;
   try {

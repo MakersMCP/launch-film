@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { loadFont, cacheDir } = require("../src/fonts");
+const { familyName } = require("../src/brand");
 const { tmp } = require("./tmp");
 
 const CSS = "/* latin */\n@font-face {\n  font-family: 'Acme Sans';\n  font-weight: 400;\n  src: url(https://fonts.gstatic.com/s/acme.woff2) format('woff2');\n}\n";
@@ -58,5 +59,71 @@ test("a cached family is whole or not there: a write cut off midway leaves nothi
     else process.env.LAUNCH_FILM_CACHE = saved[0];
     global.fetch = saved[1];
     fs.writeFileSync = saved[2];
+  }
+});
+
+// Google Fonts answered "Open  Sans", with two spaces, with 400, and that
+// noted Open Sans as missing in the cache that every later run shares, so
+// every later film, anyone's where launch-film runs for others, drew it in
+// a fallback. Google tells names apart by case, as a Mac's file names do
+// not. A stand-in Google that has Open Sans, by that name alone.
+function google() {
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(url);
+    if (/fonts\.gstatic\.com/.test(url)) return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer, url };
+    const family = new URL(url).searchParams.get("family").split(":")[0];
+    if (family !== "Open Sans" || google.down) return { ok: false, status: 400, url };
+    return { ok: true, status: 200, text: async () => CSS.replace("Acme Sans", "Open Sans"), url };
+  };
+  return { asked, fetch };
+}
+
+test("a family's name is asked for and kept in one form, so a name spelt otherwise notes no other family as missing", async () => {
+  const saved = [process.env.LAUNCH_FILM_CACHE, global.fetch];
+  process.env.LAUNCH_FILM_CACHE = tmp();
+  const { asked, fetch } = google();
+  global.fetch = fetch;
+  try {
+    assert.match(await loadFont("Open  Sans", [400]), /font-family: 'Open Sans'/);
+    assert.ok(asked.every((url) => !/Open\+\+Sans/.test(url)), asked.join("\n"));
+    fs.rmSync(path.join(cacheDir(), "Open_Sans-400.css"));
+    // Names Google does not have, as it spells them.
+    for (const name of ["open sans", "OPEN SANS", "Open Sans Pro"]) assert.equal(await loadFont(name, [400]), "", name);
+    assert.match(await loadFont("Open Sans", [400]), /font-family: 'Open Sans'/);
+    // On a Mac the names of these notes would be one file but for case.
+    const notes = fs.readdirSync(cacheDir()).filter((f) => f.endsWith(".missing")).map((f) => f.toLowerCase());
+    assert.equal(new Set(notes).size, 3, notes.join(" "));
+    // A brand's typeface is read in that one form too.
+    assert.equal(familyName("Open  Sans, sans-serif"), "Open Sans");
+  } finally {
+    if (saved[0] === undefined) delete process.env.LAUNCH_FILM_CACHE;
+    else process.env.LAUNCH_FILM_CACHE = saved[0];
+    global.fetch = saved[1];
+  }
+});
+
+test("a family noted as missing is asked for again a day later", async () => {
+  const saved = [process.env.LAUNCH_FILM_CACHE, global.fetch];
+  process.env.LAUNCH_FILM_CACHE = tmp();
+  const { asked, fetch } = google();
+  global.fetch = fetch;
+  try {
+    // Google refused it once, as a fault of its own can.
+    google.down = true;
+    assert.equal(await loadFont("Open Sans", [400]), "");
+    google.down = false;
+    const [note] = fs.readdirSync(cacheDir()).filter((f) => f.endsWith(".missing"));
+    asked.length = 0;
+    assert.equal(await loadFont("Open Sans", [400]), "", "within the day");
+    assert.deepEqual(asked, []);
+    const then = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(path.join(cacheDir(), note), then, then);
+    assert.match(await loadFont("Open Sans", [400]), /font-family: 'Open Sans'/);
+  } finally {
+    google.down = false;
+    if (saved[0] === undefined) delete process.env.LAUNCH_FILM_CACHE;
+    else process.env.LAUNCH_FILM_CACHE = saved[0];
+    global.fetch = saved[1];
   }
 });

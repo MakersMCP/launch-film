@@ -144,7 +144,7 @@ function runOnce([cmd, ...pre], url, dir, log) {
 // A family as Google Fonts names it: "Inter Variable", "InterVariable" and
 // a framework's hashed "__Inter_d65c78" are all Inter.
 function familyName(raw) {
-  let f = String(raw || "").split(",")[0].replace(/["']/g, "").trim();
+  let f = String(raw || "").split(",")[0].replace(/["']/g, "").trim().replace(/\s+/g, " ");
   const hashed = /^__([A-Za-z0-9_]+?)(?:_Fallback)?_[0-9a-f]{5,}$/.exec(f);
   if (hashed) f = hashed[1].replace(/_/g, " ");
   f = f.replace(/\s*(Variable|VF|var)$/i, "").replace(/([a-z])Variable$/, "$1").trim();
