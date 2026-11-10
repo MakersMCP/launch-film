@@ -240,6 +240,27 @@ for (const where of ["offline", "at an address that does not answer"]) {
   });
 }
 
+// The audit's way in: a kit whose brand.json is a page as well, with a
+// script in it, gives that same file as the site's address. Chrome opened it
+// as a page, with the files of the machine in reach, and the script read one
+// into words.json.
+test("a plan refuses a kit whose address is a file of the machine's, before anything opens it", () => {
+  const secret = path.join(tmp(), "secret.txt");
+  fs.writeFileSync(secret, "a file no page may read");
+  const kit = path.join(tmp(), "kit");
+  fs.mkdirSync(kit);
+  const file = path.join(kit, "brand.html");
+  const script = `<h1>Acme</h1><script>fetch('file://${secret}').then(r=>r.text()).then(t=>{document.body.innerHTML='<h1>'+t+'</h1><h2>a</h2><h3>b</h3>'})</script>`;
+  fs.writeFileSync(file, JSON.stringify({ url: `file://${file}`, name: script }));
+  const dir = filmFolder();
+  const before = snap(dir);
+  const r = cli("plan", "https://acme-notes.example", "--out", dir, "--brand", file);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, new RegExp(`^launch-film: brand\\.html gives the site's address as "${escape(`file://${file}`)}", which is not an http or https address: ` +
+    `give a kit made from the site, or the page's words with --words\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
+  assert.deepEqual(snap(dir), before);
+});
+
 test("a plan that fails makes no folder", () => {
   const base = tmp();
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(base, "films", "acme"), "--easybrandkit", failingEasybrandkit(base));

@@ -102,12 +102,27 @@ const IN_PAGE = String.raw`(() => {
   return out;
 })()`;
 
+// Whether an address is a web page's, http or https. Only such a page is
+// read: Chrome opens an address of another kind as well, a file of this
+// machine's (file:) among them, and its scripts can read the machine's
+// files from there.
+function webPage(address) {
+  try {
+    return ["http:", "https:"].includes(new URL(String(address)).protocol);
+  } catch {
+    return false;
+  }
+}
+
 // A page Chrome cannot open is shown as Chrome's own error page, whose words
 // are Chrome's ("Press space to play" offline), so it is a page not read:
 // one whose address failed, and one that went on to an address that failed.
+// A page that went on to an address that is no web page's (about:blank) is
+// not read either: its words are not the page's.
 async function fromChrome(url) {
-  const browser = await launch({ W: 1440, H: 900, network: true });
   const unread = (why) => Object.assign(new Error(why), { unread: true });
+  if (!webPage(url)) throw unread("it is not an http or https address");
+  const browser = await launch({ W: 1440, H: 900, network: true });
   try {
     const page = await browser.page();
     await page.call("Page.enable");
@@ -127,8 +142,13 @@ async function fromChrome(url) {
     await loaded;
     // Pages that fetch their text after load get a moment more.
     await new Promise((r) => setTimeout(r, 2500));
-    if (/^chrome-error:/.test(await evaluate(page, "document.URL"))) throw unread("it led to an address that could not be opened");
-    return await evaluate(page, IN_PAGE);
+    // The address and the words in one go, so the words are of the page
+    // whose address passed.
+    const seen = await evaluate(page, `({ at: document.URL, words: ${IN_PAGE} })`);
+    const at = String(seen.at);
+    if (/^chrome-error:/.test(at)) throw unread("it led to an address that could not be opened");
+    if (!webPage(at)) throw unread(`it went on to ${at.length > 80 ? `${at.slice(0, 80)}...` : at}, which is not a web page`);
+    return seen.words;
   } finally {
     browser.close();
   }
@@ -136,8 +156,10 @@ async function fromChrome(url) {
 
 // The page's words: from its HTML, or from Chrome when the HTML has no
 // headline. A page neither of them could read stops the plan, which went on
-// with no words of the page's, or with those of Chrome's error page.
+// with no words of the page's, or with those of Chrome's error page. An
+// address that is not a web page's is refused before either is tried.
 async function readWords(url, { log = () => {} } = {}) {
+  if (!webPage(url)) throw new Error(`the page ${url} could not be read (it is not an http or https address): give the site's address, or a words.json with --words`);
   let words = null;
   // Why the page was not read: what Chrome said of an address it could not
   // open, else what the fetch said.
@@ -170,4 +192,4 @@ async function readWords(url, { log = () => {} } = {}) {
   return words;
 }
 
-module.exports = { readWords, fromHtml, decode };
+module.exports = { readWords, fromChrome, fromHtml, decode, webPage };

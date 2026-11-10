@@ -63,6 +63,26 @@ function findChrome() {
   return null;
 }
 
+// What Chrome is started with: the browser that renders the clips' pages
+// (offline), or the one that reads a site's words (network).
+function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
+  return [
+    "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
+    "--disable-extensions", "--disable-sync", "--disable-default-apps", "--disable-background-networking",
+    "--disable-component-update", "--disable-domain-reliability", "--disable-breakpad", "--metrics-recording-only",
+    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
+    "--use-mock-keychain", "--password-store=basic", "--force-color-profile=srgb", "--font-render-hinting=none",
+    // A clip's page reads the files next to it. The browser that reads a
+    // site's words may read none: a page there is the site's, not ours.
+    ...(network ? [] : ["--allow-file-access-from-files"]),
+    ...(process.platform === "linux" ? ["--no-sandbox", "--disable-dev-shm-usage"] : []),
+    ...(process.env.LAUNCH_FILM_GPU === "0" ? ["--disable-gpu"] : []),
+    // Pages render offline: they carry their fonts and pictures with them.
+    ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
+    "--remote-debugging-pipe", `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "about:blank",
+  ];
+}
+
 // A browser with its own temp profile, answering protocol calls by promise.
 async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const chrome = findChrome();
@@ -71,19 +91,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // ends: Chrome killed by a stop leaves that folder in the temp folder.
   let socket = null;
   const profile = tempDir("launch-film-chrome-", (dir) => closeProfile(dir, socket));
-  const args = [
-    "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
-    "--disable-extensions", "--disable-sync", "--disable-default-apps", "--disable-background-networking",
-    "--disable-component-update", "--disable-domain-reliability", "--disable-breakpad", "--metrics-recording-only",
-    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
-    "--use-mock-keychain", "--password-store=basic", "--force-color-profile=srgb", "--font-render-hinting=none",
-    "--allow-file-access-from-files",
-    ...(process.platform === "linux" ? ["--no-sandbox", "--disable-dev-shm-usage"] : []),
-    ...(process.env.LAUNCH_FILM_GPU === "0" ? ["--disable-gpu"] : []),
-    // Pages render offline: they carry their fonts and pictures with them.
-    ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
-    "--remote-debugging-pipe", `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "about:blank",
-  ];
+  const args = chromeArgs({ W, H, network, profile });
   // A Chrome with network access, stopped as it starts, leaves a
   // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
   // its profile as TMPDIR, that goes with the profile.
@@ -380,4 +388,4 @@ async function snapshots(pages) {
   return out;
 }
 
-module.exports = { findChrome, onPath, launch, openPage, renderPage, stillOf, snapshots, evaluate, CLOCK };
+module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, CLOCK };

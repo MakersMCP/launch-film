@@ -226,7 +226,7 @@ function folderFor(url, flags) {
 // own when the run ends well.
 async function makePlan(url, flags, run) {
   const { runEasybrandkit, readBrand } = require("../src/brand");
-  const { readWords } = require("../src/words");
+  const { readWords, webPage } = require("../src/words");
   const { planFilm } = require("../src/plan");
   const { isStoreUrl, appStoreId, storeBrand } = require("../src/store");
   // A words.json given is read first, so a wrong one stops the run before
@@ -294,6 +294,12 @@ async function makePlan(url, flags, run) {
   if (flags.words) words = given;
   else if (storeWords) words = storeWords;
   else {
+    // The page is the kit's own address, else the one given. A kit whose
+    // address is not a web page's (a file: one, which Chrome would open with
+    // this machine's files in reach) is refused as the kit's.
+    if (brand.url && !webPage(brand.url)) {
+      throw new Error(`${path.basename(brandFile)} gives the site's address as "${brand.url.length > 120 ? `${brand.url.slice(0, 120)}...` : brand.url}", which is not an http or https address: give a kit made from the site, or the page's words with --words`);
+    }
     say(`Reading the words on the page...\n`);
     words = await readWords(brand.url || url, { log: say });
   }
