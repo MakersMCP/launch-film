@@ -19,8 +19,8 @@ const { encoder } = require("./ffmpeg");
 const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save } = require("./out");
 
 // A wait on Chrome that ran out, said with what to do: a machine too busy for
-// Chrome is what made it this slow in the runs seen. A render adds that
-// fewer clips at once ease it (film.js).
+// Chrome is what made it this slow in the runs seen. A render of more than
+// one clip at once adds that one at a time eases it (film.js).
 function late(what) {
   return Object.assign(new Error(`${what}, most often because the machine is too busy: run again once it is less busy`), { slow: true });
 }

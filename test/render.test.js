@@ -189,6 +189,8 @@ function snap(dir) {
 }
 // What a CLI run of that process id left in the temp folder.
 const leftBy = (pid) => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("launch-film-") && n.includes(`-${pid}-`));
+// Text to be found as it is by a RegExp.
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // A stand-in for ffmpeg: a line of sh that may answer for it first ("$@"
 // are the arguments), then the ffmpeg the tests run.
 function standIn(line) {
@@ -316,38 +318,49 @@ ${WAITS}`);
   const chrome = path.join(dir, "chrome");
   fs.writeFileSync(chrome, `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${script.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
   // The CLI's waits on Chrome, 60 s for an answer and 30 s for a page to
-  // load, cut to a moment and a half; but for the first, Chrome's start,
-  // which a loaded machine can take a while over.
+  // load, cut to a moment and a half; but for each Chrome's start, which a
+  // loaded machine can take a while over: its first call, which launch()
+  // sends as it starts it, two Chromes at once when two clips render.
   const stub = path.join(dir, "stub.js");
   fs.writeFileSync(stub, `if (/launch-film\\.js$/.test(process.argv[1] || "")) {
   const real = global.setTimeout;
-  let started = false;
   global.setTimeout = (fn, ms, ...rest) => {
-    if (ms === 60000 && !started) return (started = true), real(fn, ms, ...rest);
+    if (ms === 60000 && /\\n\\s+at launch \\(/.test(new Error().stack)) return real(fn, ms, ...rest);
     return real(fn, ms === 60000 || ms === 30000 ? 1500 : ms, ...rest);
   };
 }`);
   return { chrome, env: { LAUNCH_FILM_CHROME: chrome, NODE_OPTIONS: `--require ${stub}` } };
 }
 
-test("a Chrome too slow to answer, or one that cannot be started, ends the render with what did not answer and what to do", { skip: process.platform === "win32" ? "the stand-in Chrome is a shell script" : !available() && "ffmpeg not found", timeout: 120_000 }, () => {
+test("a Chrome too slow to answer, or one that cannot be started, ends the render with what did not answer and what to do", { skip: process.platform === "win32" ? "the stand-in Chrome is a shell script" : !available() && "ffmpeg not found", timeout: 180_000 }, () => {
   const dir = filmFolder({ clips: [FILM.clips[0]] });
+  const two = filmFolder();
   const before = snap(dir);
+  const beforeTwo = snap(two);
   const { chrome, env } = pipeChrome();
-  const render = (more, ...args) => spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, ...env, ...more } });
+  const renderOf = (folder) => (more, ...args) => spawnSync(process.execPath, [cli, "render", path.join(folder, "film.json"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, ...env, ...more } });
+  const render = renderOf(dir);
   const busy = "most often because the machine is too busy: run again once it is less busy";
   const ended = `launch-film: ${dir} is as it was.\n`;
-  // With two clips at once it adds that one at a time eases the machine.
+  // A film of one clip renders one clip at a time with any --jobs, so the
+  // default of two adds nothing.
   const tab = render({ STAND_IN: "no-tab" });
   assert.equal(tab.status, 1, tab.stderr);
-  assert.equal(tab.stderr, `launch-film: rendering clip 1: Chrome did not answer Target.createTarget within 60 s, ${busy}, or with --jobs 1 to render one clip at a time\n${ended}`);
-  const load = render({}, "--jobs", "1");
+  assert.equal(tab.stderr, `launch-film: rendering clip 1: Chrome did not answer Target.createTarget within 60 s, ${busy}\n${ended}`);
+  // With two clips at once it adds that one at a time eases the machine.
+  // Either clip can be the first whose wait runs out.
+  const both = renderOf(two)({ STAND_IN: "no-tab" });
+  assert.equal(both.status, 1, both.stderr);
+  assert.match(both.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome did not answer Target.createTarget within 60 s, ${busy}, or with --jobs 1 to render one clip at a time\nlaunch-film: ${two} is as it was.\n`)}$`));
+  // And not with one at a time.
+  const load = renderOf(two)({}, "--jobs", "1");
   assert.equal(load.status, 1, load.stderr);
-  assert.equal(load.stderr, `launch-film: rendering clip 1: the page did not load within 30 s, ${busy}\n${ended}`);
-  // One killed by a signal says which, where it said "exit null".
-  const killed = render({ STAND_IN: "killed" });
+  assert.equal(load.stderr, `launch-film: rendering clip 1: the page did not load within 30 s, ${busy}\nlaunch-film: ${two} is as it was.\n`);
+  // One killed by a signal says which, where it said "exit null", and was
+  // not too slow: two clips at once add nothing.
+  const killed = renderOf(two)({ STAND_IN: "killed" });
   assert.equal(killed.status, 1, killed.stderr);
-  assert.equal(killed.stderr, `launch-film: rendering clip 1: Chrome was stopped by SIGKILL, most often because the system ran out of memory\n${ended}`);
+  assert.match(killed.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome was stopped by SIGKILL, most often because the system ran out of memory\nlaunch-film: ${two} is as it was.\n`)}$`));
   // One that cannot be run failed nothing, and the run ended with 0 and no
   // word, as if the film had been made.
   fs.chmodSync(chrome, 0o644);
@@ -356,7 +369,8 @@ test("a Chrome too slow to answer, or one that cannot be started, ends the rende
   assert.equal(none.stderr, `launch-film: rendering clip 1: Chrome could not be started from ${chrome}: permission denied (EACCES). ` +
     `Set LAUNCH_FILM_CHROME to the Chrome program itself, or install Google Chrome or Chromium\n${ended}`);
   assert.deepEqual(snap(dir), before);
-  for (const r of [tab, load, killed, none]) assert.deepEqual(leftBy(r.pid), []);
+  assert.deepEqual(snap(two), beforeTwo);
+  for (const r of [tab, both, load, killed, none]) assert.deepEqual(leftBy(r.pid), []);
 });
 
 test("a page script that Chrome ends at its time limit is told of as that, not as Chrome's \"Internal error\"", async () => {
