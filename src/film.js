@@ -105,6 +105,27 @@ function musicOf(value, dir, problems) {
   return { bed: true };
 }
 
+// Where a link that leads nowhere ends: the first path along it that is not
+// there, after as many links as lead there. null when `file` is no link.
+function linkEnd(file) {
+  let at = file;
+  for (let hops = 0; hops < 40; hops++) {
+    let s;
+    try {
+      s = fs.lstatSync(at);
+    } catch {
+      return hops ? at : null;
+    }
+    if (!s.isSymbolicLink()) return null;
+    try {
+      at = path.resolve(path.dirname(at), fs.readlinkSync(at));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 // The user's own track, when film.json names one, read before anything
 // renders: its sound for the film's length, decoded, and its loudness over
 // it. Returns { track, problems }: a file that is missing, has no sound
@@ -116,18 +137,29 @@ async function checkMusic(loaded) {
   const at = `"music" ${JSON.stringify(music.name)}`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
+  const instead = "give the path of a track (true plays the look's own music, false none)";
   let kind = null;
+  let missed = null;
   try {
     const s = fs.statSync(music.track);
-    kind = s.isFile() ? "file" : s.isDirectory() ? "folder" : "other";
-  } catch {
-    // Not there.
+    kind = s.isFile() ? "file" : s.isDirectory() ? "folder" : s.isFIFO() ? "a pipe" : s.isSocket() ? "a socket" : "a device";
+  } catch (err) {
+    missed = err;
   }
+  // A good file the user may not reach would read as one that is not there.
+  if (missed && !["ENOENT", "ENOTDIR", "ELOOP"].includes(missed.code)) return refuse(`${at} cannot be read: ${reason(missed)}. Make it readable, or give a copy of it you can read`);
   if (kind === "folder") return refuse(`${at} is a folder, not a file: give the path of the track in it`);
-  // A relative path is read from film.json's folder, which may not be where
-  // the user stood when they wrote it: the message says where it looked.
-  if (kind !== "file") {
-    return refuse(path.isAbsolute(music.name) ? `${at} is not a file: give the path of a track (true plays the look's own music, false none)`
+  // The path was right: what is there is no file.
+  if (kind && kind !== "file") return refuse(`${at} is ${kind}, not a file: ${instead}`);
+  if (!kind) {
+    // A link is there, though what it leads to is not: it is told of as one.
+    if (missed.code === "ELOOP") return refuse(`${at} is a link that never reaches a file, through too many links one after another: ${instead}`);
+    const end = linkEnd(music.track);
+    if (end) return refuse(`${at} is a link to ${end}, which is not there: ${instead}`);
+    // A relative path is read from film.json's folder, which may not be
+    // where the user stood when they wrote it: the message says where it
+    // looked.
+    return refuse(path.isAbsolute(music.name) ? `${at} is not a file: ${instead}`
       : `${at} is not a file. It was looked for at ${music.track}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)`);
   }
   // A good file the user may not read would read as a file with no sound.

@@ -4,6 +4,9 @@ const assert = require("node:assert/strict");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const net = require("net");
+const { once } = require("events");
+const { spawnSync } = require("child_process");
 const { readBrand, pickLook } = require("../src/brand");
 const { planFilm, copyFrom, markEnd, findNumber, withoutName, fit } = require("../src/plan");
 const { loadFilm, checkMusic } = require("../src/film");
@@ -138,6 +141,40 @@ test("film.json's music is checked before anything renders", async () => {
   assert.deepEqual((await checkMusic(load("brand"))).problems, ['"music" "brand" is a folder, not a file: give the path of the track in it']);
   assert.deepEqual((await checkMusic(load("https://example.com/a.mp3"))).problems, ['"music" "https://example.com/a.mp3" is an address: download the track and give the path of the file, from film.json\'s folder or absolute']);
   assert.deepEqual((await checkMusic(load(true))).problems, []);
+});
+
+test("a track's path that leads to something other than a file is refused as what it is, not as one that is not there", { skip: process.platform === "win32" && "pipes, sockets and links" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const instead = "give the path of a track (true plays the look's own music, false none)";
+  const refusal = async (value) => (await checkMusic(load(value))).problems;
+  assert.equal(spawnSync("mkfifo", [path.join(dir, "pipe.wav")]).status, 0);
+  assert.deepEqual(await refusal("pipe.wav"), [`"music" "pipe.wav" is a pipe, not a file: ${instead}`]);
+  assert.deepEqual(await refusal("/dev/null"), [`"music" "/dev/null" is a device, not a file: ${instead}`]);
+  const server = net.createServer().listen(path.join(dir, "s.wav"));
+  await once(server, "listening");
+  try {
+    assert.deepEqual(await refusal("s.wav"), [`"music" "s.wav" is a socket, not a file: ${instead}`]);
+  } finally {
+    server.close();
+  }
+  // A link whose track is gone, also at the end of a chain of links, and a
+  // circle of links.
+  fs.symlinkSync("gone.wav", path.join(dir, "link.wav"));
+  fs.symlinkSync("link.wav", path.join(dir, "chain.wav"));
+  for (const name of ["link.wav", "chain.wav"]) assert.deepEqual(await refusal(name), [`"music" "${name}" is a link to ${path.join(dir, "gone.wav")}, which is not there: ${instead}`]);
+  fs.symlinkSync("round-b.wav", path.join(dir, "round-a.wav"));
+  fs.symlinkSync("round-a.wav", path.join(dir, "round-b.wav"));
+  assert.deepEqual(await refusal("round-a.wav"), [`"music" "round-a.wav" is a link that never reaches a file, through too many links one after another: ${instead}`]);
+  // A track in a folder the user may not open is one that cannot be read.
+  if (process.getuid() === 0) return;
+  fs.mkdirSync(path.join(dir, "locked"));
+  fs.writeFileSync(path.join(dir, "locked", "t.wav"), "");
+  fs.chmodSync(path.join(dir, "locked"), 0o000);
+  try {
+    assert.deepEqual(await refusal("locked/t.wav"), ['"music" "locked/t.wav" cannot be read: permission denied (EACCES). Make it readable, or give a copy of it you can read']);
+  } finally {
+    fs.chmodSync(path.join(dir, "locked"), 0o755);
+  }
 });
 
 test("a track with no sound, a silent one and one shorter than the film are refused", { skip: !available() && "ffmpeg not found" }, async () => {
