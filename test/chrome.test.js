@@ -4,8 +4,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
+const http = require("http");
+const dgram = require("dgram");
 const path = require("path");
-const { findChrome, chromeArgs, launch, evaluate } = require("../src/chrome");
+const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate } = require("../src/chrome");
+const { available, readPixels, writePng } = require("../src/ffmpeg");
 // Ends what the tests start and removes their temp folders: Chrome's too.
 const { tmp } = require("./tmp");
 
@@ -71,4 +74,102 @@ test("a Chrome that cannot start its sandbox is told of as that, with what to do
     if (saved === undefined) delete process.env.LAUNCH_FILM_CHROME;
     else process.env.LAUNCH_FILM_CHROME = saved;
   }
+});
+
+// A clip's page was opened from the disk in a Chrome let read every file of
+// the machine's, and WebRTC sent UDP past the proxy that keeps the page
+// offline: a script in a page could read the machine's files and send them
+// out. Now a page gets the files of its own folder, served by launch-film,
+// and nothing else.
+test("a clip's page gets its own files and nothing else: no file of the machine's, no address and no UDP", { skip: !findChrome() && "Chrome not found" }, async () => {
+  const dir = tmp();
+  const secret = path.join(tmp(), "secret.txt");
+  fs.writeFileSync(secret, "a file no page may read");
+  fs.copyFileSync(path.join(__dirname, "fixtures", "acme", "logo-header.png"), path.join(dir, "pic.png"));
+  const asked = [];
+  const server = http.createServer((req, res) => {
+    asked.push(req.url);
+    res.end("an address no page may reach");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const udp = dgram.createSocket("udp4");
+  let packets = 0;
+  udp.on("message", () => packets++);
+  await new Promise((resolve) => udp.bind(0, "127.0.0.1", resolve));
+  const tried = (what) => `${what}.then((r) => r.ok ? "read" : "refused " + r.status, (e) => "failed")`;
+  fs.writeFileSync(path.join(dir, "index.html"), `<!doctype html><html><body><script>
+    window.__tries = Promise.all([
+      ${tried(`fetch("pic.png", { mode: "cors" })`)},
+      ${tried(`fetch(${JSON.stringify(`file://${secret}`)})`)},
+      ${tried(`fetch(${JSON.stringify(`..%2F${path.basename(path.dirname(secret))}%2Fsecret.txt`)})`)},
+      ${tried(`fetch("http://127.0.0.1:${server.address().port}/")`)},
+      new Promise((resolve) => { const i = new Image(); i.onload = () => resolve("read"); i.onerror = () => resolve("failed"); i.src = ${JSON.stringify(`file://${path.join(dir, "pic.png")}`)}; }),
+    ]);
+    const rtc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:${udp.address().port}" }] });
+    rtc.createDataChannel("x");
+    rtc.createOffer().then((offer) => rtc.setLocalDescription(offer));
+  </script></body></html>`);
+  const browser = await launch({ W: 800, H: 600 });
+  try {
+    const { page } = await openPage(browser, dir, { W: 800, H: 600 });
+    assert.deepEqual(await evaluate(page, "window.__tries"), ["read", "failed", "failed", "failed", "failed"]);
+    // ICE asks a STUN server at once; two seconds is long past that.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.equal(packets, 0, "UDP packets that reached the STUN server");
+    assert.deepEqual(asked, []);
+  } finally {
+    browser.close();
+    server.close();
+    udp.close();
+  }
+});
+
+// Neither browser may read the machine's files as a page from the disk can
+// be let: the one that renders is given its files, and the one that reads a
+// site has the site's.
+test("no browser of launch-film's is let read files, and the one that renders sends no UDP past its proxy", () => {
+  for (const network of [false, true]) assert.ok(!chromeArgs({ network, profile: "/p" }).includes("--allow-file-access-from-files"), `network ${network}`);
+  assert.ok(chromeArgs({ network: false, profile: "/p" }).includes("--webrtc-ip-handling-policy=disable_non_proxied_udp"));
+});
+
+// A picture's own pixels, at x and y of a still: [r, g, b].
+const at = (still, x, y) => [...still.data.subarray(4 * (y * still.width + x), 4 * (y * still.width + x) + 3)];
+function stillPixels(png) {
+  const file = path.join(tmp(), "still.png");
+  fs.writeFileSync(file, png);
+  return readPixels(file);
+}
+
+// The logo close draws its sheen through a CSS mask of the logo, which
+// Chrome asks for as a file of the page's own: one it may not have is no
+// mask, and nothing is drawn.
+test("a page's CSS mask of its own picture is drawn", { skip: (!findChrome() && "Chrome not found") || (!available() && "ffmpeg not found") }, async () => {
+  const dir = tmp();
+  // A mask whose left half is clear and right half solid.
+  const data = Buffer.alloc(40 * 20 * 4);
+  for (let y = 0; y < 20; y++) for (let x = 20; x < 40; x++) data.writeUInt32BE(0xffffffff, 4 * (y * 40 + x));
+  await writePng(path.join(dir, "mask.png"), { data, width: 40, height: 20 });
+  const html = `<!doctype html><html><body style="margin:0;background:#000"><div style="width:400px;height:200px;background:#f00;-webkit-mask:url(mask.png) 0 0/100% 100%;mask:url(mask.png) 0 0/100% 100%"></div></body></html>`;
+  const { png } = await stillOf({ html, files: { "mask.png": fs.readFileSync(path.join(dir, "mask.png")) }, W: 400, H: 200 });
+  const still = stillPixels(png);
+  assert.deepEqual(at(still, 100, 100), [0, 0, 0]);
+  assert.deepEqual(at(still, 300, 100), [255, 0, 0]);
+});
+
+// Pages are served at addresses of their own: two pages with a file of one
+// name, as each still's mark.png, each show their own, not the first one's
+// from Chrome's cache.
+test("two pages with a file of the same name each show their own", { skip: (!findChrome() && "Chrome not found") || (!available() && "ffmpeg not found") }, async () => {
+  const dir = tmp();
+  const colours = { red: [255, 0, 0], blue: [0, 0, 255] };
+  const pages = [];
+  for (const [name, rgb] of Object.entries(colours)) {
+    const data = Buffer.alloc(8 * 8 * 4);
+    for (let i = 0; i < 64; i++) data.set([...rgb, 255], 4 * i);
+    await writePng(path.join(dir, `${name}.png`), { data, width: 8, height: 8 });
+    pages.push({ html: `<!doctype html><html><body style="margin:0"><img src="mark.png" style="width:200px;height:200px;display:block"></body></html>`,
+      files: { "mark.png": fs.readFileSync(path.join(dir, `${name}.png`)) }, W: 200, H: 200 });
+  }
+  const shots = await snapshots(pages);
+  assert.deepEqual(shots.map((shot) => at(stillPixels(shot.png), 100, 100)), Object.values(colours));
 });

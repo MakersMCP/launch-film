@@ -85,16 +85,15 @@ function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
     "--disable-component-update", "--disable-domain-reliability", "--disable-breakpad", "--metrics-recording-only",
     "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
     "--use-mock-keychain", "--password-store=basic", "--force-color-profile=srgb", "--font-render-hinting=none",
-    // A clip's page reads the files next to it. The browser that reads a
-    // site's words may read none: a page there is the site's, not ours.
-    ...(network ? [] : ["--allow-file-access-from-files"]),
     // Chrome's sandbox does not start as root; anyone else keeps it, so a
     // page that breaks into Chrome's renderer is held there.
     ...(process.getuid && process.getuid() === 0 ? ["--no-sandbox"] : []),
     ...(process.platform === "linux" ? ["--disable-dev-shm-usage"] : []),
     ...(process.env.LAUNCH_FILM_GPU === "0" ? ["--disable-gpu"] : []),
-    // Pages render offline: they carry their fonts and pictures with them.
-    ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]),
+    // Pages render offline: they carry their fonts and pictures with them,
+    // and are given their files by openPage. WebRTC goes around a proxy over
+    // UDP, so it is let send nothing but through the proxy, which is none.
+    ...(network ? [] : ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>", "--webrtc-ip-handling-policy=disable_non_proxied_udp"]),
     "--remote-debugging-pipe", `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "about:blank",
   ];
 }
@@ -295,6 +294,42 @@ async function evaluate(page, expression, timeout = 20_000) {
   return r.result ? r.result.value : undefined;
 }
 
+// A page is given its files by this process, at an https address of its
+// own that leads nowhere on the network, and is never opened from the disk:
+// it gets the files of its folder and nothing else. Chrome lets an https
+// page open no file of the machine's, and every other address it asks for
+// fails here. The folder's name is in the address, so no page is given
+// another's file of the same name from Chrome's cache. Returns the page's
+// address.
+const PAGES = "https://launch-film.invalid";
+const TYPES = { ".html": "text/html; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp" };
+function serve(browser, page, dir) {
+  const base = `/${encodeURIComponent(path.basename(dir))}/`;
+  browser.on((msg) => {
+    if (msg.sessionId !== page.sessionId || msg.method !== "Fetch.requestPaused") return;
+    const { requestId, request } = msg.params;
+    let file = null;
+    try {
+      const u = new URL(request.url);
+      if (u.origin === PAGES && u.pathname.startsWith(base)) {
+        const at = path.join(dir, ...u.pathname.slice(base.length).split("/").map(decodeURIComponent));
+        const rel = path.relative(dir, at);
+        if (rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) file = at;
+      }
+    } catch {
+      // An address no page of ours has.
+    }
+    if (!file) return page.call("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }).catch(() => {});
+    fs.readFile(file, (err, data) => {
+      const headers = [{ name: "Cache-Control", value: "no-store" }];
+      const answer = err ? { responseCode: 404, responseHeaders: headers, body: "" }
+        : { responseCode: 200, responseHeaders: [...headers, { name: "Content-Type", value: TYPES[path.extname(file).toLowerCase()] || "application/octet-stream" }], body: data.toString("base64") };
+      page.call("Fetch.fulfillRequest", { requestId, ...answer }).catch(() => {});
+    });
+  });
+  return `${PAGES}${base}index.html`;
+}
+
 // Opens a page from a folder (index.html and the files next to it) with the
 // clock in place, and waits for its fonts and pictures.
 async function openPage(browser, dir, { W, H, scale = 1 }) {
@@ -321,7 +356,8 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
     browser.on(on);
     setTimeout(() => resolve(false), 30_000).unref();
   });
-  const url = `file://${path.join(dir, "index.html").split(path.sep).map((p, i) => (i ? encodeURIComponent(p) : p)).join("/")}`;
+  const url = serve(browser, page, dir);
+  await page.call("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await page.call("Page.navigate", { url });
   if (!(await loaded)) throw late("the page did not load within 30 s");
   const failedFonts = await evaluate(page, `Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode().catch(() => {}))])
