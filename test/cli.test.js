@@ -778,6 +778,12 @@ test("a look or a place named as one of JavaScript's own properties is refused",
   const r = cli("plan", "https://acme-notes.example", "--out", path.join(dir, "out"), "--brand", fixture, "--words", path.join(fixture, "words.json"), "--look", "constructor");
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.stderr, 'launch-film: --look "constructor": choose from launch, aurora, gridline, pop, journal\n');
+  // A first word named so is no command, with an option of a command's.
+  for (const [word, ...rest] of [["toString", "--out", path.join(dir, "x")], ["constructor", "--look", "launch"], ["hasOwnProperty", "--jobs", "2"]]) {
+    const named = cli(word, ...rest);
+    assert.equal(named.status, 1, named.stderr);
+    assert.equal(named.stderr, `launch-film: "${word}" is not a command or an address. Run launch-film --help.\n`);
+  }
   assert.deepEqual(fs.readdirSync(dir), []);
   const { parseTargets } = require("../src/stills");
   assert.throws(() => parseTargets("constructor"), /--for "constructor": choose from ph, og, x, play, chrome/);

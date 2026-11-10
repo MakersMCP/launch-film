@@ -638,6 +638,25 @@ test("a folder the run cannot write in is named in the refusal, not the part fol
   }
 });
 
+test("the folders a run made for its part folder go when the part folder itself cannot be made", async () => {
+  // As on a full disk: the new folders a/b/c are made, the part folder in
+  // them is not.
+  const base = tmp();
+  const real = fs.mkdirSync;
+  fs.mkdirSync = (at, ...rest) => {
+    if (path.basename(String(at)).startsWith(".launch-film-part-")) throw Object.assign(new Error(`ENOSPC: no space left on device, mkdir '${at}'`), { code: "ENOSPC" });
+    return real(at, ...rest);
+  };
+  let err;
+  try {
+    err = await out.within(path.join(base, "a", "b", "c", "film"), async () => "made").catch((e) => e);
+  } finally {
+    fs.mkdirSync = real;
+  }
+  assert.equal(err.message, `cannot write in ${base}: no space left on device (ENOSPC)`);
+  assert.deepEqual(fs.readdirSync(base), [], "a/ and the folders in it are gone");
+});
+
 test("a folder asked for inside a file is refused as the file it is", () => {
   const dir = tmp();
   write(dir, { afile: "the user's" });
