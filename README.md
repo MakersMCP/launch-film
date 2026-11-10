@@ -225,7 +225,7 @@ Run `npx launch-film@latest doctor` to check. It has been tested on macOS with C
 - The film says what the site says. A page with few section titles gives a thin first plan; edit `film.json` or let your agent write the scenes.
 - A brand typeface that Google Fonts does not have is replaced by the look's own, and the render says which.
 - easybrandkit needs a site that opens in a headless browser. A bot check or a login wall gets no kit, and a social profile is not a brand's site.
-- A 30 second film takes one to three minutes to render on a laptop.
+- A 30 second film takes one to three minutes to render on a laptop. On a machine too busy for Chrome, a clip can fail with "Chrome did not answer ... within 60 s" or "the page did not load within 30 s": render again once it is less busy, or with `--jobs 1`. A `LAUNCH_FILM_CHROME` that names something that cannot be run, such as the folder Google Chrome.app, fails the run with that reason.
 - The music is simple by design. To use your own track, give its path as `music` in film.json and render again. The cuts still fall on the bars of the look's own tempo (launch 112 BPM, aurora 96, gridline 120, pop 124, journal 90), so a track's beats meet every cut when a bar of the look holds a whole number of the track's beats, with its hit on a cut such as the logo close: four at the look's own tempo, two at half of it, eight at twice it, or five for a 120 BPM track in aurora. So read the track's tempo with `npx musicfit@latest track.mp3 --analyze` before you plan the film, and fit the track once the film is rendered.
 
 ## License

@@ -18,6 +18,13 @@ const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
 const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save } = require("./out");
 
+// A wait on Chrome that ran out, said with what to do: a machine too busy for
+// Chrome is what made it this slow in the runs seen. A render adds that
+// fewer clips at once ease it (film.js).
+function late(what) {
+  return Object.assign(new Error(`${what}, most often because the machine is too busy: run again once it is less busy`), { slow: true });
+}
+
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
     const file = path.join(dir, name);
@@ -89,12 +96,23 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   let buf = Buffer.alloc(0);
   let dead = null;
   let closing = false;
-  child.on("exit", (code) => {
-    dead = new Error(`Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`);
+  const end = (err) => {
+    dead = err;
     for (const w of pending.values()) w.reject(dead);
     pending.clear();
+  };
+  child.on("exit", (code, signal) => {
+    end(new Error(signal ? `Chrome was stopped by ${signal}${signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`
+      : `Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`));
   });
-  child.on("error", (e) => (dead = e));
+  // A Chrome that cannot be started at all (a file that may not be run, or
+  // the folder Google Chrome.app) has no process to end, so its calls fail
+  // here. They waited for an answer that never came, and with nothing left
+  // to wait on, the run ended with 0 and no word.
+  child.on("error", (err) => {
+    const why = { EACCES: "permission denied", ENOENT: "no such file" }[err.code];
+    end(new Error(`Chrome could not be started from ${chrome}: ${why ? `${why} (${err.code})` : err.message}. Set LAUNCH_FILM_CHROME to the Chrome program itself, or install Google Chrome or Chromium`));
+  });
   child.stdio[4].on("data", (chunk) => {
     buf = Buffer.concat([buf, chunk]);
     let i;
@@ -104,7 +122,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
       if (msg.id && pending.has(msg.id)) {
         const w = pending.get(msg.id);
         pending.delete(msg.id);
-        if (msg.error) w.reject(new Error(msg.error.message));
+        if (msg.error) w.reject(Object.assign(new Error(msg.error.message), { answered: true }));
         else w.resolve(msg.result || {});
       } else for (const l of listeners) l(msg);
     }
@@ -115,7 +133,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     const n = ++id;
     // A call with no answer in 60 s is an error, not a hang.
     const timer = setTimeout(() => {
-      if (pending.delete(n)) reject(new Error(`Chrome did not answer ${method} within 60 s`));
+      if (pending.delete(n)) reject(late(`Chrome did not answer ${method} within 60 s`));
     }, 60_000);
     timer.unref();
     pending.set(n, { resolve: (v) => (clearTimeout(timer), resolve(v)), reject: (e) => (clearTimeout(timer), reject(e)) });
@@ -228,8 +246,13 @@ const CLOCK = String.raw`(() => {
   };
 })();`;
 
+// Runs `expression` in the page. Chrome ends a script that runs on past
+// `timeout` with no word but "Internal error", which is said here as that.
 async function evaluate(page, expression, timeout = 20_000) {
-  const r = await page.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true, timeout });
+  const started = Date.now();
+  const r = await page.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true, timeout }).catch((err) => {
+    throw err.answered && Date.now() - started >= timeout ? late(`the page's script did not finish within ${timeout / 1000} s`) : err;
+  });
   if (r.exceptionDetails) {
     const d = r.exceptionDetails;
     throw new Error(`the page failed: ${((d.exception && d.exception.description) || d.text || "error").split("\n")[0]}`);
@@ -265,7 +288,7 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
   });
   const url = `file://${path.join(dir, "index.html").split(path.sep).map((p, i) => (i ? encodeURIComponent(p) : p)).join("/")}`;
   await page.call("Page.navigate", { url });
-  if (!(await loaded)) throw new Error("the page did not load within 30 s");
+  if (!(await loaded)) throw late("the page did not load within 30 s");
   const failedFonts = await evaluate(page, `Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode().catch(() => {}))])
     .then(() => document.fonts.ready).then(() => [...document.fonts].filter((f) => f.status === "error").map((f) => f.family))`);
   return { page, exceptions, failedFonts: failedFonts || [] };
