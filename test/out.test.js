@@ -10,7 +10,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const out = require("../src/out");
 
-const { tmp, shortTmp, stillRunning, WAITS } = require("./tmp");
+const { tmp, shortTmp, stillRunning, WAITS, alive, end, SAVES_PID, pidIn } = require("./tmp");
 const noSignals = process.platform === "win32" && "POSIX signals";
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -503,20 +503,6 @@ function runner(dir, how) {
   const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal, stderr })));
   return { child, ready, ended };
 }
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  // One that has ended stays a zombie where nothing reaps it, as in a
-  // container whose first process is not an init.
-  try {
-    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
-  } catch {
-    return true;
-  }
-};
 // Whether it is gone within a second: one killed outright as the run ends
 // takes a moment to be gone on a loaded machine.
 async function gone(pid) {
@@ -1430,7 +1416,7 @@ launch({ W: 100, H: 100 }).catch(() => {});
 // makes its socket folder in the temp folder, linked from its profile, as
 // Chrome does. "helper": it starts a helper that names the profile in its
 // command line, as Chrome's helpers do, lets SIGTERM go and writes into the
-// profile; its pid goes to the file STAND_IN_PID. "closing": on Ctrl-C it
+// profile; its pid is saved in the file STAND_IN_PID. "closing": on Ctrl-C it
 // starts to close, its link going first, and then lingers until it is
 // killed.
 function standInChrome(dir) {
@@ -1446,7 +1432,8 @@ fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(profile, "Singleton
 if (process.env.STAND_IN === "helper") {
   const write = 'process.on("SIGTERM", () => {}); const fs = require("fs"); setInterval(() => { try { fs.mkdirSync(process.argv[1] + "/Default", { recursive: true }); fs.writeFileSync(process.argv[1] + "/Default/state", "on"); } catch {} }, 5); ${WAITS}';
   const helper = spawn(process.execPath, ["-e", write, profile, "--user-data-dir=" + profile], { stdio: "ignore" });
-  fs.writeFileSync(process.env.STAND_IN_PID, String(helper.pid));
+  ${SAVES_PID}
+  savePid(process.env.STAND_IN_PID, helper.pid);
 }
 if (process.env.STAND_IN === "closing") {
   process.on("SIGINT", () => fs.rmSync(path.join(profile, "SingletonSocket"), { force: true }));
@@ -1480,7 +1467,7 @@ test("a failed run ends the Chrome helpers that still write in its profile befor
   const pidFile = path.join(tmp(), "helper.pid");
   const env = { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: standInChrome(tmp()), STAND_IN: "helper", STAND_IN_PID: pidFile };
   const r = spawnSync(process.execPath, ["-e", STARTS_CHROME, "fails"], { encoding: "utf8", timeout: 20_000, env });
-  const helper = Number(fs.readFileSync(pidFile, "utf8"));
+  const helper = await pidIn(pidFile);
   try {
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.stdout, "up");
@@ -1489,11 +1476,7 @@ test("a failed run ends the Chrome helpers that still write in its profile befor
     assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor the socket folder is left");
     assert.ok(await gone(helper), "the helper is gone");
   } finally {
-    try {
-      process.kill(helper, "SIGKILL");
-    } catch {
-      // Gone, as it should be.
-    }
+    end(helper);
   }
 });
 

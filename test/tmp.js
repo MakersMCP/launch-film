@@ -40,6 +40,63 @@ function stillRunning() {
 // A new folder for a test.
 const tmp = (prefix = "t-") => fs.mkdtempSync(path.join(root, prefix));
 
+// A pid a test may signal: a whole number above 0. Given 0 or a negative
+// number, process.kill signals a whole process group, the one the tests run
+// in, with what started them; a pid file read before its pid was written in
+// it gave 0, and a test killed its own group.
+function pidOf(pid) {
+  if (!(Number.isInteger(pid) && pid > 0)) throw new Error(`${JSON.stringify(pid)} is not the pid of a process a test started`);
+  return pid;
+}
+
+// Whether a process is there and has not ended. One that has ended stays a
+// zombie where nothing reaps it, as in a container whose first process is
+// not an init.
+function alive(pid) {
+  pidOf(pid);
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+}
+
+// Kills a process a test started, if it is still there.
+function end(pid, signal = "SIGKILL") {
+  pidOf(pid);
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Gone, as it should be.
+  }
+}
+
+// What a stand-in runs to give a test a pid in a file: savePid(file, pid)
+// writes it under another name and renames that into place, so a test that
+// finds the file finds the pid whole.
+const SAVES_PID = 'const savePid = (file, pid) => { const fs = require("fs"); fs.writeFileSync(file + ".part", String(pid)); fs.renameSync(file + ".part", file); };';
+
+// The pid a stand-in saved in `file`, once one is there; none within 20 s
+// fails the test.
+async function pidIn(file) {
+  for (const started = Date.now(); Date.now() - started < 20_000;) {
+    let text = "";
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      // Not there yet.
+    }
+    if (/^[1-9]\d*$/.test(text)) return pidOf(Number(text));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`no pid came in ${file} within 20 s`);
+}
+
 // A new folder whose path is short enough to hold a temp folder of a run's
 // with Chrome's socket under it (out.js, tempEnv), for a test to give as
 // TMPDIR. It goes when the tests have run too.
@@ -79,4 +136,4 @@ after(async () => {
   if (failed.length) throw new Error(failed.join("\n"));
 });
 
-module.exports = { tmp, shortTmp, stillRunning, WAITS };
+module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn };

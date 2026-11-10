@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { tmp, shortTmp, WAITS } = require("./tmp");
+const { tmp, shortTmp, WAITS, pidOf, alive, end, SAVES_PID, pidIn } = require("./tmp");
 const { available, FFMPEG } = require("../src/ffmpeg");
 
 const root = path.join(__dirname, "..");
@@ -311,15 +311,15 @@ test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop
   child.stderr.on("data", (d) => (stderr += d));
   const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
   for (let i = 0; i < 1000 && !fs.existsSync(path.join(dir, "started")); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  process.kill(-child.pid, "SIGINT");
+  process.kill(-pidOf(child.pid), "SIGINT");
   const { code, signal } = await ended;
   assert.deepEqual({ code, signal, stderr }, { code: null, signal: "SIGINT", stderr: "launch-film: stopped\n" });
 });
 
 // A stand-in easybrandkit that starts a stand-in Chrome and waits, with no
 // handler for a signal, as easybrandkit 0.4.0. Its Chrome makes its profile
-// and its socket folder in the temp folder, as Chrome does, writes its pid
-// to STAND_IN_PID, lets SIGTERM go, and on Ctrl-C removes its socket folder
+// and its socket folder in the temp folder, as Chrome does, saves its pid
+// in STAND_IN_PID, lets SIGTERM go, and on Ctrl-C removes its socket folder
 // and ends a moment later.
 function easybrandkitWithChrome(dir) {
   const chrome = path.join(dir, "chrome.js");
@@ -337,7 +337,8 @@ process.on("SIGINT", () => {
   fs.rmSync(sock, { recursive: true });
   setTimeout(() => process.exit(0), 200);
 });
-fs.writeFileSync(process.env.STAND_IN_PID, String(process.pid));
+${SAVES_PID}
+savePid(process.env.STAND_IN_PID, process.pid);
 ${WAITS}
 `);
   const kit = path.join(dir, "easybrandkit.js");
@@ -352,19 +353,6 @@ ${WAITS}
   return kit;
 }
 
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
-  } catch {
-    return true;
-  }
-};
-
 test("a plan stopped while easybrandkit reads the brand ends the Chrome easybrandkit started and removes its profile", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
   // With a temp folder long enough that easybrandkit keeps to it, and one
   // short enough for easybrandkit to get a temp folder of the run's own.
@@ -377,8 +365,7 @@ test("a plan stopped while easybrandkit reads the brand ends the Chrome easybran
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d));
     const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-    for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-    const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+    const chrome = await pidIn(pidFile);
     try {
       if (how === "SIGTERM") {
         // To launch-film alone: easybrandkit ends, its Chrome would not.
@@ -388,7 +375,7 @@ test("a plan stopped while easybrandkit reads the brand ends the Chrome easybran
         // once and its Chrome is moved out of its tree before launch-film
         // looks, so this comes a moment into the brand, as a Ctrl-C does.
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        process.kill(-child.pid, "SIGINT");
+        process.kill(-pidOf(child.pid), "SIGINT");
       }
       const { signal } = await ended;
       assert.equal(signal, how, stderr);
@@ -398,11 +385,7 @@ test("a plan stopped while easybrandkit reads the brand ends the Chrome easybran
       assert.deepEqual(fs.readdirSync(temp), [], `${how}: neither its profile nor its socket folder is left`);
       assert.deepEqual(snap(dir), before);
     } finally {
-      try {
-        process.kill(chrome, "SIGKILL");
-      } catch {
-        // Gone, as it should be.
-      }
+      end(chrome);
     }
   }
 });
@@ -414,21 +397,16 @@ test("a Chrome that outlives easybrandkit at a Ctrl-C is ended by the profile it
   const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", easybrandkitWithChrome(tmp())],
     { detached: true, stdio: ["ignore", "ignore", "ignore"], env: { ...process.env, TMPDIR: temp, STAND_IN_PID: pidFile, STAND_IN_STUBBORN: "1" } });
   const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)));
-  for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+  const chrome = await pidIn(pidFile);
   try {
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    process.kill(-child.pid, "SIGINT");
+    process.kill(-pidOf(child.pid), "SIGINT");
     assert.equal(await ended, "SIGINT");
     for (let i = 0; i < 50 && alive(chrome); i++) await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(!alive(chrome), "its Chrome is gone");
     assert.deepEqual(fs.readdirSync(temp), []);
   } finally {
-    try {
-      process.kill(chrome, "SIGKILL");
-    } catch {
-      // Gone, as it should be.
-    }
+    end(chrome);
   }
 });
 
@@ -448,14 +426,13 @@ async function planStoppedAtChrome({ temp, env = {}, stub = "" }) {
   let stderr = "";
   child.stderr.on("data", (d) => (stderr += d));
   const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-  for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 10));
-  const chrome = Number(fs.readFileSync(pidFile, "utf8"));
+  const chrome = await pidIn(pidFile);
   child.kill("SIGTERM");
   const { signal } = await ended;
   assert.equal(signal, "SIGTERM", stderr);
   assert.deepEqual(snap(dir), before);
   for (let i = 0; i < 50 && alive(chrome); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  return { chrome, stillRuns: alive(chrome), end: () => { try { process.kill(chrome, "SIGKILL"); } catch { /* Gone, as it should be. */ } } };
+  return { chrome, stillRuns: alive(chrome), end: () => end(chrome) };
 }
 
 test("a stop that comes before the first look at what easybrandkit started still ends its Chrome", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
@@ -505,7 +482,8 @@ test("a stop while a process still writes in easybrandkit's temp folder ends wit
   const writer = `const fs = require("fs"); const path = require("path");
 const at = (i) => path.join(process.env.TMPDIR, "f" + (i % 2000));
 for (let i = 0; i < 2000; i++) fs.writeFileSync(at(i), "x");
-fs.writeFileSync(process.env.STAND_IN_PID, String(process.pid));
+${SAVES_PID}
+savePid(process.env.STAND_IN_PID, process.pid);
 for (let i = 0, t = Date.now(); Date.now() - t < 20000; i++) { try { fs.writeFileSync(at(i), "x"); } catch {} }`;
   let took = Infinity;
   for (let t = 0; t < 3 && took >= 1000; t++) {
@@ -521,8 +499,7 @@ for (let i = 0, t = Date.now(); Date.now() - t < 20000; i++) { try { fs.writeFil
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d));
     const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-    for (let i = 0; i < 1000 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-    const writing = Number(fs.readFileSync(pidFile, "utf8"));
+    const writing = await pidIn(pidFile);
     try {
       assert.match(fs.readdirSync(temp).join(" "), /launch-film-brand-\d+-/, "it writes in the run's own temp folder");
       const sent = Date.now();
@@ -536,11 +513,7 @@ for (let i = 0, t = Date.now(); Date.now() - t < 20000; i++) { try { fs.writeFil
       assert.deepEqual(fs.readdirSync(temp), [], "nothing is left in the temp folder");
       assert.deepEqual(snap(dir), before);
     } finally {
-      try {
-        process.kill(writing, "SIGKILL");
-      } catch {
-        // Gone, as it should be.
-      }
+      end(writing);
     }
   }
   assert.ok(took < 1000, `it ended ${took} ms after the stop`);

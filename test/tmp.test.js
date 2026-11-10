@@ -76,3 +76,41 @@ test("a folder that cannot be removed fails its file, and neither the other fold
   assert.match(said, /EACCES/);
   assert.ok(!fs.existsSync(made.short), "the short folder is gone");
 });
+
+// A stand-in that wrote its pid with fs.writeFileSync made the file empty
+// first: a test that read it then got "", which is 0 as a number, and
+// process.kill(0) signals the whole process group, the test runner's and
+// what started it. The readers wait for a pid; the kills refuse anything
+// but a whole number above 0; the stand-ins save the pid under another name
+// first.
+test("a pid file read while its pid is still being written gives that pid, never 0", async () => {
+  const { pidIn } = require("./tmp");
+  const file = path.join(tmp(), "child.pid");
+  const writer = require("child_process").spawn(process.execPath, ["-e",
+    'const fs = require("fs"); const fd = fs.openSync(process.argv[1], "w"); setTimeout(() => { fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); }, 300);', file], { stdio: "ignore" });
+  const ended = new Promise((resolve) => writer.on("exit", resolve));
+  try {
+    assert.equal(await pidIn(file), writer.pid);
+  } finally {
+    await ended;
+  }
+});
+
+test("a test may signal only a pid that is a whole number above 0", async () => {
+  const { alive, end, SAVES_PID, pidIn } = require("./tmp");
+  for (const pid of [0, -1, -process.pid, NaN, 1.5, "123", undefined]) {
+    assert.throws(() => alive(pid), /is not the pid of a process a test started/, String(pid));
+    // Signal 0 tests only that the process is there: had the guard let 0
+    // through, nothing would have been killed.
+    assert.throws(() => end(pid, 0), /is not the pid of a process a test started/, String(pid));
+  }
+  assert.ok(alive(process.pid));
+  // A stand-in saves its pid whole, and nothing else is left beside it.
+  const dir = tmp();
+  const file = path.join(dir, "child.pid");
+  const r = spawnSync(process.execPath, ["-e", `${SAVES_PID} savePid(process.argv[1], process.pid); process.stdout.write(String(process.pid));`, file], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(await pidIn(file), Number(r.stdout));
+  assert.deepEqual(fs.readdirSync(dir), ["child.pid"]);
+  assert.ok(!alive(Number(r.stdout)), "it has ended");
+});
