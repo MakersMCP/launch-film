@@ -10,7 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 const motion = require("./motion");
-const { loadFilm, buildClip, markFor, brandColours } = require("./film");
+const { loadFilm, buildClip, markFor, brandColours, pagePicture } = require("./film");
 const { resolveFonts } = require("./scene");
 const { snapshots } = require("./chrome");
 const { probe, pictureSize, coverPng } = require("./ffmpeg");
@@ -135,12 +135,16 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   const shotsClip = clips.find((c) => c.kind === "shots") || clips.find((c) => c.kind === "phone");
   const screen = screenClip ? serve(screenClip.imageFile, "screen") : null;
   const shots = shotsClip ? (shotsClip.imageFiles || [shotsClip.imageFile]).map((f, k) => serve(f, `shot-${k}`)) : [];
+  // A still is laid out 1920 px wide and at most as tall, so no picture in
+  // it is drawn larger than that: one larger than Chrome takes in one file
+  // goes as a copy that size, with a quarter to spare.
+  const given = (s) => pagePicture(s.src, { maxW: 2400, maxH: 2400, out: path.join(work, s.file), what: `making a copy of ${s.src}` });
   const files = {
     ...(mark.file ? { "mark.png": fs.readFileSync(mark.file) } : {}),
     ...(square ? { "square.png": fs.readFileSync(square.file) } : {}),
-    ...(screen ? { [screen.file]: fs.readFileSync(screen.src) } : {}),
-    ...Object.fromEntries(shots.map((s) => [s.file, fs.readFileSync(s.src)])),
+    ...(screen ? { [screen.file]: await given(screen) } : {}),
   };
+  for (const s of shots) files[s.file] = await given(s);
 
   // A page for each picture: the hero and the tiles laid out 1920 px wide
   // in the picture's shape, the film's frames at 1920x1080 even when the

@@ -531,7 +531,8 @@ ${timelineTag()}
 // light, and a cursor (a tap on a phone's screen) points at it; a full screen
 // keeps easing in while the cursor crosses it. Files: image (the capture, as
 // served next to the page) and soft (a blurred copy, the window's width).
-// box: the block in the capture's pixels (zoom). Returns { html, cues, W, H }.
+// box: the block in the capture's pixels (zoom). Returns { html, cues, W, H,
+// window, drawnW }: drawnW is the widest the capture is drawn.
 function screenHtml({ mode, look: lookName, port, seconds, accent, image, soft, box: blk = null, side = "center", phone = false, captions = false, fonts = null, brand = null }) {
   const look = LOOKS[lookName];
   const [W, H] = port ? FRAME.port : FRAME.land;
@@ -649,7 +650,11 @@ ${timelineTag()}
 <div class="stage"><div class="ground">${look.ground ? look.ground(t, seed, port) : groundHtml(look.family || lookName, t, seed, port)}</div><div class="world" id="world">${world}</div>${stage}
 <div class="post"><div class="vignette"></div><div class="grain"></div></div></div>
 <script>window.__S=${JSON.stringify(cfg)};</script><script>${runtime}</script></body></html>`;
-  return { html, cues, W, H, window: { w: ww, h: wh } };
+  // The widest the capture is drawn, in the page's pixels: the camera's
+  // zoom onto the block, its drift and the lifted block at their largest,
+  // or the slow push of a pan.
+  const drawnW = ww * (cam ? cam.scale * 1.025 * 1.06 * 1.02 : 1.07);
+  return { html, cues, W, H, window: { w: ww, h: wh }, drawnW };
 }
 
 // ─── the close ─────────────────────────────────────────────────────────────
@@ -922,7 +927,8 @@ ${timelineTag()}
 // A store screenshot is often a picture of its own (a phone drawn on a
 // colour with a line of text over it), so it is shown whole, never put in a
 // second phone. images: [{ file, w, h }] served next to the page (two or
-// three). Returns { html, cues, W, H }.
+// three). Returns { html, cues, W, H, drawnH }: drawnH is the tallest a card
+// is drawn.
 function galleryHtml({ look: lookName, port, seconds, accent, images, fonts = null, brand = null }) {
   const look = LOOKS[lookName];
   const fam = look.family || lookName;
@@ -1001,7 +1007,9 @@ ${timelineTag()}
 <div class="stage"><div class="ground">${look.ground ? look.ground(t, seed, port) : groundHtml(fam, t, seed, port)}${glow}${floor}</div><div class="world" id="world">${world}</div>
 <div class="post"><div class="vignette"></div><div class="grain"></div></div></div>
 <script>window.__S=${JSON.stringify(cfg)};</script><script>${runtime}</script></body></html>`;
-  return { html, cues, W, H };
+  // The tallest a card is drawn, in the page's pixels: the front one at its
+  // rest, with the stage's slow push.
+  return { html, cues, W, H, drawnH: ch * 1.024 * 1.05 };
 }
 
 // ─── stills ────────────────────────────────────────────────────────────────

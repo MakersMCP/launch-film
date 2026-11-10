@@ -173,3 +173,71 @@ test("two pages with a file of the same name each show their own", { skip: (!fin
   const shots = await snapshots(pages);
   assert.deepEqual(shots.map((shot) => at(stillPixels(shot.png), 100, 100)), Object.values(colours));
 });
+
+// Each of a page's files goes to Chrome in one DevTools message. One past
+// what Chrome takes in a message got no answer, and from then on Chrome
+// answered nothing: the page waited out its 30 s load and the run said the
+// machine was too busy.
+test("a page file larger than Chrome takes in one go fails the page at once, by name", { skip: !findChrome() && "Chrome not found" }, async () => {
+  const { PAGE_FILE_MAX } = require("../src/chrome");
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "index.html"), '<!doctype html><html><body><img src="pic.png"></body></html>');
+  // 80 MB long, with nothing written in it: it takes no room on the disk.
+  fs.writeFileSync(path.join(dir, "pic.png"), "");
+  fs.truncateSync(path.join(dir, "pic.png"), 80 * 1024 * 1024);
+  assert.ok(80 * 1024 * 1024 > PAGE_FILE_MAX);
+  const browser = await launch({ W: 400, H: 300 });
+  try {
+    const started = Date.now();
+    await assert.rejects(openPage(browser, dir, { W: 400, H: 300 }), { message: "the page's pic.png is 80 MB, more than the 64 MB Chrome is given in one file" });
+    assert.ok(Date.now() - started < 20_000, `it took ${Date.now() - started} ms`);
+    // Chrome still answers.
+    assert.equal(await evaluate(await browser.page(), "1 + 1"), 2);
+  } finally {
+    browser.close();
+  }
+});
+
+// A Chrome that answers every call, and when the page is opened asks for its
+// index.html and refuses the file it is given, as Chrome does a fulfilment
+// it cannot take.
+function refusingChrome() {
+  const file = path.join(tmp(), "chrome");
+  fs.writeFileSync(file, `#!${process.execPath}
+const fs = require("fs");
+const answer = (msg) => fs.writeSync(4, JSON.stringify(msg) + "\\0");
+let buf = "";
+fs.createReadStream("", { fd: 3 }).on("data", (d) => {
+  buf += d;
+  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) {
+    const msg = JSON.parse(buf.slice(0, i));
+    if (msg.method === "Fetch.fulfillRequest") answer({ id: msg.id, error: { code: -32602, message: "Invalid parameters" } });
+    else answer({ id: msg.id, result: msg.method === "Target.attachToTarget" ? { sessionId: "S" } : {} });
+    if (msg.method === "Page.navigate") answer({ method: "Fetch.requestPaused", sessionId: "S", params: { requestId: "R", request: { url: msg.params.url } } });
+    if (msg.method === "Browser.close") process.exit(0);
+  }
+});
+setTimeout(() => process.exit(0), 60000);
+`, { mode: 0o755 });
+  return file;
+}
+
+test("a page file Chrome refuses fails the page at once, with Chrome's words", { skip: process.platform === "win32" && "the stand-in Chrome is a script" }, async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html><html><body></body></html>");
+  const saved = process.env.LAUNCH_FILM_CHROME;
+  process.env.LAUNCH_FILM_CHROME = refusingChrome();
+  try {
+    const browser = await launch({ W: 400, H: 300 });
+    try {
+      const started = Date.now();
+      await assert.rejects(openPage(browser, dir, { W: 400, H: 300 }), { message: "Chrome did not take the page's index.html: Invalid parameters" });
+      assert.ok(Date.now() - started < 20_000, `it took ${Date.now() - started} ms`);
+    } finally {
+      browser.close();
+    }
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CHROME;
+    else process.env.LAUNCH_FILM_CHROME = saved;
+  }
+});

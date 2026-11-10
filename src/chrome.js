@@ -301,9 +301,17 @@ async function evaluate(page, expression, timeout = 20_000) {
 // fails here. The folder's name is in the address, so no page is given
 // another's file of the same name from Chrome's cache. Returns the page's
 // address.
+//
+// Each file goes to Chrome in one DevTools message, which Chrome takes only
+// up to 100 MB once the file is in base64: past that it answered nothing
+// more, and the page waited out its load. So a file larger than
+// PAGE_FILE_MAX fails the page at once, by name, and so does one Chrome
+// refuses (fail): the pictures a film names are given as smaller copies when
+// they are larger than this (film.js).
 const PAGES = "https://launch-film.invalid";
 const TYPES = { ".html": "text/html; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp" };
-function serve(browser, page, dir) {
+const PAGE_FILE_MAX = 64 * 1024 * 1024;
+function serve(browser, page, dir, fail = () => {}) {
   const base = `/${encodeURIComponent(path.basename(dir))}/`;
   browser.on((msg) => {
     if (msg.sessionId !== page.sessionId || msg.method !== "Fetch.requestPaused") return;
@@ -320,11 +328,24 @@ function serve(browser, page, dir) {
       // An address no page of ours has.
     }
     if (!file) return page.call("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }).catch(() => {});
+    const name = path.relative(dir, file).split(path.sep).join("/");
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      // Not there: it is answered with a 404 below.
+    }
+    if (size > PAGE_FILE_MAX) {
+      page.call("Fetch.failRequest", { requestId, errorReason: "Failed" }).catch(() => {});
+      return fail(new Error(`the page's ${name} is ${Math.round(size / 1048576)} MB, more than the ${PAGE_FILE_MAX / 1048576} MB Chrome is given in one file`));
+    }
     fs.readFile(file, (err, data) => {
       const headers = [{ name: "Cache-Control", value: "no-store" }];
       const answer = err ? { responseCode: 404, responseHeaders: headers, body: "" }
         : { responseCode: 200, responseHeaders: [...headers, { name: "Content-Type", value: TYPES[path.extname(file).toLowerCase()] || "application/octet-stream" }], body: data.toString("base64") };
-      page.call("Fetch.fulfillRequest", { requestId, ...answer }).catch(() => {});
+      // A Chrome that refuses the file, or that has stopped, fails the page
+      // now. One too slow to answer is told of as that by the page's load.
+      page.call("Fetch.fulfillRequest", { requestId, ...answer }).catch((e) => e.slow || fail(e.answered ? new Error(`Chrome did not take the page's ${name}: ${e.message}`) : e));
     });
   });
   return `${PAGES}${base}index.html`;
@@ -356,10 +377,14 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
     browser.on(on);
     setTimeout(() => resolve(false), 30_000).unref();
   });
-  const url = serve(browser, page, dir);
+  // A file the page cannot be given fails it at once (serve).
+  let fail = null;
+  const failed = new Promise((resolve, reject) => (fail = reject));
+  failed.catch(() => {});
+  const url = serve(browser, page, dir, (err) => fail(err));
   await page.call("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await page.call("Page.navigate", { url });
-  if (!(await loaded)) throw late("the page did not load within 30 s");
+  if (!(await Promise.race([loaded, failed]))) throw late("the page did not load within 30 s");
   const failedFonts = await evaluate(page, `Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode().catch(() => {}))])
     .then(() => document.fonts.ready).then(() => [...document.fonts].filter((f) => f.status === "error").map((f) => f.family))`);
   return { page, exceptions, failedFonts: failedFonts || [] };
@@ -451,4 +476,4 @@ async function snapshots(pages) {
   return out;
 }
 
-module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, CLOCK };
+module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, CLOCK, PAGE_FILE_MAX };

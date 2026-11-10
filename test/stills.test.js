@@ -12,7 +12,7 @@ const { makeStills, parseTargets, galleryClips, TARGETS } = require("../src/stil
 const motion = require("../src/motion");
 const { readBrand } = require("../src/brand");
 const { planFilm } = require("../src/plan");
-const { tmp } = require("./tmp");
+const { tmp, bigPicture } = require("./tmp");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -177,4 +177,19 @@ fs.writeFileSync = (file, ...rest) => {
   const r = stills([filmFile, "--for", "og"], { NODE_OPTIONS: `--require ${stub}` });
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.stderr.split("\n").slice(-3, -1).join("\n"), `launch-film: making the new ${path.join(dir, "stills", "og.png")}: no space left on device (ENOSPC)\nlaunch-film: ${path.join(dir, "stills")} was not made.`);
+});
+
+// The stills' pages are given their files as a clip's page is: a screenshot
+// of more than Chrome takes in one file goes as a copy, as large as a still
+// draws it. Given as it was, it failed the stills.
+test("the stills of a film whose screenshot is larger than Chrome takes in one file are made", { skip, timeout: 240_000 }, async () => {
+  const { dir, filmFile } = plannedFolder();
+  const film = JSON.parse(fs.readFileSync(filmFile, "utf8"));
+  const screen = film.clips.find((c) => c.kind === "screen");
+  assert.ok(screen, "the plan has a screen clip");
+  screen.image = path.basename(bigPicture(dir));
+  fs.writeFileSync(filmFile, JSON.stringify(film));
+  const r = stills([filmFile, "--for", "og"], {});
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual([probe(path.join(dir, "stills", "og.png")).width, probe(path.join(dir, "stills", "og.png")).height], [1200, 630]);
 });

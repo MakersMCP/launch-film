@@ -10,7 +10,7 @@ const { findChrome, launch, openPage, evaluate } = require("../src/chrome");
 const { FFMPEG, available, probe, readPixels, mustRun } = require("../src/ffmpeg");
 const { renderFilm } = require("../src/film");
 const audio = require("../src/audio");
-const { tmp, WAITS } = require("./tmp");
+const { tmp, WAITS, bigPicture } = require("./tmp");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -238,6 +238,60 @@ const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", 
   assert.deepEqual(screen, { files: ["capture.png"], soft: false });
   assert.deepEqual(phone, { error: "clip 2: the picture was cut short, most often because the disk is full" });
   assert.deepEqual(logo, { error: "writing a picture: the picture was cut short, most often because the disk is full" });
+});
+
+// Each of a page's files goes to Chrome in one DevTools message: a picture of
+// more than Chrome takes in one got no answer, and the page waited out its
+// load. A film that named a screenshot of 80 MB rendered when pages were
+// opened from the disk.
+test("a picture larger than Chrome takes in one file goes to the page as a copy no larger than the page draws it, and a smaller one as it is", { skip: !available() && "ffmpeg not found", timeout: 120_000 }, async () => {
+  const { loadFilm, buildClip, brandColours } = require("../src/film");
+  const { PAGE_FILE_MAX } = require("../src/chrome");
+  const dir = filmFolder({ clips: [
+    { kind: "screen", seconds: 2.5, image: "big.bmp", mode: "pan" },
+    { kind: "screen", seconds: 2.5, image: "big.bmp", mode: "zoom", box: [3000, 2000, 600, 300] },
+    { kind: "shots", seconds: 2.5, images: ["big.bmp", "brand/appstore-1.png"] },
+    { kind: "screen", seconds: 2.5, image: "brand/screenshot-1.png", mode: "pan" },
+    { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" },
+  ] });
+  assert.ok(fs.statSync(bigPicture(dir)).size > PAGE_FILE_MAX);
+  const loaded = loadFilm(path.join(dir, "film.json"));
+  assert.deepEqual(loaded.problems, []);
+  const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", weight: { head: 700, body: 500 } };
+  const ctx = { look: "launch", port: false, fonts, colours: brandColours(loaded.brand), work: tmp(), lang: "", brand: loaded.brand, notes: [] };
+  const pages = [];
+  for (const clip of loaded.clips.slice(0, 4)) {
+    clip.render = clip.seconds;
+    pages.push(await buildClip(clip, ctx));
+  }
+  // The size of a picture a page is given.
+  const sizeOf = (data) => {
+    const file = path.join(tmp(), "picture");
+    fs.writeFileSync(file, data);
+    const info = probe(file);
+    return [info.width, info.height];
+  };
+  const [pan, zoom, shots, small] = pages;
+  // A pan draws the window at most 1536 px wide and pushes in by 7 %; a zoom
+  // moves the camera in up to 2.8 times; a card is about 800 px tall. Each
+  // copy keeps the picture's shape.
+  const [panW, panH] = sizeOf(pan.files["capture.jpg"]);
+  assert.ok(panW >= 1536 * 0.199 * 1.07 && panW <= 1536 * 1.07 * 1.25 && Math.abs(panW / panH - 6400 / 4200) < 0.01, `the pan's copy is ${panW}x${panH}`);
+  const [zoomW] = sizeOf(zoom.files["capture.jpg"]);
+  assert.ok(zoomW > 2 * panW && zoomW < 6400, `the zoom's copy is ${zoomW} wide`);
+  const [, shotH] = sizeOf(shots.files["shot-0.jpg"]);
+  assert.ok(shotH >= 800 && shotH <= 1200, `the card's copy is ${shotH} tall`);
+  for (const data of [pan.files["capture.jpg"], zoom.files["capture.jpg"], shots.files["shot-0.jpg"]]) assert.ok(data.length < PAGE_FILE_MAX, `${data.length} bytes`);
+  // A picture Chrome takes as it is goes as it is.
+  assert.ok(shots.files["shot-1.png"].equals(fs.readFileSync(path.join(dir, "brand", "appstore-1.png"))));
+  assert.ok(small.files["capture.png"].equals(fs.readFileSync(path.join(dir, "brand", "screenshot-1.png"))));
+});
+
+test("a film whose screenshot is larger than Chrome takes in one file renders", { skip, timeout: 240_000 }, async () => {
+  const dir = filmFolder({ clips: [{ kind: "screen", seconds: 2.5, image: "big.bmp", mode: "pan" }, { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
+  bigPicture(dir);
+  const result = await renderFilm(path.join(dir, "film.json"), { jobs: 1 });
+  assert.ok(Math.abs(probe(result.output).duration - 5) < 0.15);
 });
 
 test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {

@@ -10,7 +10,7 @@ const os = require("os");
 const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
-const { renderPage } = require("./chrome");
+const { renderPage, PAGE_FILE_MAX } = require("./chrome");
 const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
@@ -247,6 +247,21 @@ function topColour(file) {
   return `#${sum.map((v) => Math.round(v / (rows * p.width)).toString(16).padStart(2, "0")).join("")}`;
 }
 
+// The bytes a page is given for a picture the film names: the file as it is,
+// or, when it is larger than Chrome takes in one file (chrome.js), a copy
+// that fits `maxW` x `maxH`, the most the page draws it at, and is never
+// larger than the picture, written to `out` (a PNG, or a JPEG by its name).
+// A screenshot of 80 MB rendered when pages were opened from the disk, and
+// then failed.
+async function pagePicture(file, { maxW, maxH = Infinity, out, what }) {
+  if (fs.statSync(file).size <= PAGE_FILE_MAX) return fs.readFileSync(file);
+  const info = pictureSize(file);
+  const k = Math.min(1, maxW / info.width, maxH / info.height);
+  const size = (n) => Math.max(2, 2 * Math.round((n * k) / 2));
+  await writePicture([...input(file), "-vf", `scale=${size(info.width)}:${size(info.height)}:flags=lanczos`, "-frames:v", "1", ...(/\.jpe?g$/i.test(out) ? ["-q:v", "2"] : [])], out, what);
+  return fs.readFileSync(out);
+}
+
 // One clip's page: { html, files, cues, W, H }.
 async function buildClip(clip, ctx) {
   const { look, port, fonts, colours, work } = ctx;
@@ -269,7 +284,9 @@ async function buildClip(clip, ctx) {
     const page = motion.screenHtml({ mode: clip.mode === "zoom" ? "zoom" : "pan", look, port, seconds, accent: brandAccent, brand: colours,
       image: { file: `capture${ext}`, w: info.width, h: info.height }, soft: hasSoft ? "soft.jpg" : null, box: clip.box || null,
       side: clip.side || "center", phone: info.height > info.width, fonts });
-    const files = { [`capture${ext}`]: fs.readFileSync(clip.imageFile), ...(hasSoft ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
+    // With a quarter to spare, as the phone's screen below.
+    const capture = await pagePicture(clip.imageFile, { maxW: page.drawnW * 1.25, out: path.join(work, `capture-${clip.index}${ext}`), what: `clip ${clip.index + 1}` });
+    const files = { [`capture${ext}`]: capture, ...(hasSoft ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "shots") {
@@ -278,7 +295,9 @@ async function buildClip(clip, ctx) {
       return { file: `shot-${k}${path.extname(file).toLowerCase() === ".png" ? ".png" : ".jpg"}`, w: info.width, h: info.height, src: file };
     });
     const page = motion.galleryHtml({ look, port, seconds, accent: brandAccent, brand: colours, images, fonts });
-    return { html: page.html, files: Object.fromEntries(images.map((im) => [im.file, fs.readFileSync(im.src)])), cues: page.cues, W: page.W, H: page.H };
+    const files = {};
+    for (const [k, im] of images.entries()) files[im.file] = await pagePicture(im.src, { maxW: Infinity, maxH: page.drawnH * 1.25, out: path.join(work, `shot-${clip.index}-${k}${path.extname(im.file)}`), what: `clip ${clip.index + 1}` });
+    return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "phone" || clip.kind === "scroll") {
     const info = pictureSize(clip.imageFile);
@@ -470,4 +489,4 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
   }
 }
 
-module.exports = { loadFilm, checkMusic, shellWord, renderFilm, buildClip, markFor, brandColours, FPS, FADE };
+module.exports = { loadFilm, checkMusic, shellWord, renderFilm, buildClip, markFor, brandColours, pagePicture, FPS, FADE };

@@ -136,4 +136,26 @@ after(async () => {
   if (failed.length) throw new Error(failed.join("\n"));
 });
 
-module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn };
+// A picture in `dir` larger than Chrome takes in one file (chrome.js): a
+// black 24 bit BMP, 6400 x 4200 and 80 MB long, of which only the header is
+// written, so it takes next to no room on the disk.
+function bigPicture(dir, name = "big.bmp") {
+  const [W, H] = [6400, 4200];
+  const size = 54 + W * 3 * H;
+  const head = Buffer.alloc(54);
+  head.write("BM", 0);
+  head.writeUInt32LE(size, 2);
+  head.writeUInt32LE(54, 10);
+  head.writeUInt32LE(40, 14);
+  head.writeInt32LE(W, 18);
+  head.writeInt32LE(H, 22);
+  head.writeUInt16LE(1, 26);
+  head.writeUInt16LE(24, 28);
+  head.writeUInt32LE(W * 3 * H, 34);
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, head);
+  fs.truncateSync(file, size);
+  return file;
+}
+
+module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture };
