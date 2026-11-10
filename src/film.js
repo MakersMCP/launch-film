@@ -199,6 +199,9 @@ async function checkMusic(loaded) {
   // A second past the film's end, so a track as long as the film shows it.
   const sound = readSound(music.track, { seconds: total + 1 });
   if (!sound) return refuse(`${at} has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound`);
+  // An ffmpeg that would not read it says why, as a guard does that opens
+  // no file whose name has a % in it.
+  if (sound.failed) return refuse(`${at} could not be read: ${sound.failed}`);
   // musicfit gives a length to the millisecond: half a frame short is whole.
   if (sound.seconds < total - 0.5 / FPS) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;

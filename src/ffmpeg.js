@@ -81,6 +81,26 @@ function why(r, { lines = 3, name = "ffmpeg" } = {}) {
   return `${name} failed with exit code ${r.code}`;
 }
 
+// What ffmpeg and ffprobe say, on 4.4 as on newer builds, when what they
+// were given holds nothing of the kind asked for, as a picture given as a
+// sound, or is no file they read at all, as a text file. Anything else they
+// fail with is said in their own words: a build that refuses the file, as
+// a guard of a hosted service does by its name, is no file without sound.
+const NOTHING = /does not contain any stream|Invalid data found when processing input/;
+
+// Why a synchronous run of ffmpeg or ffprobe (spawnSync's result) that
+// failed could not read its input, in its own words, or null when the input
+// holds nothing it reads. One that could not be started, as when there is
+// no ffprobe, says so.
+function unread(r, name) {
+  if (r.error) {
+    const said = { ENOENT: "no such file", EACCES: "permission denied" }[r.error.code];
+    return r.error.code === "ETIMEDOUT" ? `${name} did not end in time` : `${name} could not be started: ${said ? `${said} (${r.error.code})` : r.error.message}`;
+  }
+  const said = String(r.stderr || "");
+  return NOTHING.test(said) ? null : why({ code: r.status, signal: r.signal, stderr: said }, { lines: 1, name });
+}
+
 // A synchronous run (spawnSync's result) that a signal ended: an error that
 // says so, after `what` it was doing. Its own timeout's is not one; the
 // caller tells of that.
@@ -135,6 +155,8 @@ function probe(file) {
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
   const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
   if (stopped) throw stopped;
+  // Why ffprobe could not read it, when that is not that it holds nothing.
+  const failed = r.status !== 0 ? unread(r, "ffprobe") : null;
   try {
     const info = JSON.parse(r.stdout);
     const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
@@ -152,23 +174,29 @@ function probe(file) {
       audioCodec: sound ? sound.codec_name || "" : "",
       sampleRate: sound ? Number(sound.sample_rate) || 0 : 0,
       channels: sound ? Number(sound.channels) || 0 : 0,
+      failed,
     };
   } catch {
-    return { width: 0, height: 0, duration: 0, audio: false, fps: 0, baseFps: 0, codec: "", pixFmt: "", sar: "", audioCodec: "", sampleRate: 0, channels: 0 };
+    return { width: 0, height: 0, duration: 0, audio: false, fps: 0, baseFps: 0, codec: "", pixFmt: "", sar: "", audioCodec: "", sampleRate: 0, channels: 0, failed };
   }
 }
 
 // A sound file's first `seconds`, decoded as 48 kHz stereo floats ({ left,
-// right, seconds }), or null when ffmpeg finds no sound in it. A mono file
-// plays on both sides. The length is the decoded one: a file's header can
-// be wrong about it (a VBR MP3 without a Xing header).
+// right, seconds }), or null when ffmpeg finds no sound in it, or { failed }
+// with ffmpeg's own words when it could not read it for another reason. A
+// mono file plays on both sides. The length is the decoded one: a file's
+// header can be wrong about it (a VBR MP3 without a Xing header).
 function readSound(file, { seconds }) {
   const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
     { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
   const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
   if (stopped) throw stopped;
   if (r.error) throw new Error(`reading ${file}: ${r.error.message}`);
-  if (r.status !== 0 || !r.stdout || r.stdout.length < 8) return null;
+  if (r.status !== 0) {
+    const failed = unread(r, "ffmpeg");
+    return failed ? { failed } : null;
+  }
+  if (!r.stdout || r.stdout.length < 8) return null;
   const n = Math.floor(r.stdout.length / 8);
   const left = new Float32Array(n);
   const right = new Float32Array(n);
@@ -202,10 +230,11 @@ function coverPng(from, output, W, H) {
 
 // A picture's size, from probe(): a file in which ffprobe finds no picture
 // (a text file, a page saved as .png) fails, where its size of 0 x 0 made a
-// clip that showed nothing.
+// clip that showed nothing, and so does one ffprobe could not read, with
+// its words.
 function pictureSize(file) {
   const info = probe(file);
-  if (!info.width || !info.height) throw new Error(`${file} could not be read as a picture`);
+  if (!info.width || !info.height) throw new Error(`${file} could not be read as a picture${info.failed ? ` (${info.failed})` : ""}`);
   return info;
 }
 
@@ -220,7 +249,8 @@ function readPixels(file, max = 0) {
     { timeout: 30_000, maxBuffer: width * height * 4 + 1024 });
   const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
   if (stopped) throw stopped;
-  if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture`);
+  const failed = r.status !== 0 ? unread(r, "ffmpeg") : null;
+  if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture${failed ? ` (${failed})` : ""}`);
   return { data: r.stdout, width, height, scale: k, sourceWidth: info.width, sourceHeight: info.height };
 }
 

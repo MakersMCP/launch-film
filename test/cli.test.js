@@ -636,6 +636,52 @@ test("a render stops on a track it refuses, before any Chrome is started", { ski
   assert.ok(!fs.existsSync(started), "no Chrome was started");
 });
 
+// An ffmpeg or ffprobe that will not open a file whose name holds a %, as
+// the guards of makersmcp's hosted service do, and runs the real one for
+// the rest. A hosted user's good track named so was told to give an audio
+// file.
+function guarded(name, real) {
+  const file = path.join(tmp(), name);
+  fs.writeFileSync(file, `#!/bin/sh
+for a in "$@"; do case "$a" in *%*) echo "kits ${name}: $a: an input named with % or ending in .y is not opened" >&2; exit 1;; esac; done
+exec ${JSON.stringify(real)} "$@"
+`, { mode: 0o755 });
+  return file;
+}
+
+test("a track or a picture that ffmpeg or ffprobe will not open is refused in their own words, and one with no sound or no picture as before", { skip: (process.platform === "win32" && "the stand-ins are shell scripts") || (!available() && "ffmpeg not found") }, () => {
+  const { FFPROBE } = require("../src/ffmpeg");
+  const env = { LAUNCH_FILM_FFMPEG: guarded("ffmpeg", FFMPEG), LAUNCH_FILM_FFPROBE: guarded("ffprobe", FFPROBE) };
+  const dir = filmFolder();
+  fs.rmSync(path.join(dir, "film.mp4"));
+  const made = spawnSync(FFMPEG, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", path.join(dir, "100% mix.wav")], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(made.status, 0, made.stderr);
+  fs.copyFileSync(path.join(fixture, "screenshot-1.png"), path.join(dir, "50% off.png"));
+  const film = JSON.parse(fs.readFileSync(path.join(dir, "film.json"), "utf8"));
+  const chrome = noteChrome();
+  const render = (changes) => {
+    fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...film, ...changes }));
+    return cliWith({ ...env, LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+  };
+  const track = render({ music: "100% mix.wav" });
+  assert.equal(track.status, 1, track.stderr);
+  assert.equal(track.stderr, `launch-film: film.json has problems:\n  - "music" "100% mix.wav" could not be read: ffmpeg failed: kits ffmpeg: ${path.join(dir, "100% mix.wav")}: an input named with % or ending in .y is not opened\n`);
+  // A picture where the track goes holds no sound, as ffmpeg itself says.
+  const picture = render({ music: "brand/logo-header.png" });
+  assert.equal(picture.stderr, 'launch-film: film.json has problems:\n  - "music" "brand/logo-header.png" has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound\n');
+  // A screen clip's picture whose name holds a %.
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ ...film, music: false, clips: [{ kind: "screen", seconds: 2.5, image: "50% off.png" }] }));
+  const before = snap(dir);
+  const screen = cliWith({ ...env, LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+  assert.equal(screen.status, 1, screen.stderr);
+  assert.equal(screen.stderr, `launch-film: ${path.join(dir, "50% off.png")} could not be read as a picture (ffprobe failed: kits ffprobe: ${path.join(dir, "50% off.png")}: an input named with % or ending in .y is not opened)\nlaunch-film: ${dir} is as it was.\n`);
+  // With no ffprobe at all, it says so.
+  const none = cliWith({ LAUNCH_FILM_FFPROBE: path.join(dir, "no-such-ffprobe"), LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+  assert.equal(none.stderr, `launch-film: ${path.join(dir, "50% off.png")} could not be read as a picture (ffprobe could not be started: no such file (ENOENT))\nlaunch-film: ${dir} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
+  assert.ok(!chrome.started(), "no Chrome was started");
+});
+
 // A Chrome that notes it was started and fails, in place of the real one.
 function noteChrome() {
   const started = path.join(tmp(), "chrome-started");
