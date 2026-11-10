@@ -105,6 +105,22 @@ function musicOf(value, dir, problems) {
   return { bed: true };
 }
 
+// A path as one word of a command line that an agent runs as it is, or null
+// when no quoting holds in every shell it may run it in. Bare when no shell
+// reads anything in it. For a POSIX shell, in single quotes, inside which
+// nothing is expanded or run. On Windows in double quotes, as cmd.exe takes no
+// single quotes, with / for every \, which Node takes too, since Git Bash
+// reads \\ there as one \. Inside double quotes cmd.exe, PowerShell and Git
+// Bash still expand %, $, ` and !, so a path that holds one gets null.
+function shellWord(file, platform = process.platform) {
+  if (platform === "win32") {
+    const name = String(file).replace(/\\/g, "/");
+    if (/^[\w.:/-]+$/.test(name)) return name;
+    return /[%$`!"]/.test(name) ? null : `"${name}"`;
+  }
+  return /^[\w@%+=:,./-]+$/.test(file) ? file : `'${String(file).replace(/'/g, "'\\''")}'`;
+}
+
 // Where a link that leads nowhere ends: the first path along it that is not
 // there, after as many links as lead there. null when `file` is no link.
 function linkEnd(file) {
@@ -175,11 +191,14 @@ async function checkMusic(loaded) {
   if (sound.seconds < total - 0.5 / FPS) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
     // In a folder of its own in the film's: the path set in film.json stays
-    // good, whatever else musicfit is asked to do next to the film.
+    // good, whatever else musicfit is asked to do next to the film. The
+    // command is written to be run as it is, the folder quoted for the shell.
     const folder = path.join(dir, "music");
+    const word = shellWord(folder);
     return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ` +
       `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
-      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${/^[\w@%+=:,./-]+$/.test(folder) ? folder : JSON.stringify(folder)}, then set "music" in film.json to "music/fitted.wav"`] };
+      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${word || `<folder>, <folder> being ${folder} quoted for your shell`}, ` +
+      `then set "music" in film.json to "music/fitted.wav"`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });
   if (!(level.integrated > -70)) return refuse(`${at} is silent over the film's ${total.toFixed(2)} s: give a track with sound in it, or false for no music`);
@@ -392,4 +411,4 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
   }
 }
 
-module.exports = { loadFilm, checkMusic, renderFilm, buildClip, markFor, brandColours, FPS, FADE };
+module.exports = { loadFilm, checkMusic, shellWord, renderFilm, buildClip, markFor, brandColours, FPS, FADE };

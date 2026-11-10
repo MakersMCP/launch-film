@@ -9,7 +9,7 @@ const { once } = require("events");
 const { spawnSync } = require("child_process");
 const { readBrand, pickLook } = require("../src/brand");
 const { planFilm, copyFrom, markEnd, findNumber, withoutName, fit } = require("../src/plan");
-const { loadFilm, checkMusic } = require("../src/film");
+const { loadFilm, checkMusic, shellWord } = require("../src/film");
 const { MOODS, Bus, SR, writeWav } = require("../src/audio");
 const { available } = require("../src/ffmpeg");
 const { tmp } = require("./tmp");
@@ -108,9 +108,10 @@ test("easybrandkit's headings come first, with the page's line under each", () =
 });
 
 // A film of two clips, 5 s long, its last clip at 2.5 s, in a folder of its
-// own with the test brand: loadFilm's answer for each "music" value given.
-function filmWithMusic() {
-  const dir = tmp();
+// own (named `name` when given) with the test brand: loadFilm's answer for
+// each "music" value given.
+function filmWithMusic(name = "") {
+  const dir = path.join(tmp(), name);
   fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
   const file = path.join(dir, "film.json");
   const load = (music) => {
@@ -177,6 +178,16 @@ test("a track's path that leads to something other than a file is refused as wha
   }
 });
 
+test("a path goes into a command line as one word the shell takes as it is", () => {
+  assert.equal(shellWord("/films/acme-notes/music", "linux"), "/films/acme-notes/music");
+  assert.equal(shellWord("/films/Emin's films `touch PWNED` $HOME/music", "darwin"), "'/films/Emin'\\''s films `touch PWNED` $HOME/music'");
+  // On Windows in double quotes with /, which cmd.exe, PowerShell and Git
+  // Bash take alike, and none at all when one of them would expand a part.
+  assert.equal(shellWord("C:\\Users\\emin\\films\\music", "win32"), "C:/Users/emin/films/music");
+  assert.equal(shellWord("C:\\Users\\Emin Budak\\Emin's films\\music", "win32"), '"C:/Users/Emin Budak/Emin\'s films/music"');
+  for (const odd of ["C:\\films $HOME\\music", "C:\\films `x`\\music", "C:\\films %PATH%\\music", "C:\\films!\\music"]) assert.equal(shellWord(odd, "win32"), null, odd);
+});
+
 test("a track with no sound, a silent one and one shorter than the film are refused", { skip: !available() && "ffmpeg not found" }, async () => {
   const { dir, load } = filmWithMusic();
   const wav = (name, seconds, level) => {
@@ -199,6 +210,22 @@ test("a track with no sound, a silent one and one shorter than the film are refu
   }
   // Its path may be absolute.
   assert.deepEqual((await checkMusic(load(path.join(dir, "tone.wav")))).problems, []);
+});
+
+test("the musicfit command a short track's refusal gives runs in a shell as it is, whatever the film's folder is named", { skip: (process.platform === "win32" || !available()) && "a POSIX shell, and ffmpeg" }, async () => {
+  const { dir, load } = filmWithMusic("Emin's films `touch PWNED` $HOME");
+  const bus = new Bus(1);
+  for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+  writeWav(path.join(dir, "short.wav"), bus);
+  const [short] = (await checkMusic(load("short.wav"))).problems;
+  const command = /: (npx musicfit@latest <track> .*), then set "music" in film\.json to "music\/fitted\.wav"$/.exec(short);
+  assert.ok(command, short);
+  // Each word as the shell hands it to musicfit, printed in its place.
+  const here = tmp();
+  const r = spawnSync("sh", ["-c", command[1].replace("npx musicfit@latest <track>", "printf '%s\\n' track")], { cwd: here, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.split("\n").slice(0, -1), ["track", "--length", "5", "--hit", "2.5", "--fps", "25", "--out", path.join(dir, "music")]);
+  assert.deepEqual(fs.readdirSync(here), [], "nothing in the folder's name was run");
 });
 
 test("a track the user may not read is refused for that, not as a file with no sound", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not read, and ffmpeg" }, async () => {
