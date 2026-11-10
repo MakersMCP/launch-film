@@ -281,9 +281,13 @@ test("a render whose ffmpeg stops reading its frames and then fails says so, and
 test("a render whose ffmpeg cannot be started says so in a line of its own and names the folder", { skip, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);
-  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: path.join(dir, "no-such-ffmpeg") } });
-  assert.equal(r.status, 1, r.stderr);
-  assert.equal(r.stderr, `launch-film: rendering clip 1: ffmpeg failed: spawn ${path.join(dir, "no-such-ffmpeg")} ENOENT\nlaunch-film: ${dir} is as it was.\n`);
+  // The same with an --output of a kind that ffmpeg is tried on first, where
+  // the render was refused as one ffmpeg cannot write a .avi file in.
+  for (const output of [[], ["--output", path.join(dir, "film.avi")]]) {
+    const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1", ...output], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: path.join(dir, "no-such-ffmpeg") } });
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: rendering clip 1: ffmpeg failed: spawn ${path.join(dir, "no-such-ffmpeg")} ENOENT\nlaunch-film: ${dir} is as it was.\n`, output.join(" "));
+  }
   assert.deepEqual(snap(dir), before);
 });
 

@@ -556,6 +556,38 @@ test("a render refuses an --output it could not write the film to before any Chr
   assert.ok(chrome.started());
 });
 
+test("an --output of another kind is refused for its kind only when ffmpeg refuses it and writes the same frame as an .mp4", { skip: (process.platform === "win32" && "the stand-in ffmpeg and Chrome are shell scripts") || (!available() && "ffmpeg not found") }, () => {
+  const dir = filmFolder();
+  fs.rmSync(path.join(dir, "film.mp4"));
+  const before = snap(dir);
+  // A line of sh that may answer for ffmpeg first, then the real one.
+  const ffmpeg = (line) => {
+    const file = path.join(tmp(), "ffmpeg");
+    fs.writeFileSync(file, `#!/bin/sh\n${line}\nexec '${FFMPEG.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
+    return file;
+  };
+  const render = (stand, name) => {
+    const chrome = noteChrome();
+    const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome, LAUNCH_FILM_FFMPEG: stand }, "render", path.join(dir, "film.json"), "--output", path.join(dir, name));
+    return { status: r.status, stderr: r.stderr, started: chrome.started() };
+  };
+  // An ffmpeg that cannot be started fails the render in the words it has
+  // for a film.mp4, where it was refused as one that cannot write a .avi.
+  const none = path.join(tmp(), "no-such-ffmpeg");
+  const avi = render(none, "film.avi");
+  assert.equal(avi.status, 1, avi.stderr);
+  assert.ok(!avi.stderr.includes("cannot write the film as"), avi.stderr);
+  assert.equal(avi.stderr, render(none, "film.mp4").stderr);
+  // One that cannot write H.264 at all, and one a signal ends during the
+  // try, say nothing about the kind either: the render goes on to Chrome.
+  for (const line of [`case "$*" in *libx264*) echo "Unknown encoder 'libx264'" >&2; exit 1;; esac`, `case "$*" in *film.avi*) kill -KILL $$;; esac`]) {
+    const r = render(ffmpeg(line), "film.avi");
+    assert.match(r.stderr, /^launch-film: rendering clip 1: Chrome stopped \(exit 1\)/, line);
+    assert.ok(r.started, line);
+  }
+  assert.deepEqual(snap(dir), before);
+});
+
 test("a clip's picture that is no picture is refused before the clip renders, and the folder is left as it was", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
   // A screen clip once rendered an empty page here, and the render ended
   // well. The phone clip already refused such a file.

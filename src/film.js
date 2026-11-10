@@ -334,7 +334,12 @@ const FILM_KINDS = new Set([".mp4", ".m4v", ".mov", ".mkv"]);
 // Read before anything renders: the name was first used once every clip had
 // rendered, and the run failed then. Another kind of file than FILM_KINDS is
 // tried on a frame of nothing, in the film's own codecs, so a kind ffmpeg
-// writes them in is taken and one it does not (.webm) refused.
+// writes them in is taken and one it does not (.webm) refused. The kind is
+// blamed only when ffmpeg refused the try itself and then writes the same
+// frame as an .mp4: an ffmpeg that cannot be started, that a signal ended,
+// or that cannot write the .mp4 either (a build without libx264) says
+// nothing about the kind, so the render goes on and fails in its own words,
+// as it does with a film.mp4.
 async function outputProblem(out, given) {
   const named = given ? `--output ${out}` : out;
   if (path.basename(out).startsWith(".launch-film-")) return `${named}: a name that starts with .launch-film- is one of launch-film's own: give another`;
@@ -349,10 +354,15 @@ async function outputProblem(out, given) {
   if (FILM_KINDS.has(kind)) return null;
   if (!kind) return `${named} has no extension, so ffmpeg cannot tell what kind of file to write: give a name that ends in .mp4`;
   const work = tempDir("launch-film-work-");
+  const write = (name) => run(["-f", "lavfi", "-i", "color=c=black:s=16x16:r=25", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-frames:v", "1", "-t", "0.04",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", path.join(work, name)]);
   try {
-    const tried = await run(["-f", "lavfi", "-i", "color=c=black:s=16x16:r=25", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-frames:v", "1", "-t", "0.04",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", path.join(work, `film${kind}`)]);
-    return tried.code === 0 ? null : `${named}: ffmpeg cannot write the film as a ${kind} file (H.264 video and AAC sound): give a name that ends in .mp4, .mov or .mkv`;
+    // ffmpeg's own refusal is an exit code above 0: run() gives -1 for one
+    // that could not be started, and a signal leaves the code null.
+    const tried = await write(`film${kind}`);
+    if (!(tried.code > 0)) return null;
+    const mp4 = await write("film.mp4");
+    return mp4.code === 0 ? `${named}: ffmpeg cannot write the film as a ${kind} file (H.264 video and AAC sound): give a name that ends in .mp4, .mov or .mkv` : null;
   } finally {
     release(work);
   }
