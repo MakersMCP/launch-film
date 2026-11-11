@@ -24,24 +24,28 @@ const FPS = 25;
 const FADE = 0.4;
 // The film's sound: -14 LUFS (LUFS), the loudness YouTube, X and most
 // social apps play at and the skill checks a film at, its true peak at -1.5
-// dBTP or under (TRUE_PEAK). loudnorm measures the sound first and sets it to
-// that in a second pass (ffmpeg.js loudnormPass), holding its peaks at -3
-// dBTP: in one pass, aimed at -16, films came out anywhere from -13.7 to
-// -15.8 LUFS. That is not the end of it. The AAC encoder lifts a sharp hit,
-// by as much as two and a half dB in the films measured, and a film whose
-// sound is mostly short peaks, as the bed turned down to 0.2 under the
-// effects or a track of sparse hits, comes out of loudnorm a LU or two under
-// -14. So the film is measured once encoded, as check measures it, and
-// encoded again (addSound): a gain moves its loudness toward -14, up or
-// down, and a limiter on the sound at four times its rate holds its peaks
-// as the gain raises them, at CEILING, lowered by what the encoder lifted
-// past TRUE_PEAK. Of these encodes, TRIES at most, the one nearest -14 LUFS
-// at TRUE_PEAK or under is kept.
-const LOUDNORM = "loudnorm=I=-14:TP=-3:LRA=11";
+// dBTP or under (TRUE_PEAK), as LOUDNORM gives them to loudnorm. loudnorm
+// measures the sound (ffmpeg.js loudnormPass), and one gain sets it to -14
+// (addSound), so the sound keeps the rise and fall it was made with: a
+// track's build and drop, the bed's quiet opening. loudnorm's own second
+// pass did not: when the peaks a gain raises pass its limit, as they do with
+// nearly every sound, it works in its dynamic mode, which turns quiet
+// stretches up and loud ones down, and it flattened a track's drop from 9.5
+// dB over its build to 2.8. The gain raises the peaks too, and the AAC
+// encoder lifts a sharp hit by as much as two and a half dB in the films
+// measured, so a limiter on the sound at four times its rate holds the
+// peaks at CEILING, and the film is measured once encoded, as check
+// measures it, and encoded again with the gain moved toward -14, up or
+// down, and the limiter set lower by what the encoded film's true peak
+// passed -1.7 dBTP, a fifth of a dB under TRUE_PEAK. Of these encodes,
+// TRIES at most, the one nearest -14 LUFS at TRUE_PEAK or under is kept.
+const LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11";
 const LUFS = -14;
 const TRUE_PEAK = -1.5;
 const CEILING = -3.5;
 const TRIES = 6;
+// The most the gain moves the sound, in dB, either way.
+const GAIN_MAX = 30;
 const KINDS = new Set(["scene", "screen", "phone", "scroll", "shots", "logo"]);
 
 // Reads and checks a film.json; returns { film, dir, brand, clips, problems }.
@@ -525,20 +529,21 @@ async function outputProblem(out, given) {
 // better one is made. Returns the level the film measures, { integrated,
 // truePeak }.
 async function addSound({ video, wav, out, seconds, tries }) {
+  // Silence measures no level, and its gain stays at 0.
   const measured = await loudnormPass(wav, LOUDNORM);
   const fits = (level) => level.truePeak <= TRUE_PEAK;
   const off = (level) => Math.abs(level.integrated - LUFS);
   // Of two encodes, one at TRUE_PEAK or under is the better, then the one
   // nearer LUFS; of two that pass TRUE_PEAK, the one that passes it less.
   const better = (a, b) => !b || (fits(a) !== fits(b) ? fits(a) : fits(a) ? off(a) < off(b) : a.truePeak < b.truePeak);
-  let gain = 0;
+  let gain = measured ? Math.max(-GAIN_MAX, Math.min(GAIN_MAX, LUFS - measured.integrated)) : 0;
   let ceiling = CEILING;
   let best = null;
   let last = null;
   for (let n = 0; n < TRIES; n++) {
     const file = tries(n);
     const limiter = `aformat=channel_layouts=stereo,aresample=192000,alimiter=limit=${(10 ** (ceiling / 20)).toFixed(4)}:attack=1:release=50:level=false,aresample=48000`;
-    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}${gain ? `,volume=${gain.toFixed(2)}dB` : ""},${limiter}`,
+    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `volume=${gain.toFixed(2)}dB,${limiter}`,
       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", seconds.toFixed(3), "-movflags", "+faststart", file], "adding the sound");
     const level = await levelOf(file);
     // Silence is kept as it is: no gain makes it louder.
@@ -560,7 +565,7 @@ async function addSound({ video, wav, out, seconds, tries }) {
     // A fifth of a dB to spare, as the encoder's lift varies a little from
     // one encode to the next.
     if (level.truePeak > TRUE_PEAK - 0.2) ceiling = Math.max(-12, ceiling - (level.truePeak - (TRUE_PEAK - 0.2)));
-    gain = Math.max(-20, Math.min(20, gain + Math.max(-12, Math.min(12, (LUFS - level.integrated) / slope))));
+    gain = Math.max(-GAIN_MAX, Math.min(GAIN_MAX, gain + Math.max(-12, Math.min(12, (LUFS - level.integrated) / slope))));
     // A sound whose loudness no gain moves, as clicks the limiter holds at
     // its ceiling, is as loud as it gets once the gain is at its end.
     if (gain === last.gain && ceiling === last.ceiling) break;
