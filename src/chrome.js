@@ -183,6 +183,33 @@ function withoutOpeners(env = process.env) {
   return { ...env, PATH: env.PATH ? `${dir}${path.delimiter}${env.PATH}` : `${dir}${path.delimiter}/usr/bin${path.delimiter}/bin` };
 }
 
+// On a Linux desktop Chrome hands such an address, from a frame, a redirect
+// or a page, to the desktop's portal over the session bus
+// (org.freedesktop.portal.OpenURI), which opens the program set for it, and
+// never looks on PATH: a page read on a desktop opened the mail program so.
+// So every Chrome launch-film starts there, and easybrandkit with the Chrome
+// it starts, is given a session bus that leads nowhere, a socket in a folder
+// of the run's own (`folder`) that is never made. Left unset, the bus would
+// be looked for in XDG_RUNTIME_DIR, where the desktop's is. Chrome draws
+// offscreen, so it is given no display either.
+function offTheDesktop(env, folder) {
+  if (process.platform !== "linux") return env;
+  const { DISPLAY, WAYLAND_DISPLAY, ...rest } = env;
+  return { ...rest, DBUS_SESSION_BUS_ADDRESS: `unix:path=${busPath(path.join(folder, "no-bus"))}` };
+}
+
+// A path as a bus address holds it: every byte but a letter, a digit and
+// -_/.\* as %xx, so a comma, a semicolon or an equals sign in the temp
+// folder's path is not read as the address's own.
+function busPath(file) {
+  return [...Buffer.from(file, "utf8")].map((b) => (/[-0-9A-Za-z_/.\\*]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : `%${b.toString(16).padStart(2, "0")}`)).join("");
+}
+
+// What Chrome prints of the bus it was kept from, at every start
+// ("ERROR:dbus/bus.cc:405] Failed to connect to the bus"): a line to pass
+// over when what it said is told.
+const BUS_NOISE = /^\[[^\]]*:ERROR:dbus\//;
+
 // The addresses no page shows that pages asked for since the last call:
 // those launch-film's Chrome saw a page go to or open a window for, and
 // those handed to a stand-in. { list, more }: the first NOTED, each once,
@@ -248,7 +275,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // A Chrome with network access, stopped as it starts, leaves a
   // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
   // its profile as TMPDIR, that goes with the profile.
-  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(network ? tempEnv(profile) : process.env) }));
+  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(offTheDesktop(network ? tempEnv(profile) : process.env, profile)) }));
   // One the system had no file descriptor for comes back with no pipes, and
   // its error comes next (ffmpeg.js run): that is all there is to wait for.
   if (!child.stdio) {
@@ -257,8 +284,22 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     const { short } = require("./programs");
     throw Object.assign(new Error(short(err, "Chrome") || `Chrome could not be started from ${chrome}: ${err.message}`), { short: Boolean(short(err, "Chrome")) });
   }
+  // What Chrome says, its lines about the bus it was kept from passed over,
+  // so they do not crowd out the line that says why it stopped.
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
+  let partial = "";
+  const keep = (line) => {
+    if (!BUS_NOISE.test(line)) stderr = `${stderr}${line}\n`.slice(-4000);
+  };
+  child.stderr.on("data", (d) => {
+    const lines = `${partial}${d}`.split("\n");
+    partial = lines.pop().slice(-4000);
+    lines.forEach(keep);
+  });
+  child.stderr.on("end", () => {
+    if (partial) keep(partial);
+    partial = "";
+  });
   const pending = new Map();
   const listeners = new Set();
   let id = 0;
@@ -640,4 +681,4 @@ async function snapshots(pages) {
   return out;
 }
 
-module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, standIns: openerFolder, withoutOpeners, opened, CLOCK, PAGE_FILE_MAX, OPENERS };
+module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, standIns: openerFolder, withoutOpeners, offTheDesktop, busPath, opened, CLOCK, PAGE_FILE_MAX, OPENERS };

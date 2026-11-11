@@ -8,8 +8,10 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { findChrome, chromeArgs, opened, OPENERS } = require("../src/chrome");
+const { runEasybrandkit } = require("../src/brand");
 // Ends what the tests start and removes their temp folders: Chrome's too.
 const { tmp } = require("./tmp");
+const { noBus, privateBus } = require("./bus");
 
 const PAGE = `<!doctype html><html lang="en-US"><head>
 <title>Acme Notes | Notes that think with you</title>
@@ -255,5 +257,70 @@ for (let i = 0; i < 10; i++) window.open(${JSON.stringify(long)} + i);
   } finally {
     process.env.PATH = saved;
     server.close();
+  }
+});
+
+// On a Linux desktop Chrome hands a mailto: address to the desktop's portal
+// over the session bus, past the stand-ins on PATH, and the portal opens the
+// mail program: a site a test read opened it that way. Here launch-film is
+// given a bus of the test's own with a stand-in portal on it, as a desktop
+// gives it its own, and neither its Chrome nor easybrandkit's reaches it, by
+// any way a page has. Each way gets a browser of its own, as one browser
+// hands on one such address and holds back the ones after it.
+test("on Linux a page's mailto: reaches no desktop portal, in launch-film's Chrome or in easybrandkit's, also when launch-film is given a session bus with one on it", { skip: (!findChrome() && "Chrome not found") || noBus() || false, timeout: 300_000 }, async (t) => {
+  const bus = await privateBus(t);
+  const far = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end('<!doctype html><p>far</p><script>setTimeout(() => (location.href = "mailto:far@acme-notes.example"), 200);</script>');
+  });
+  await new Promise((resolve) => far.listen(0, "127.0.0.1", resolve));
+  const frame = (src) => `<iframe src="${src}" style="width:1px;height:1px;border:0"></iframe>`;
+  const ways = {
+    "/move": '<script>location.href = "mailto:move@acme-notes.example";</script>',
+    "/window": '<script>window.open("mailto:window@acme-notes.example");</script>',
+    "/frame": frame("mailto:frame@acme-notes.example?subject=Hi"),
+    "/frame-redirect": frame("/to-mail"),
+    "/far-frame": frame(`http://localhost:${far.address().port}/`),
+    "/to-mail": "",
+  };
+  const server = http.createServer((req, res) => {
+    if (req.url === "/to-mail") {
+      res.writeHead(302, { Location: "mailto:redirect@acme-notes.example" });
+      return res.end();
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p>${ways[req.url] || ""}</html>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.close();
+    far.close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const saved = process.env.DBUS_SESSION_BUS_ADDRESS;
+  process.env.DBUS_SESSION_BUS_ADDRESS = bus.address;
+  // easybrandkit as a stand-in that reads the page in the machine's Chrome,
+  // as easybrandkit does, with the environment it was given.
+  const fake = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(fake, `const fs = require("fs"); const os = require("os"); const path = require("path");
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fake-easybrandkit-"));
+const chrome = require("child_process").spawn(${JSON.stringify(findChrome())}, ["--headless=new", "--no-first-run", "--user-data-dir=" + profile, process.argv[2]], { stdio: "ignore" });
+setTimeout(() => {
+  chrome.kill("SIGKILL");
+  const out = process.argv[process.argv.indexOf("--out") + 1];
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(out + "/brand.json", "{}");
+}, 5000);`);
+  try {
+    for (const way of Object.keys(ways)) {
+      await fromChrome(`${base}${way}`).catch(() => {});
+      assert.deepEqual(bus.calls(), [], `launch-film's Chrome reached the bus for ${way}`);
+      await runEasybrandkit(`${base}${way}`, path.join(tmp(), "brand"), { command: fake });
+      assert.deepEqual(bus.calls(), [], `easybrandkit's Chrome reached the bus for ${way}`);
+    }
+  } finally {
+    process.env.DBUS_SESSION_BUS_ADDRESS = saved;
+    // What the pages asked for is not another test's.
+    opened();
   }
 });

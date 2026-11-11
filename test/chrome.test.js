@@ -8,7 +8,7 @@ const http = require("http");
 const dgram = require("dgram");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate } = require("../src/chrome");
+const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate, busPath } = require("../src/chrome");
 const { available, readPixels, writePng } = require("../src/ffmpeg");
 // Ends what the tests start and removes their temp folders: Chrome's too.
 const { tmp, SAVES_PID, pidIn, alive } = require("./tmp");
@@ -318,6 +318,75 @@ setTimeout(() => process.exit(0), 40000);
   assert.equal(r.stdout, "Chrome did not answer Browser.setDownloadBehavior within 60 s, most often because the machine is too busy: run again once it is less busy\n", r.stderr);
   assert.ok(!alive(await pidIn(pid)), "the stand-in Chrome still runs");
   assert.deepEqual(fs.readdirSync(temp), [], "its profile is left");
+});
+
+// On a Linux desktop Chrome hands a mailto: address to the desktop's portal
+// over the session bus, which opens the mail program, past the stand-ins on
+// PATH. Every Chrome launch-film starts gets a bus that leads nowhere
+// instead, a socket in its profile that is never made, and no display. This
+// stand-in Chrome writes down what it was given, and ends.
+test("every Chrome launch-film starts on Linux gets a session bus that leads nowhere and no display", { skip: process.platform !== "linux" && "the session bus and the stand-ins are Linux's" }, async () => {
+  const dir = tmp();
+  // A desktop's bus, a socket that is there.
+  const desktop = path.join(dir, "desktop-bus");
+  const listening = require("net").createServer().listen(desktop);
+  await new Promise((resolve) => listening.once("listening", resolve));
+  const seen = path.join(dir, "seen");
+  const chrome = path.join(dir, "chrome");
+  fs.writeFileSync(chrome, `#!/bin/sh
+bus=\${DBUS_SESSION_BUS_ADDRESS#unix:path=}
+{ echo "$DBUS_SESSION_BUS_ADDRESS"; [ -e "$bus" ] && echo there || echo nothing; echo "display \${DISPLAY-unset} \${WAYLAND_DISPLAY-unset}"; echo "\${PATH%%:*}"; } > '${seen}'
+exit 3
+`, { mode: 0o755 });
+  try {
+    for (const network of [false, true]) {
+      const temp = tmp();
+      const r = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).launch({ W: 320, H: 240, network: ${network} }).then(() => console.log("started"), (err) => console.log(err.message))`],
+        { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_CHROME: chrome, TMPDIR: temp, DBUS_SESSION_BUS_ADDRESS: `unix:path=${desktop}`, DISPLAY: ":99", WAYLAND_DISPLAY: "wayland-99" } });
+      assert.equal(r.stdout, "Chrome stopped (exit 3)\n", r.stderr);
+      const [address, there, display, first] = fs.readFileSync(seen, "utf8").trim().split("\n");
+      const profile = /^unix:path=(.+)\/no-bus$/.exec(address);
+      assert.ok(profile, `network ${network}: ${address}`);
+      assert.equal(path.dirname(profile[1]), temp);
+      assert.match(path.basename(profile[1]), /^launch-film-chrome-/);
+      assert.equal(there, "nothing", `network ${network}: the bus Chrome was given leads somewhere`);
+      assert.equal(display, "display unset unset", `network ${network}`);
+      assert.match(path.basename(first), /^launch-film-bin-/, `network ${network}: the stand-ins are not first on PATH`);
+      assert.deepEqual(fs.readdirSync(temp), [], `network ${network}: left in the temp folder`);
+    }
+  } finally {
+    listening.close();
+  }
+});
+
+test("the path of the bus Chrome is given is written as a bus address holds it", () => {
+  // Every byte but a letter, a digit and -_/.\* as %xx, so a comma, a
+  // semicolon or an equals sign in a temp folder's path is not read as part
+  // of the address's own syntax.
+  assert.equal(busPath("/tmp/a b,c;d=é%/x-y_z.1*"), "/tmp/a%20b%2cc%3bd%3d%c3%a9%25/x-y_z.1*");
+  assert.equal(busPath("/home/u/.kt/launch-film-chrome-12-AbC123/no-bus"), "/home/u/.kt/launch-film-chrome-12-AbC123/no-bus");
+});
+
+// Chrome prints a line for each call to the bus it was kept from, at every
+// start: what is told of a Chrome that stops is what it said past them.
+test("Chrome's lines about the bus it was kept from are passed over when it stops", { skip: process.platform === "win32" && "the stand-in Chrome is a shell script" }, () => {
+  const dir = tmp();
+  const chrome = path.join(dir, "chrome");
+  const bus = "[3576670:3576879:1111/085053.785861:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /tmp/p/no-bus: No such file or directory";
+  const proxy = "[3576670:3576670:1111/085053.972419:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: ";
+  fs.writeFileSync(chrome, `#!/bin/sh
+cat >&2 <<'EOF'
+${bus}
+${proxy}
+[3576670:3576670:1111/085054.000001:ERROR:chrome/browser/ui/startup.cc:12] Cannot open the profile
+${bus}
+${proxy}
+EOF
+exit 21
+`, { mode: 0o755 });
+  const r = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).launch({ W: 320, H: 240 }).then(() => console.log("started"), (err) => console.log(err.message))`],
+    { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_CHROME: chrome, TMPDIR: tmp() } });
+  assert.equal(r.stdout, "Chrome stopped (exit 21): [3576670:3576670:1111/085054.000001:ERROR:chrome/browser/ui/startup.cc:12] Cannot open the profile\n", r.stderr);
 });
 
 test("a page file Chrome refuses fails the page at once, with Chrome's words", { skip: process.platform === "win32" && "the stand-in Chrome is a script" }, async () => {

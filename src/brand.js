@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
-const { onPath, withoutOpeners } = require("./chrome");
+const { onPath, withoutOpeners, offTheDesktop } = require("./chrome");
 const { track, tempDir, tempEnv, release, stopping, save } = require("./out");
 const confine = require("./confine");
 
@@ -132,10 +132,11 @@ function runOnce([cmd, ...pre], url, dir, log) {
       reject(short ? Object.assign(new Error(short), { short: true }) : new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
     };
     // The Chrome easybrandkit starts takes its environment, and with it the
-    // stand-ins that keep a page from starting a program (chrome.js).
+    // stand-ins that keep a page from starting a program and the session bus
+    // that leads nowhere, which keeps it from the desktop's (chrome.js).
     let env;
     try {
-      env = withoutOpeners(temp ? downloadsIn(temp, tempEnv(temp)) : process.env);
+      env = withoutOpeners(temp ? offTheDesktop(downloadsIn(temp, tempEnv(temp)), temp) : process.env);
     } catch (err) {
       done();
       return reject(err);

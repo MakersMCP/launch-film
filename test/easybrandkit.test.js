@@ -232,3 +232,42 @@ const wait = setInterval(() => {
     server.close();
   }
 });
+
+// easybrandkit's Chrome reads the site, and on a Linux desktop would hand a
+// mailto: address to the desktop's portal over the session bus, which opens
+// the mail program, past the stand-ins on PATH. easybrandkit is given a bus
+// that leads nowhere, a socket in the run's temp folder that is never made,
+// the stand-ins and no display, all of which the Chrome it starts takes from
+// it. This stand-in writes down what it was given.
+test("easybrandkit gets a session bus that leads nowhere, the stand-ins first on its PATH and no display, on Linux", { skip: process.platform !== "linux" && "the session bus and the stand-ins are Linux's" }, async () => {
+  const dir = tmp();
+  // A desktop's bus, a socket that is there.
+  const desktop = path.join(dir, "desktop-bus");
+  const listening = require("net").createServer().listen(desktop);
+  await new Promise((resolve) => listening.once("listening", resolve));
+  const seen = path.join(dir, "seen.json");
+  const fake = path.join(dir, "easybrandkit.js");
+  fs.writeFileSync(fake, `const fs = require("fs"); const path = require("path");
+const bus = (process.env.DBUS_SESSION_BUS_ADDRESS || "").replace(/^unix:path=/, "");
+fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ address: process.env.DBUS_SESSION_BUS_ADDRESS, there: fs.existsSync(bus), display: process.env.DISPLAY || null, wayland: process.env.WAYLAND_DISPLAY || null, first: process.env.PATH.split(path.delimiter)[0] }));
+const out = process.argv[process.argv.indexOf("--out") + 1];
+fs.mkdirSync(out, { recursive: true });
+fs.writeFileSync(path.join(out, "brand.json"), "{}");`);
+  const temp = tmp();
+  try {
+    const r = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "brand.js"))}).runEasybrandkit("https://acme.example/", process.argv[1], { command: process.argv[2] }).then(() => console.log("ran"), (e) => console.log(e.message))`, path.join(dir, "out"), fake],
+      { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR: temp, DBUS_SESSION_BUS_ADDRESS: `unix:path=${desktop}`, DISPLAY: ":99", WAYLAND_DISPLAY: "wayland-99" } });
+    assert.equal(r.stdout, "ran\n", r.stderr);
+    const got = JSON.parse(fs.readFileSync(seen, "utf8"));
+    const folder = /^unix:path=(.+)\/no-bus$/.exec(got.address);
+    assert.ok(folder, got.address);
+    assert.equal(path.dirname(folder[1]), temp);
+    assert.match(path.basename(folder[1]), /^launch-film-brand-/);
+    assert.equal(got.there, false, "the bus easybrandkit was given leads somewhere");
+    assert.deepEqual([got.display, got.wayland], [null, null]);
+    assert.match(path.basename(got.first), /^launch-film-bin-/, "the stand-ins are not first on PATH");
+    assert.deepEqual(fs.readdirSync(temp), [], "left in the temp folder");
+  } finally {
+    listening.close();
+  }
+});

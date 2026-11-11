@@ -21,6 +21,21 @@ const WAITS = "setTimeout(() => process.exit(0), 60000);";
 // started, whatever has become of its parent. Read from /proc, so on Linux
 // only.
 process.env.LAUNCH_FILM_TESTS = root;
+
+// No test reaches the desktop of the machine it runs on. A page a test reads
+// can hand an address such as mailto: to the desktop's portal over the
+// session bus, which opens the mail program (chrome.js), so every process
+// the tests start has a bus that leads nowhere, no display, and a runtime
+// folder of its own, where a program given no bus would look for one. The
+// bus's path is written as an address holds it (chrome.js, busPath).
+const runtime = path.join(root, "run");
+fs.mkdirSync(runtime, { mode: 0o700 });
+const busPath = (file) => [...Buffer.from(file)].map((b) => (/[-0-9A-Za-z_/.\\*]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : `%${b.toString(16).padStart(2, "0")}`)).join("");
+process.env.XDG_RUNTIME_DIR = runtime;
+process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${busPath(path.join(runtime, "no-bus"))}`;
+delete process.env.DISPLAY;
+delete process.env.WAYLAND_DISPLAY;
+
 function stillRunning() {
   let names = [];
   try {
@@ -195,4 +210,4 @@ function noisePicture(dir, name, W, H, { alpha = false } = {}) {
   return file;
 }
 
-module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture };
+module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture, busPath };
