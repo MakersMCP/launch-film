@@ -164,7 +164,10 @@ function runOnce([cmd, ...pre], url, dir, log) {
     child.on("close", (code) => {
       done();
       if (code === 0 && fs.existsSync(path.join(dir, "brand.json"))) return resolve(path.join(dir, "brand.json"));
-      const said = out.trim().split("\n").filter(Boolean).slice(-2).join(" ");
+      // npm's notices and warnings, as the one npx prints as it ends when a
+      // newer npm is out, are not easybrandkit's words: its last two lines
+      // are.
+      const said = out.trim().split("\n").filter((line) => line.trim() && !/^npm (?:notice|warn)\b/i.test(line)).slice(-2).join(" ");
       // npm's own error lines mean npx could not fetch easybrandkit (no such
       // package, no network) before it ran; easybrandkit never prints them.
       const npm = /^npm (?:error|ERR!) code \S+/m.exec(out) || /^npm (?:error|ERR!) .+/m.exec(out);

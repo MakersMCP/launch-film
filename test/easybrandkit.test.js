@@ -69,6 +69,20 @@ test("an easybrandkit that ran and failed is not run again", { skip: noShell }, 
   });
 });
 
+// npx prints npm's notice that a newer npm is out as it ends, the first
+// time it runs in a new npm home, after what easybrandkit said. All of it
+// goes to stderr here, so that the lines come in the order they are written.
+test("npm's notices and warnings are not given as the reason easybrandkit failed", { skip: noShell }, async () => {
+  const notice = ["npm notice", "npm notice New major version of npm available! 10.9.9 -> 12.2.2", "npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2",
+    "npm notice To update run: npm install -g npm@12.2.2", "npm notice"].map((line) => `echo "${line}" >&2`).join("; ");
+  const fails = `echo "npm warn exec The following package was not found and will be installed: easybrandkit@0.4.0" >&2; echo "Opening $3..." >&2; ` +
+    `echo "easybrandkit: Could not open $3: net::ERR_CONNECTION_REFUSED" >&2; ${notice}; exit 1`;
+  await withFakeNpx({ "easybrandkit@0.4.0": fails }, async (dir) => {
+    await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")),
+      { message: "easybrandkit failed (exit 1): Opening https://example.com... easybrandkit: Could not open https://example.com: net::ERR_CONNECTION_REFUSED" });
+  });
+});
+
 test("a bot check says what to do instead", async () => {
   const dir = tmp();
   const fake = path.join(dir, "easybrandkit.js");
