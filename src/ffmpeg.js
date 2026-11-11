@@ -21,6 +21,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { track } = require("./out");
+const { short } = require("./programs");
 
 const FFMPEG = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
 const FFPROBE = process.env.LAUNCH_FILM_FFPROBE || "ffprobe";
@@ -72,6 +73,7 @@ function whole(file) {
 async function writePicture(args, file, what, { none = null, ...opts } = {}) {
   fs.rmSync(file, { force: true });
   const r = await run([...args, ...picture(file)], opts);
+  if (r.short) throw new Error(r.short);
   const nothing = !fs.existsSync(file) && (r.code === 0 || /Nothing was written into output file|Output file is empty/.test(r.stderr));
   if (nothing && none) throw new Error(`${what}: ${none}`);
   if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
@@ -139,7 +141,7 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
       if (timer) clearTimeout(timer);
       resolve({ code, signal, stderr: late ? `${stderr}\nit took longer than ${Math.round(timeout / 1000)} s` : stderr });
     });
-    child.on("error", (err) => resolve({ code: -1, signal: null, stderr: err.message }));
+    child.on("error", (err) => resolve({ code: -1, signal: null, stderr: err.message, short: short(err, "ffmpeg") }));
     if (input) {
       child.stdin.on("error", () => {});
       child.stdin.end(input);
@@ -149,6 +151,7 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
 
 async function mustRun(args, what, opts) {
   const r = await run(args, opts);
+  if (r.short) throw new Error(r.short);
   if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
   return r;
 }
@@ -169,6 +172,7 @@ function probe(file) {
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
   const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
   if (stopped) throw stopped;
+  if (short(r.error, "ffprobe")) throw new Error(short(r.error, "ffprobe"));
   // Why ffprobe could not read it, when that is not that it holds nothing.
   const failed = r.status !== 0 ? unread(r, "ffprobe") : null;
   try {
@@ -209,7 +213,7 @@ function readSound(file, { seconds }) {
     { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
   const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
   if (stopped) throw stopped;
-  if (r.error) throw new Error(`reading ${file}: ${r.error.message}`);
+  if (r.error) throw new Error(short(r.error, "ffmpeg") || `reading ${file}: ${r.error.message}`);
   if (r.status !== 0) {
     const failed = unread(r, "ffmpeg");
     return failed ? { failed } : null;
@@ -267,6 +271,7 @@ function readPixels(file, max = 0) {
     { timeout: 30_000, maxBuffer: width * height * 4 + 1024 });
   const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
   if (stopped) throw stopped;
+  if (short(r.error, "ffmpeg")) throw new Error(short(r.error, "ffmpeg"));
   const failed = r.status !== 0 ? unread(r, "ffmpeg") : null;
   if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture${failed ? ` (${failed})` : ""}`);
   return { data: r.stdout, width, height, scale: k, sourceWidth: info.width, sourceHeight: info.height };
@@ -288,9 +293,13 @@ function encoder({ output, fps = 25, crf = 15 }) {
   child.stdin.on("error", () => {});
   let ended = null;
   // One that cannot be started says why here, and closes as one that stopped.
-  child.on("error", (e) => (err = e.message));
+  let unstarted = null;
+  child.on("error", (e) => {
+    err = e.message;
+    unstarted = short(e, "ffmpeg");
+  });
   const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
-  const failed = () => new Error(why({ ...ended, stderr: err }, { lines: 2 }));
+  const failed = () => new Error(unstarted || why({ ...ended, stderr: err }, { lines: 2 }));
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)
     // takes no more frames: its error, not a wait for room in the pipe.

@@ -224,6 +224,8 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // here. They waited for an answer that never came, and with nothing left
   // to wait on, the run ended with 0 and no word.
   child.on("error", (err) => {
+    const { short } = require("./programs");
+    if (short(err, "Chrome")) return end(new Error(short(err, "Chrome")));
     const why = { EACCES: "permission denied", ENOENT: "no such file" }[err.code];
     end(new Error(`Chrome could not be started from ${chrome}: ${why ? `${why} (${err.code})` : err.message}. Set LAUNCH_FILM_CHROME to the Chrome program itself, or install Google Chrome or Chromium`));
   });

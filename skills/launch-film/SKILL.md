@@ -7,13 +7,13 @@ description: Make a 20 to 40 second launch film (an MP4 at 1920x1080 with music 
 
 A launch film made from the product itself: its logo cut from its own page, its colors and typefaces, its real screens in a browser window or a phone, and the words its site already uses. You plan the film as a short JSON file, render it, check it, and hand over the MP4, with launch pictures when the user wants them.
 
-The tool is the `launch-film` npm package. It needs Node 22 or newer, Chrome or Chromium, and ffmpeg 4.4 or newer. Check them first:
+The tool is the `launch-film` npm package. It needs Node 22 or newer, Chrome or Chromium, and ffmpeg and ffprobe 4.4 or newer. Check them first:
 
 ```bash
 npx -y launch-film@0.2.1 doctor
 ```
 
-If ffmpeg is missing or older than 4.4, tell the user how to install it (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer) and stop. doctor also starts Chrome once: if it finds no Chrome, or says that Chrome could not start its sandbox or did not start, tell the user what it says and stop.
+If ffmpeg is missing or older than 4.4, tell the user how to install it (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer) and stop. doctor also starts Chrome once: if it finds no Chrome, or says that Chrome could not start its sandbox or did not start, tell the user what it says and stop. Each program's line says what is wrong with it. A command that cannot start ffmpeg, ffprobe or Chrome stops before any work with a message that starts `launch-film needs ffmpeg` (or ffprobe, or Chrome) and names the setting or the PATH entry that gave it, what is wrong with it and how to point to one that works: pass that on to the user and stop.
 
 ## 1. Get the brand and a first plan
 

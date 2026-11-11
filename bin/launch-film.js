@@ -23,7 +23,7 @@ Usage:
   launch-film types                    List the scene types and their fields.
   launch-film icons <word>             Find icon names for a scene.
   launch-film doctor                   Check that Chrome starts and that ffmpeg
-                                       4.4 or newer is found.
+                                       and ffprobe 4.4 or newer are found.
 
 Options:
   --out <dir>          Folder for the brand, film.json and the film
@@ -161,6 +161,20 @@ function unusable(flags, command) {
   }
   if (takes("jobs") && !/^[1-4]$/.test(flags.jobs)) return `--jobs "${flags.jobs}": give a whole number from 1 to 4`;
   return null;
+}
+
+// The programs a command runs, looked at before any work (programs.js): one
+// that cannot be started stops it there, named with what is wrong with it. A
+// plan reads the page in Chrome only when its HTML lacks the words, and a
+// store listing's pictures with ffmpeg only when easybrandkit could not read
+// them: it looks at the Chrome a variable names, and at ffmpeg and ffprobe
+// for a store's address.
+function programsOf(takes, address) {
+  if (["<url>", "render", "stills", "stills <film.json>"].includes(takes)) return ["ffmpeg", "ffprobe", "chrome"];
+  if (takes === "check" || takes === "frames") return ["ffmpeg", "ffprobe"];
+  if (takes !== "plan") return [];
+  const { isStoreUrl } = require("../src/store");
+  return [...(address && isStoreUrl(address) ? ["ffmpeg", "ffprobe"] : []), ...(process.env.LAUNCH_FILM_CHROME || process.env.CHROME_PATH ? ["chrome"] : [])];
 }
 
 // Why an argument past the ones a command reads is refused, or null. A first
@@ -402,21 +416,23 @@ async function main() {
     return;
   }
   if (command === "doctor") {
-    const { findChrome, launch, evaluate } = require("../src/chrome");
-    const { available } = require("../src/ffmpeg");
-    const chrome = findChrome();
-    const ffmpeg = available();
+    const { launch, evaluate } = require("../src/chrome");
+    const { check } = require("../src/programs");
+    const [chrome, ffmpeg, ffprobe] = ["chrome", "ffmpeg", "ffprobe"].map(check);
     const node = Number(process.versions.node.split(".")[0]);
     // ffmpeg 4.3 has no scdet for check and frames, 4.2 no xfade for the
     // render. A version it does not say plainly (a build from git) passes.
-    const v = /^n?(\d+)\.(\d+)/.exec(ffmpeg || "");
-    const oldFfmpeg = Boolean(v) && Number(v[1]) * 100 + Number(v[2]) < 404;
+    const version = (c) => (/^\S+ version (\S+)/.exec(c.version || "") || [])[1] || "unknown";
+    const old = (c) => {
+      const v = /^n?(\d+)\.(\d+)/.exec(version(c));
+      return Boolean(v) && Number(v[1]) * 100 + Number(v[2]) < 404;
+    };
     // Chrome is started as a render starts it, and a page in it runs a
     // script: one that is there but cannot start its sandbox, as in a
     // container whose seccomp keeps it from making namespaces, passed here
     // and failed every render.
     let unstarted = null;
-    if (chrome) {
+    if (!chrome.problem) {
       try {
         const browser = await launch({ W: 320, H: 240 });
         try {
@@ -428,24 +444,38 @@ async function main() {
         unstarted = err.message;
       }
     }
+    // Each program on its line: its version, or what is wrong with it.
+    const line = (c) => (c.problem ? c.detail : `${version(c)}${old(c) ? " (4.4 or newer is needed)" : ""}`);
     process.stdout.write(`node    ${process.versions.node}${node >= 22 ? "" : " (22 or newer is needed)"}\n` +
-      `chrome  ${chrome ? `${chrome}${unstarted ? `: ${unstarted}` : ""}` : "not found: install Chrome or set LAUNCH_FILM_CHROME"}\n` +
-      `ffmpeg  ${ffmpeg ? `${ffmpeg}${oldFfmpeg ? " (4.4 or newer is needed)" : ""}` : "not found: install ffmpeg or set LAUNCH_FILM_FFMPEG"}\n`);
-    if (!chrome || unstarted || !ffmpeg || oldFfmpeg || node < 22) process.exitCode = 1;
+      `chrome  ${chrome.problem ? chrome.detail : `${chrome.file}${unstarted ? `: ${unstarted}` : ""}`}\n` +
+      `ffmpeg  ${line(ffmpeg)}\n` +
+      `ffprobe ${line(ffprobe)}\n`);
+    if (chrome.problem || unstarted || ffmpeg.problem || old(ffmpeg) || ffprobe.problem || old(ffprobe) || node < 22) process.exitCode = 1;
     return;
   }
+  // The programs the command runs can be started (programs.js), looked at
+  // once what the command was given has been: a command given wrong is told
+  // so first. A Ctrl-C that ended one as it was asked its version is told of
+  // as the stop (failed).
+  const ready = (address = null) => {
+    const program = require("../src/programs").unstartable(programsOf(takes, address));
+    if (program) throw new Error(program);
+  };
   if (command === "render") {
-    if (!rest[0]) fail("give the film.json to render");
+    if (!rest[0]) return fail("give the film.json to render");
+    ready();
     await render(path.resolve(rest[0]), flags);
     return;
   }
   if (command === "frames") {
-    if (!rest[0]) fail("give the film's MP4");
+    if (!rest[0]) return fail("give the film's MP4");
+    ready();
     await frames(path.resolve(rest[0]), flags);
     return;
   }
   if (command === "check") {
-    if (!rest[0]) fail("give the film's MP4 to check");
+    if (!rest[0]) return fail("give the film's MP4 to check");
+    ready();
     const { checkFilm } = require("../src/check");
     const r = await checkFilm(path.resolve(rest[0]), { out: flags.out, expect: flags.expect, seconds: flags.seconds, lufs: flags.lufs, cues: flags.cues, cuts: flags.cuts, allow: flags.allow });
     for (const c of r.checks.filter((x) => x.status === "fail" || x.status === "warn")) say(`  ${c.status.padEnd(5)} ${c.name}: ${c.found}${c.expected ? ` (asked for ${c.expected})` : ""}\n`);
@@ -460,11 +490,13 @@ async function main() {
     let r;
     if (/\.json$/i.test(rest[0])) {
       const filmFile = path.resolve(rest[0]);
-      if (!fs.existsSync(filmFile)) fail(`${rest[0]} is not a file`);
+      if (!fs.existsSync(filmFile)) return fail(`${rest[0]} is not a file`);
+      ready();
       r = await makeStills(filmFile, { targets: flags.for, log: say });
     } else {
       const url = normaliseUrl(rest[0]);
-      if (!url) fail(`"${rest[0]}" is not an address or a film.json`);
+      if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
+      ready();
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
         const { filmFile } = await makePlan(url, flags, run);
@@ -477,7 +509,8 @@ async function main() {
   }
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
-  if (!url) fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
+  if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
+  ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {
     const { filmFile } = await makePlan(url, flags, run);

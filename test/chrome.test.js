@@ -310,7 +310,7 @@ test("a page file Chrome refuses fails the page at once, with Chrome's words", {
 
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and
 // the system then starts the real xdg-open past them: no Chrome starts.
-test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
+test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
   const mount = tmp();
   const said = new RegExp(`^launch-film could not run its stand-ins for xdg-open in ${escape(mount)}/launch-film-bin-\\d+-\\w+ \\(permission denied \\(EACCES\\)\\), which keep a page from starting a program of the machine's: set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none\\n$`);
   // A Chrome of the test's own, so the one this machine may not have is not needed.
@@ -320,4 +320,10 @@ test("no Chrome starts where the stand-ins for xdg-open and the like cannot be r
     { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR: mount, LAUNCH_FILM_CHROME: chrome } });
   const r = inside("-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).launch({ W: 320, H: 240 }).then(() => console.log("started"), (err) => console.log(err.message))`);
   assert.match(r.stdout, said, r.stdout + r.stderr);
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ look: "launch", clips: [{ kind: "scene", seconds: 3, scene: { type: "headline", title: "A title" } }] }));
+  const render = inside(path.join(__dirname, "..", "bin", "launch-film.js"), "render", path.join(dir, "film.json"));
+  assert.equal(render.status, 1, render.stderr);
+  assert.match(render.stderr.replace(/^launch-film: /, ""), said);
+  assert.deepEqual(fs.readdirSync(dir), ["film.json"]);
 });

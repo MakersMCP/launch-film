@@ -359,7 +359,7 @@ test("a render whose ffmpeg stops reading its frames and then fails says so, and
   assert.deepEqual(snap(dir), before);
 });
 
-test("a render whose ffmpeg cannot be started says so in a line of its own and names the folder", { skip, timeout: 240_000 }, async () => {
+test("a render whose ffmpeg cannot be started says so in a line of its own before any work", { skip, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);
   // The same with an --output of a kind that ffmpeg is tried on first, where
@@ -367,7 +367,8 @@ test("a render whose ffmpeg cannot be started says so in a line of its own and n
   for (const output of [[], ["--output", path.join(dir, "film.avi")]]) {
     const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1", ...output], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: path.join(dir, "no-such-ffmpeg") } });
     assert.equal(r.status, 1, r.stderr);
-    assert.equal(r.stderr, `launch-film: rendering clip 1: ffmpeg failed: spawn ${path.join(dir, "no-such-ffmpeg")} ENOENT\nlaunch-film: ${dir} is as it was.\n`, output.join(" "));
+    assert.equal(r.stderr, `launch-film: launch-film needs ffmpeg, and LAUNCH_FILM_FFMPEG points to ${path.join(dir, "no-such-ffmpeg")}, which is not there. ` +
+      "Set LAUNCH_FILM_FFMPEG to an ffmpeg 4.4 or newer, or unset it and install one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).\n", output.join(" "));
   }
   assert.deepEqual(snap(dir), before);
 });
@@ -441,12 +442,12 @@ test("a Chrome too slow to answer, or one that cannot be started, ends the rende
   assert.equal(killed.status, 1, killed.stderr);
   assert.match(killed.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome was stopped by SIGKILL, most often because the system ran out of memory\nlaunch-film: ${two} is as it was.\n`)}$`));
   // One that cannot be run failed nothing, and the run ended with 0 and no
-  // word, as if the film had been made.
+  // word, as if the film had been made. It is refused before any work.
   fs.chmodSync(chrome, 0o644);
   const none = render({});
   assert.equal(none.status, 1, none.stderr);
-  assert.equal(none.stderr, `launch-film: rendering clip 1: Chrome could not be started from ${chrome}: permission denied (EACCES). ` +
-    `Set LAUNCH_FILM_CHROME to the Chrome program itself, or install Google Chrome or Chromium\n${ended}`);
+  assert.equal(none.stderr, `launch-film: launch-film needs Chrome, and LAUNCH_FILM_CHROME points to ${chrome}, which is a file without the permission to run it, which chmod +x gives. ` +
+    "Set LAUNCH_FILM_CHROME to the Chrome program itself, or unset it and install Google Chrome or Chromium.\n");
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(snap(two), beforeTwo);
   for (const r of [tab, both, load, killed, none]) assert.deepEqual(leftBy(r.pid), []);

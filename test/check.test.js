@@ -279,8 +279,9 @@ test("the sound is read for its peaks first, then measured at 48 kHz on every ff
 test("an ffprobe killed outright says so", { skip: noShell }, async () => {
   const dir = tmp();
   const file = await film(dir);
+  // Killed as it reads the film, after it said its version.
   const ffprobe = path.join(tmp(), "ffprobe");
-  fs.writeFileSync(ffprobe, "#!/bin/sh\nkill -9 $$\n", { mode: 0o755 });
+  fs.writeFileSync(ffprobe, `#!/bin/sh\ncase "$*" in *-version*) exec '${(process.env.LAUNCH_FILM_FFPROBE || "ffprobe").replace(/'/g, "'\\''")}' "$@";; esac\nkill -9 $$\n`, { mode: 0o755 });
   const r = cli(["frames", file], { LAUNCH_FILM_FFPROBE: ffprobe });
   assert.equal(r.status, 1);
   assert.equal(r.stderr, `launch-film: reading ${file}: ffprobe was stopped by SIGKILL, most often because the system ran out of memory\n`);

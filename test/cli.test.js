@@ -273,12 +273,14 @@ test("with LAUNCH_FILM_CONFINE set, a render, stills and a plan refuse a file na
   fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: "brand/brand.json", look: "launch", clips: [
     { kind: "screen", seconds: 2.5, image: name }, { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }));
   const before = snap(dir);
+  const chrome = noteChrome();
   for (const command of ["render", "stills"]) {
-    const r = cliWith({ LAUNCH_FILM_CONFINE: "1", LAUNCH_FILM_CHROME: "/nonexistent" }, command, path.join(dir, "film.json"));
+    const r = cliWith({ LAUNCH_FILM_CONFINE: "1", LAUNCH_FILM_CHROME: chrome.chrome }, command, path.join(dir, "film.json"));
     assert.equal(r.status, 1, r.stderr);
     assert.match(r.stderr, new RegExp(`^launch-film: film\\.json has problems:\\n  - clips\\[0\\]\\.image "${escape(said)}" is outside film\\.json's folder, and LAUNCH_FILM_CONFINE allows only files in it\\n`), command);
     assert.deepEqual(snap(dir), before, command);
   }
+  assert.ok(!chrome.started(), "a Chrome was started");
   // A plan given a kit that names one.
   const raw = JSON.parse(fs.readFileSync(path.join(fixture, "brand.json"), "utf8"));
   raw.logos[0].file = name;
@@ -366,7 +368,7 @@ test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop
   // of the group at once, so it ends ffprobe while launch-film waits on it.
   const dir = tmp();
   const ffprobe = path.join(dir, "ffprobe");
-  fs.writeFileSync(ffprobe, `#!/bin/sh\n: > "${path.join(dir, "started")}"\nsleep 20\nexec ffprobe "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(ffprobe, `#!/bin/sh\ncase "$*" in *-version*) exec ffprobe "$@";; esac\n: > "${path.join(dir, "started")}"\nsleep 20\nexec ffprobe "$@"\n`, { mode: 0o755 });
   const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "frames", path.join(dir, "film.mp4")], {
     detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, LAUNCH_FILM_FFPROBE: ffprobe } });
   let stderr = "";
@@ -600,14 +602,15 @@ console.log("Read " + out + "/BRAND.md for the details.");`);
   }
 });
 
-// A run whose plan is made and whose next step fails: Chrome is not there.
+// A run whose plan is made and whose next step fails: Chrome does not start.
 for (const [what, args] of [["the one-go command", []], ["stills of an address", ["stills"]]]) {
-  test(`${what} puts the plan in with what it makes, or not at all`, { skip: !available() && "ffmpeg not found" }, () => {
+  test(`${what} puts the plan in with what it makes, or not at all`, { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
     const dir = filmFolder();
     const before = snap(dir);
-    const r = cliWith({ LAUNCH_FILM_CHROME: path.join(dir, "no-such-chrome") }, ...args, "https://acme-notes.example", "--out", dir, "--brand", otherKit(), "--words", path.join(fixture, "words.json"), "--look", "journal");
+    const r = cliWith({ LAUNCH_FILM_CHROME: noteChrome().chrome }, ...args, "https://acme-notes.example", "--out", dir, "--brand", otherKit(), "--words", path.join(fixture, "words.json"), "--look", "journal");
     assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stderr, /Chrome was not found/);
+    assert.match(r.stderr, /Planned \d+ clips/);
+    assert.match(r.stderr, /Chrome stopped \(exit 1\)/);
     assert.match(r.stderr, new RegExp(`\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
     assert.deepEqual(snap(dir), before);
   });
@@ -675,9 +678,10 @@ test("a track or a picture that ffmpeg or ffprobe will not open is refused in th
   const screen = cliWith({ ...env, LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
   assert.equal(screen.status, 1, screen.stderr);
   assert.equal(screen.stderr, `launch-film: ${path.join(dir, "50% off.png")} could not be read as a picture (ffprobe failed: kits ffprobe: ${path.join(dir, "50% off.png")}: an input named with % or ending in .y is not opened)\nlaunch-film: ${dir} is as it was.\n`);
-  // With no ffprobe at all, it says so.
+  // With no ffprobe at all, it says so before any work.
   const none = cliWith({ LAUNCH_FILM_FFPROBE: path.join(dir, "no-such-ffprobe"), LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
-  assert.equal(none.stderr, `launch-film: ${path.join(dir, "50% off.png")} could not be read as a picture (ffprobe could not be started: no such file (ENOENT))\nlaunch-film: ${dir} is as it was.\n`);
+  assert.equal(none.stderr, `launch-film: launch-film needs ffprobe, and LAUNCH_FILM_FFPROBE points to ${path.join(dir, "no-such-ffprobe")}, which is not there. ` +
+    "Set LAUNCH_FILM_FFPROBE to the ffprobe of an ffmpeg 4.4 or newer, or unset it and install ffmpeg, which comes with one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).\n");
   assert.deepEqual(snap(dir), before);
   assert.ok(!chrome.started(), "no Chrome was started");
 });
