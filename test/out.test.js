@@ -709,7 +709,9 @@ test("a copy held to its folder refuses a link out of it before anything is copi
   const base = tmp();
   const from = path.join(base, "kit");
   const elsewhere = path.join(base, "elsewhere");
-  write(from, { "brand.json": "{}", "logo.png": "logo", "deep/inner/page.md": "page" });
+  // A plain file and a folder whose names begin with two dots are in it,
+  // not out of it.
+  write(from, { "brand.json": "{}", "logo.png": "logo", "deep/inner/page.md": "page", "..notes.txt": "notes", "..drafts/a.md": "draft" });
   write(elsewhere, { "secret.png": "secret", "folder/a.txt": "a" });
   // Links that stay in the folder, the folder itself reached through one.
   fs.symlinkSync(path.join(from, "logo.png"), path.join(from, "logo-link.png"));
@@ -717,8 +719,8 @@ test("a copy held to its folder refuses a link out of it before anything is copi
   fs.symlinkSync(from, path.join(base, "link-to-kit"));
   const to = path.join(base, "copy");
   out.copyPlain(path.join(base, "link-to-kit"), to, { held: true });
-  assert.deepEqual(snap(to), { "brand.json": "{}", "deep/": "folder", "deep/inner/": "folder", "deep/inner/page.md": "page", "deep/inner-link/": "folder", "deep/inner-link/page.md": "page",
-    "logo-link.png": "logo", "logo.png": "logo" });
+  assert.deepEqual(snap(to), { "..drafts/": "folder", "..drafts/a.md": "draft", "..notes.txt": "notes", "brand.json": "{}", "deep/": "folder", "deep/inner/": "folder", "deep/inner/page.md": "page",
+    "deep/inner-link/": "folder", "deep/inner-link/page.md": "page", "logo-link.png": "logo", "logo.png": "logo" });
   // A link to a file out of it, and one to a folder out of it, deep in it.
   for (const [link, target, rel] of [["logo-01.png", path.join(elsewhere, "secret.png"), "logo-01.png"], [path.join("deep", "inner", "more"), path.join(elsewhere, "folder"), path.join("deep", "inner", "more")]]) {
     fs.symlinkSync(target, path.join(from, link));

@@ -98,9 +98,11 @@ const isDir = (at) => {
     return false;
   }
 };
+// Whether `at` is `folder` or in it. A name in it that begins with two dots,
+// as ..notes.txt, is in it: only .. itself climbs out.
 const inside = (at, folder) => {
   const rel = path.relative(folder, at);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 };
 const partName = () => `.launch-film-part-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
