@@ -195,10 +195,11 @@ test("a film's sound is brought to -14 LUFS, its true peak at -1.5 dBTP or under
   assert.ok(withTrack.truePeak <= -1.5, `the film with the track peaks at ${withTrack.truePeak} dBTP`);
 });
 
-// The AAC encoder lifts a sharp hit that loudnorm held, by up to two dB on
-// the looks' beds, so a film is measured once encoded and encoded again
-// nearer -14 LUFS and under -1.5 dBTP. This stand-in lifts the sound of the
-// film by 2 dB as it is encoded, as such an encoder would.
+// The AAC encoder lifts a sharp hit that loudnorm held, by as much as two
+// and a half dB in the films measured, so a film is measured once encoded
+// and encoded again nearer -14 LUFS and under -1.5 dBTP. This stand-in lifts
+// the sound of the film by 2 dB as it is encoded, past the limiter, as such
+// an encoder would.
 test("a film whose sound peaks above -1.5 dBTP once encoded is encoded again lower, at -14 LUFS", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const ffmpeg = standIn(`case " $* " in *" -map 1:a "*) for a do shift; case $a in loudnorm=*) a="$a,volume=2dB";; esac; set -- "$@" "$a"; done;; esac`);
@@ -208,6 +209,94 @@ test("a film whose sound peaks above -1.5 dBTP once encoded is encoded again low
   const { integrated, truePeak } = (await checkFilm(path.join(dir, "film.mp4"), { out: path.join(tmp(), "check") })).audio;
   assert.ok(truePeak <= -1.5, `the film peaks at ${truePeak} dBTP`);
   assert.ok(Math.abs(integrated + 14) <= 0.5, `the film measures ${integrated} LUFS`);
+});
+
+// The sound `bus` and a black picture as long, in `dir`, as a render has
+// them when it lays the sound under the joined clips (film.js addSound):
+// { video, wav, seconds }.
+async function soundAndPicture(dir, bus) {
+  const seconds = bus.length / audio.SR;
+  const wav = path.join(dir, "sound.wav");
+  audio.writeWav(wav, bus);
+  const video = path.join(dir, "video.mp4");
+  await mustRun(["-f", "lavfi", "-i", `color=c=black:s=320x240:r=25:d=${seconds.toFixed(3)}`, "-c:v", "libx264", "-pix_fmt", "yuv420p", video], "a picture");
+  return { video, wav, seconds };
+}
+// The effects of a short journal film: its opener and its logo close.
+const JOURNAL_CUES = [{ sfx: "whoosh-short", at: 0.2, volume: 0.4 }, { sfx: "whoosh-short", at: 5.553, volume: 0.26 }, { sfx: "impact-bass-2", at: 5.833, volume: 0.42 },
+  { sfx: "click", at: 6.283, volume: 0.3 }, { sfx: "key-press", at: 6.583, volume: 0.3 }];
+// addSound run in a process of its own, as ffmpeg.js reads
+// LAUNCH_FILM_FFMPEG once, with `ffmpeg` as its ffmpeg.
+function addSoundWith(ffmpeg, { video, wav, seconds }, out) {
+  const script = `require(${JSON.stringify(path.join(__dirname, "..", "src", "film.js"))}).addSound({ video: process.argv[1], wav: process.argv[2], out: process.argv[3], seconds: ${seconds}, ` +
+    "tries: (n) => `${process.argv[3]}.${n}.mp4` }).then(() => {}, (e) => { console.error(e.message); process.exit(1); })";
+  return spawnSync(process.execPath, ["-e", script, video, wav, out], { encoding: "utf8", timeout: 150_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+}
+
+// A film whose sound is mostly short peaks came out of loudnorm a LU or two
+// under -14, and the gain that would have brought it there passed -1.5 dBTP
+// once encoded: the bed turned down to 0.2 under the effects, and a track of
+// sparse hits, both at -16.1 LUFS. A limiter on the oversampled sound holds
+// the peaks as the gain raises them.
+test("a film whose sound is mostly short peaks is brought to -14 LUFS, its true peak at -1.5 dBTP or under: the bed at 0.2 under the effects, and a track of sparse hits", { skip: !available() && "ffmpeg not found", timeout: 240_000 }, async () => {
+  const { addSound } = require("../src/film");
+  const { checkFilm } = require("../src/check");
+  const seconds = 32 / 3;
+  const hits = new audio.Bus(seconds);
+  for (let i = 0; i < hits.length; i++) hits.L[i] = hits.R[i] = 0.9 * Math.sin((2 * Math.PI * 880 * i) / audio.SR) * Math.exp(-40 * ((i / audio.SR) % 0.5));
+  const sounds = {
+    "the bed at 0.2": audio.mixFilm({ seconds, music: audio.music({ look: "journal", seconds, cuts: [0, seconds / 2], seed: 2 }).bus, cues: JOURNAL_CUES, musicGain: 0.2 }),
+    "a track of sparse hits": audio.mixFilm({ seconds, music: audio.trackBus({ left: hits.L, right: hits.R, seconds }), cues: JOURNAL_CUES }),
+  };
+  for (const [what, bus] of Object.entries(sounds)) {
+    const dir = tmp();
+    const { video, wav } = await soundAndPicture(dir, bus);
+    const out = path.join(dir, "film.mp4");
+    await addSound({ video, wav, out, seconds, tries: (n) => path.join(dir, `sound-${n}.mp4`) });
+    const { integrated, truePeak } = (await checkFilm(out, { lufs: -14, out: path.join(dir, "check") })).audio;
+    assert.ok(Math.abs(integrated + 14) <= 0.5, `${what}: the film measures ${integrated} LUFS`);
+    assert.ok(truePeak <= -1.5, `${what}: the film peaks at ${truePeak} dBTP`);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["check", "film.mp4", "sound.wav", "video.mp4"], `${what}: an encode was left`);
+  }
+});
+
+// loudnorm sets the sound in a second pass, from what its first pass
+// measured over it: in one pass it set the level from the first seconds it
+// heard, and a film came out a LU or two from it.
+test("the sound is set in loudnorm's second pass, from what its first pass measured over it", { skip: process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : !available() && "ffmpeg not found", timeout: 180_000 }, async () => {
+  const { loudnormPass } = require("../src/ffmpeg");
+  const dir = tmp();
+  const film = await soundAndPicture(dir, audio.mixFilm({ seconds: 5, music: audio.music({ look: "launch", seconds: 5, cuts: [0, 2.5], seed: 2 }).bus, cues: [] }));
+  const measured = await loudnormPass(film.wav, "loudnorm=I=-14:TP=-3:LRA=11");
+  assert.match(measured, /^:measured_I=-?[\d.]+:measured_TP=-?[\d.]+:measured_LRA=[\d.]+:measured_thresh=-?[\d.]+:offset=-?[\d.]+$/);
+  // Each encode's filters, as a stand-in writes them down.
+  const said = path.join(dir, "said");
+  const r = addSoundWith(standIn(`case " $* " in *" -map 1:a "*) for a do [ "$prev" = "-af" ] && printf '%s\\n' "$a" >> '${said}'; prev=$a; done;; esac`), film, path.join(dir, "film.mp4"));
+  assert.equal(r.status, 0, r.stderr);
+  const filters = fs.readFileSync(said, "utf8").trim().split("\n");
+  for (const af of filters) assert.ok(af.startsWith(`loudnorm=I=-14:TP=-3:LRA=11${measured},`), af);
+});
+
+// The encoder's lift varies from one encode to the next, so the film kept is
+// the encode nearest -14 LUFS at -1.5 dBTP or under, not the last. This
+// stand-in sets the first encode 1 dB low, and every later one 6 dB over
+// what loudnorm makes, whatever gain and limiter it was asked for, as no
+// encoder does, so that none of those can be kept.
+test("of the encodes, the one nearest -14 LUFS at -1.5 dBTP or under is kept, not the last", { skip: process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : !available() && "ffmpeg not found", timeout: 180_000 }, async () => {
+  const { checkFilm } = require("../src/check");
+  const dir = tmp();
+  const film = await soundAndPicture(dir, audio.mixFilm({ seconds: 5, music: audio.music({ look: "launch", seconds: 5, cuts: [0, 2.5], seed: 2 }).bus, cues: [] }));
+  const count = path.join(dir, "count");
+  const ffmpeg = standIn(`case " $* " in *" -map 1:a "*) n=$(cat '${count}' 2>/dev/null || echo 0); echo $((n + 1)) > '${count}'; ` +
+    `for a do shift; case $a in loudnorm=*) if [ "$n" = 0 ]; then a="$a,volume=-1dB"; else a="loudnorm=I=-14:TP=-3:LRA=11,volume=6dB"; fi;; esac; set -- "$@" "$a"; done;; esac`);
+  const out = path.join(dir, "film.mp4");
+  const r = addSoundWith(ffmpeg, film, out);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(Number(fs.readFileSync(count, "utf8")) > 2, "it did not encode again");
+  const { integrated, truePeak } = (await checkFilm(out, { out: path.join(dir, "check") })).audio;
+  assert.ok(truePeak <= -1.5, `the film kept peaks at ${truePeak} dBTP`);
+  assert.ok(integrated > -16 && integrated < -14.5, `the film kept measures ${integrated} LUFS`);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith("film.mp4.")), [], "an encode was left");
 });
 
 // Every file in a folder, hidden ones too, with its bytes.

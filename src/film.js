@@ -25,17 +25,23 @@ const FADE = 0.4;
 // The film's sound: -14 LUFS (LUFS), the loudness YouTube, X and most
 // social apps play at and the skill checks a film at, its true peak at -1.5
 // dBTP or under (TRUE_PEAK). loudnorm measures the sound first and sets it to
-// that in a second pass (ffmpeg.js loudnormPass): in one pass, aimed at -16,
-// films came out anywhere from -13.7 to -15.8 LUFS. It holds the peaks at
-// -3 dBTP, as the AAC encoder lifts a sharp hit loudnorm held by up to two
-// dB: held at -1.5, a film's true peak came out as high as +0.2 dBTP. What
-// loudnorm makes of a short film or a dense one can still lie a few tenths
-// from -14 once encoded, so the film is measured then, as check measures it,
-// and encoded again with the gain that brings it nearest -14 LUFS without
-// passing TRUE_PEAK.
+// that in a second pass (ffmpeg.js loudnormPass), holding its peaks at -3
+// dBTP: in one pass, aimed at -16, films came out anywhere from -13.7 to
+// -15.8 LUFS. That is not the end of it. The AAC encoder lifts a sharp hit,
+// by as much as two and a half dB in the films measured, and a film whose
+// sound is mostly short peaks, as the bed turned down to 0.2 under the
+// effects or a track of sparse hits, comes out of loudnorm a LU or two under
+// -14. So the film is measured once encoded, as check measures it, and
+// encoded again (addSound): a gain moves its loudness toward -14, up or
+// down, and a limiter on the sound at four times its rate holds its peaks
+// as the gain raises them, at CEILING, lowered by what the encoder lifted
+// past TRUE_PEAK. Of these encodes, TRIES at most, the one nearest -14 LUFS
+// at TRUE_PEAK or under is kept.
 const LOUDNORM = "loudnorm=I=-14:TP=-3:LRA=11";
 const LUFS = -14;
 const TRUE_PEAK = -1.5;
+const CEILING = -3.5;
+const TRIES = 6;
 const KINDS = new Set(["scene", "screen", "phone", "scroll", "shots", "logo"]);
 
 // Reads and checks a film.json; returns { film, dir, brand, clips, problems }.
@@ -476,6 +482,57 @@ async function outputProblem(out, given) {
   }
 }
 
+// The joined clips (`video`) and the film's sound (`wav`) written as the
+// film `out`, `seconds` long, at LUFS with its true peak at TRUE_PEAK or
+// under (above). `tries(n)` names the file the nth encode is written to:
+// the one kept is renamed to `out`, and the others are removed as soon as a
+// better one is made. Returns the level the film measures, { integrated,
+// truePeak }.
+async function addSound({ video, wav, out, seconds, tries }) {
+  const measured = await loudnormPass(wav, LOUDNORM);
+  const fits = (level) => level.truePeak <= TRUE_PEAK;
+  const off = (level) => Math.abs(level.integrated - LUFS);
+  // Of two encodes, one at TRUE_PEAK or under is the better, then the one
+  // nearer LUFS; of two that pass TRUE_PEAK, the one that passes it less.
+  const better = (a, b) => !b || (fits(a) !== fits(b) ? fits(a) : fits(a) ? off(a) < off(b) : a.truePeak < b.truePeak);
+  let gain = 0;
+  let ceiling = CEILING;
+  let best = null;
+  let last = null;
+  for (let n = 0; n < TRIES; n++) {
+    const file = tries(n);
+    const limiter = `aformat=channel_layouts=stereo,aresample=192000,alimiter=limit=${(10 ** (ceiling / 20)).toFixed(4)}:attack=1:release=50:level=false,aresample=48000`;
+    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}${gain ? `,volume=${gain.toFixed(2)}dB` : ""},${limiter}`,
+      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", seconds.toFixed(3), "-movflags", "+faststart", file], "adding the sound");
+    const level = await levelOf(file);
+    // Silence is kept as it is: no gain makes it louder.
+    if (!(level.integrated > -70) || !(level.truePeak > -Infinity)) {
+      if (best) fs.rmSync(best.file, { force: true });
+      best = { file, level };
+      break;
+    }
+    if (better(level, best && best.level)) {
+      if (best) fs.rmSync(best.file, { force: true });
+      best = { file, level };
+    } else fs.rmSync(file, { force: true });
+    if (fits(level) && off(level) <= 0.2) break;
+    // The limiter takes a part of what a gain adds, so the next gain goes by
+    // how far the last one moved the loudness, while the ceiling stayed.
+    let slope = 1;
+    if (last && last.ceiling === ceiling && Math.abs(gain - last.gain) >= 0.1) slope = Math.min(1, Math.max(0.25, (level.integrated - last.integrated) / (gain - last.gain)));
+    last = { gain, ceiling, integrated: level.integrated };
+    // A fifth of a dB to spare, as the encoder's lift varies a little from
+    // one encode to the next.
+    if (level.truePeak > TRUE_PEAK - 0.2) ceiling = Math.max(-12, ceiling - (level.truePeak - (TRUE_PEAK - 0.2)));
+    gain = Math.max(-20, Math.min(20, gain + Math.max(-12, Math.min(12, (LUFS - level.integrated) / slope))));
+    // A sound whose loudness no gain moves, as clicks the limiter holds at
+    // its ceiling, is as loud as it gets once the gain is at its end.
+    if (gain === last.gain && ceiling === last.ceiling) break;
+  }
+  fs.renameSync(best.file, out);
+  return best.level;
+}
+
 // Renders film.json to an MP4. Returns { output, seconds, clips, notes }.
 async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep = false, offline = false } = {}) {
   const out = path.resolve(output || path.join(path.dirname(path.resolve(file)), "film.mp4"));
@@ -554,24 +611,9 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
     audio.writeWav(wav, audio.mixFilm({ seconds: total, music: bed, cues, musicGain: film.music && film.music.volume !== undefined ? Number(film.music.volume) : 0.55 }));
     const timeline = { film: path.relative(path.dirname(out), path.resolve(file)), seconds: +total.toFixed(3), look,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
-    // Measured, then set to the film's loudness as it goes in.
-    const measured = await loudnormPass(wav, LOUDNORM);
-    // Encoded and measured (above): the first measure gives the gain to
-    // -14 LUFS, as far as the true peak allows with a fifth of a dB to
-    // spare, and a film whose true peak still passes TRUE_PEAK is encoded
-    // lower again, four encodes at most.
-    const made = job.out(path.basename(out));
-    let gain = 0;
-    for (let tries = 0; tries < 4; tries++) {
-      await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}${gain ? `,volume=${gain.toFixed(2)}dB` : ""}`, "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-        "-t", total.toFixed(3), "-movflags", "+faststart", made], "adding the sound");
-      const level = await levelOf(made);
-      if (!(level.integrated > -70) || !(level.truePeak > -Infinity)) break;
-      const room = TRUE_PEAK - 0.2 - level.truePeak;
-      const step = tries === 0 ? Math.min(LUFS - level.integrated, room) : Math.min(0, room);
-      if (Math.abs(step) < 0.1 && level.truePeak <= TRUE_PEAK) break;
-      gain += step;
-    }
+    // Each encode is made in the part folder, under a name no output can
+    // have (out.js), so what is not kept goes with it.
+    await addSound({ video, wav, out: job.out(path.basename(out)), seconds: total, tries: (n) => path.join(job.part, `.launch-film-sound-${n}${path.extname(out)}`) });
     save(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
@@ -580,4 +622,4 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
   }
 }
 
-module.exports = { loadFilm, checkMusic, shellWord, renderFilm, buildClip, markFor, brandColours, pagePicture, FPS, FADE };
+module.exports = { loadFilm, checkMusic, shellWord, renderFilm, addSound, buildClip, markFor, brandColours, pagePicture, FPS, FADE };
