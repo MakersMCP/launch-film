@@ -88,6 +88,7 @@ async function scanAudio(film, { work, duration }) {
     const r = await run([...input(film), "-vn", "-af",
       `astats=measure_overall=Peak_level+Peak_count+Flat_factor:measure_perchannel=none,aresample=48000,ebur128=metadata=1:peak=true:framelog=verbose,silencedetect=n=-50dB:d=0.5,ametadata=mode=print:file=${frames.filterPath(notes)}`,
       "-f", "null", "-"], { loglevel: "info" });
+    if (r.short) throw Object.assign(new Error(r.short), { short: true });
     if (r.code !== 0) throw new Error(`reading the sound: ${why(r, { lines: 2 })}`);
     const num = (re) => {
       const m = re.exec(r.stderr);

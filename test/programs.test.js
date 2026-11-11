@@ -182,3 +182,65 @@ cp.spawnSync = (file, args, ...rest) => (Array.isArray(args) && args.includes("-
 `);
   refused(run("ffprobe", { NODE_OPTIONS: `--require ${stub}` }), "launch-film could not start ffprobe: too many files are open (EMFILE). Raise the limit on open files, as ulimit -n does, and run it again.", "EMFILE under way");
 });
+
+// Node starts no process when no file descriptor is left for its pipes: it
+// comes back from spawn with none, and its error comes next. Touched as they
+// were, the pipes threw, and the error had no listener, which ended the run
+// with Node's stack trace. This stub holds every free descriptor while a
+// spawn whose arguments hold EMFILE_ON starts.
+function spawnStub() {
+  const stub = path.join(tmp(), "spawn-emfile.js");
+  fs.writeFileSync(stub, `const cp = require("child_process");
+const fs = require("fs");
+const real = cp.spawn;
+cp.spawn = function (file, args, opts) {
+  if (!(Array.isArray(args) && args.join(" ").includes(process.env.EMFILE_ON))) return real.call(this, file, args, opts);
+  const held = [];
+  try { for (;;) held.push(fs.openSync("/dev/null", "r")); } catch {}
+  try { return real.call(this, file, args, opts); } finally { for (const fd of held) fs.closeSync(fd); }
+};
+`);
+  return stub;
+}
+const OUT_OF_FILES = "too many files are open (EMFILE). Raise the limit on open files, as ulimit -n does, and run it again.";
+
+test("a run that runs out of file descriptors as it starts ffmpeg, Chrome or easybrandkit says so, and leaves its folder as it was", { skip }, () => {
+  const { dir, film, folder } = where();
+  const stub = spawnStub();
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const cli = (args, on) => {
+    const temp = tmp();
+    const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 120_000,
+      env: { ...process.env, TMPDIR: temp, NODE_OPTIONS: `--require ${stub}`, EMFILE_ON: on, LAUNCH_FILM_CHROME: chrome } });
+    return { ...r, left: fs.readdirSync(temp) };
+  };
+  // check's first ffmpeg, and Chrome as a render starts it.
+  const out = path.join(dir, "check-emfile");
+  const check = cli(["check", film, "--out", out], "scdet");
+  assert.equal(check.status, 1, check.stderr);
+  assert.match(check.stderr, new RegExp(`^launch-film: launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(out)} was not made\\.\\n$`));
+  assert.ok(!fs.existsSync(out));
+  const render = cli(["render", path.join(folder, "film.json")], "--remote-debugging-pipe");
+  assert.equal(render.status, 1, render.stderr);
+  assert.match(render.stderr, new RegExp(`launch-film: launch-film could not start Chrome: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
+  assert.deepEqual(fs.readdirSync(folder), ["film.json"]);
+  // easybrandkit, as a plan starts it.
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, "process.exit(1);\n");
+  const plan = cli(["plan", "https://acme-notes.example", "--easybrandkit", kit, "--out", path.join(dir, "plan-emfile")], "--out");
+  assert.equal(plan.status, 1, plan.stderr);
+  assert.match(plan.stderr, new RegExp(`launch-film: launch-film could not start easybrandkit: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(path.join(dir, "plan-emfile"))} was not made\\.\\n$`));
+  for (const r of [check, render, plan]) assert.deepEqual(r.left, [], "left in the temp folder");
+});
+
+test("a render that runs out of file descriptors as it starts a clip's encoder says so, and leaves its folder as it was", { skip: skip || (!require("../src/chrome").findChrome() && "Chrome not found"), timeout: 180_000 }, () => {
+  const { folder } = where();
+  const temp = tmp();
+  const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "render", path.join(folder, "film.json")], { encoding: "utf8", timeout: 150_000,
+    env: { ...process.env, TMPDIR: temp, NODE_OPTIONS: `--require ${spawnStub()}`, EMFILE_ON: "image2pipe" } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, new RegExp(`launch-film: launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
+  assert.deepEqual(fs.readdirSync(folder), ["film.json"]);
+  assert.deepEqual(fs.readdirSync(temp), []);
+});

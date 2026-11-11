@@ -73,7 +73,7 @@ function whole(file) {
 async function writePicture(args, file, what, { none = null, ...opts } = {}) {
   fs.rmSync(file, { force: true });
   const r = await run([...args, ...picture(file)], opts);
-  if (r.short) throw new Error(r.short);
+  if (r.short) throw Object.assign(new Error(r.short), { short: true });
   const nothing = !fs.existsSync(file) && (r.code === 0 || /Nothing was written into output file|Output file is empty/.test(r.stderr));
   if (nothing && none) throw new Error(`${what}: ${none}`);
   if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
@@ -123,9 +123,17 @@ function stoppedSync(r, name, what) {
 
 // Runs ffmpeg and resolves { code, signal, stderr } (the end of it). A
 // filter's own report (ebur128's summary) needs loglevel "info".
+//
+// A process the system had no file descriptor for (EMFILE, ENFILE) comes
+// back from spawn with no pipes, and its error comes next: its error listener
+// is the first thing set, and its pipes are touched only when it has them.
+// Touched as they were, they threw, and the error had no listener, which
+// ended launch-film with Node's stack trace.
 function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
   return new Promise((resolve) => {
     const child = track(spawn(FFMPEG, ["-hide_banner", "-nostats", "-loglevel", loglevel, "-y", ...args], { stdio: [input ? "pipe" : "ignore", "ignore", "pipe"] }));
+    child.on("error", (err) => resolve({ code: -1, signal: null, stderr: err.message, short: short(err, "ffmpeg") }));
+    if (!child.stderr) return;
     let stderr = "";
     child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-6000)));
     let timer = null;
@@ -141,7 +149,6 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
       if (timer) clearTimeout(timer);
       resolve({ code, signal, stderr: late ? `${stderr}\nit took longer than ${Math.round(timeout / 1000)} s` : stderr });
     });
-    child.on("error", (err) => resolve({ code: -1, signal: null, stderr: err.message, short: short(err, "ffmpeg") }));
     if (input) {
       child.stdin.on("error", () => {});
       child.stdin.end(input);
@@ -151,7 +158,7 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
 
 async function mustRun(args, what, opts) {
   const r = await run(args, opts);
-  if (r.short) throw new Error(r.short);
+  if (r.short) throw Object.assign(new Error(r.short), { short: true });
   if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
   return r;
 }
@@ -268,6 +275,7 @@ function readSound(file, { seconds }) {
 // of the info level the summary is read at.
 async function loudnessOf(file, { seconds }) {
   const r = await run([...input(file), "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
+  if (r.short) throw Object.assign(new Error(r.short), { short: true });
   if (r.code !== 0) throw new Error(`measuring ${file}: ${why(r, { lines: 2 })}`);
   const num = (re) => {
     const m = re.exec(r.stderr);
@@ -286,7 +294,7 @@ async function loudnessOf(file, { seconds }) {
 const MEASURED = [["measured_I", "input_i", -99, 0], ["measured_TP", "input_tp", -99, 99], ["measured_LRA", "input_lra", 0, 99], ["measured_thresh", "input_thresh", -99, 0], ["offset", "target_offset", -99, 99]];
 async function loudnormPass(file, filter) {
   const r = await run([...input(file), "-af", `${filter}:print_format=json`, "-f", "null", "-"], { loglevel: "info" });
-  if (r.short) throw new Error(r.short);
+  if (r.short) throw Object.assign(new Error(r.short), { short: true });
   if (r.code !== 0) throw new Error(`measuring the sound: ${why(r, { lines: 2 })}`);
   let said = null;
   try {
@@ -349,26 +357,28 @@ function encoder({ output, fps = 25, crf = 15 }) {
     "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-an", "-r", String(fps), "-movflags", "+faststart", output],
   { stdio: ["pipe", "ignore", "pipe"] }));
   let err = "";
-  child.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
-  child.stdin.on("error", () => {});
   let ended = null;
   // One that cannot be started says why here, and closes as one that stopped.
+  // One the system had no file descriptor for has no pipes (run, above).
   let unstarted = null;
   child.on("error", (e) => {
     err = e.message;
     unstarted = short(e, "ffmpeg");
   });
+  if (child.stderr) child.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
+  if (child.stdin) child.stdin.on("error", () => {});
   const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
-  const failed = () => new Error(unstarted || why({ ...ended, stderr: err }, { lines: 2 }));
+  const failed = () => Object.assign(new Error(unstarted || why({ ...ended, stderr: err }, { lines: 2 })), { short: Boolean(unstarted) });
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)
     // takes no more frames: its error, not a wait for room in the pipe.
     async write(jpeg) {
-      if (!ended && !child.stdin.write(jpeg)) await Promise.race([new Promise((resolve) => child.stdin.once("drain", resolve)), closed]);
+      if (!child.stdin) await closed;
+      else if (!ended && !child.stdin.write(jpeg)) await Promise.race([new Promise((resolve) => child.stdin.once("drain", resolve)), closed]);
       if (ended) throw failed();
     },
     async end() {
-      child.stdin.end();
+      if (child.stdin) child.stdin.end();
       await closed;
       if (ended.code !== 0) throw failed();
     },

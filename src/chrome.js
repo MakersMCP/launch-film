@@ -125,6 +125,9 @@ function openerFolder() {
   const tried = require("child_process").spawnSync(path.join(dir, OPENERS[0]), [], { timeout: 10_000 });
   if (tried.error || tried.status !== 0) {
     release(dir);
+    // The system short of a file descriptor or a process is not the disk.
+    const short = require("./programs").short(tried.error, "its stand-ins for xdg-open");
+    if (short) throw Object.assign(new Error(short), { short: true });
     const why = tried.error && `${(getSystemErrorMap().get(tried.error.errno) || [])[1] || tried.error.code} (${tried.error.code})`;
     throw new Error(`launch-film could not run its stand-ins for xdg-open in ${dir}${why ? ` (${why})` : ""}, which keep a page from starting a program of the machine's: ` +
       "set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none");
@@ -201,6 +204,14 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
   // its profile as TMPDIR, that goes with the profile.
   const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(network ? tempEnv(profile) : process.env) }));
+  // One the system had no file descriptor for comes back with no pipes, and
+  // its error comes next (ffmpeg.js run): that is all there is to wait for.
+  if (!child.stdio) {
+    const err = await new Promise((resolve) => child.once("error", resolve));
+    release(profile);
+    const { short } = require("./programs");
+    throw Object.assign(new Error(short(err, "Chrome") || `Chrome could not be started from ${chrome}: ${err.message}`), { short: Boolean(short(err, "Chrome")) });
+  }
   let stderr = "";
   child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
   const pending = new Map();
@@ -235,7 +246,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // to wait on, the run ended with 0 and no word.
   child.on("error", (err) => {
     const { short } = require("./programs");
-    if (short(err, "Chrome")) return end(new Error(short(err, "Chrome")));
+    if (short(err, "Chrome")) return end(Object.assign(new Error(short(err, "Chrome")), { short: true }));
     const why = { EACCES: "permission denied", ENOENT: "no such file" }[err.code];
     end(new Error(`Chrome could not be started from ${chrome}: ${why ? `${why} (${err.code})` : err.message}. Set LAUNCH_FILM_CHROME to the Chrome program itself, or install Google Chrome or Chromium`));
   });

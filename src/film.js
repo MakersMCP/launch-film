@@ -340,6 +340,7 @@ async function buildClip(clip, ctx) {
     const ext = path.extname(clip.imageFile).toLowerCase() === ".png" ? ".png" : ".jpg";
     const soft = path.join(work, `soft-${clip.index}.jpg`);
     const blurred = await run([...input(clip.imageFile), "-vf", "scale='min(1400,iw)':-2,gblur=sigma=12", "-q:v", "5", ...picture(soft)]);
+    if (blurred.short) throw Object.assign(new Error(blurred.short), { short: true });
     // The blurred ground is left out when it could not be made whole.
     const hasSoft = blurred.code === 0 && whole(soft);
     const page = motion.screenHtml({ mode: clip.mode === "zoom" ? "zoom" : "pan", look, port, seconds, accent: brandAccent, brand: colours,
@@ -509,8 +510,9 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       // A failure says which clip it stopped, as ffmpeg's and Chrome's own
       // words do not, and a Chrome too slow to answer, when more than one
       // clip renders at once (pool), that one at a time eases the machine.
+      // A system short of file descriptors or processes is no clip's.
       const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS })
-        .catch((err) => Promise.reject(new Error(`rendering clip ${clip.index + 1}: ${err.message}${err.slow && Math.min(jobs, clips.length) > 1 ? ", or with --jobs 1 to render one clip at a time" : ""}`)));
+        .catch((err) => Promise.reject(err.short ? err : new Error(`rendering clip ${clip.index + 1}: ${err.message}${err.slow && Math.min(jobs, clips.length) > 1 ? ", or with --jobs 1 to render one clip at a time" : ""}`)));
       done++;
       log(`clip ${clip.index + 1}/${clips.length} (${clip.kind}${clip.parsed ? ` ${clip.parsed.type}` : ""}, ${clip.seconds.toFixed(1)} s) rendered in ${((Date.now() - started) / 1000).toFixed(1)} s [${done}/${clips.length}]\n`);
       if (r.errors.length) notes.push(`clip ${clip.index + 1}: the page reported ${r.errors.slice(0, 2).join("; ")}`);

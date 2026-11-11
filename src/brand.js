@@ -124,9 +124,12 @@ function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
     const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
     const done = () => temp && !stopping() && release(temp);
+    // The system short of a file descriptor or a process says so, as a
+    // command that cannot start ffmpeg does (programs.js).
     const unstarted = (e) => {
       done();
-      reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
+      const short = require("./programs").short(e, "easybrandkit");
+      reject(short ? Object.assign(new Error(short), { short: true }) : new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
     };
     // The Chrome easybrandkit starts takes its environment, and with it the
     // stand-ins that keep a page from starting a program (chrome.js).
@@ -144,6 +147,10 @@ function runOnce([cmd, ...pre], url, dir, log) {
       // A .cmd file on Windows, given without a shell.
       return unstarted(e);
     }
+    // Its error listener first: one the system had no file descriptor for
+    // has no pipes, and its error comes next (ffmpeg.js run).
+    child.on("error", unstarted);
+    if (!child.stdout) return;
     let out = "";
     child.stdout.on("data", (d) => {
       out = (out + d).slice(-3000);
@@ -153,7 +160,6 @@ function runOnce([cmd, ...pre], url, dir, log) {
       out = (out + d).slice(-3000);
       log(String(d));
     });
-    child.on("error", unstarted);
     child.on("close", (code) => {
       done();
       if (code === 0 && fs.existsSync(path.join(dir, "brand.json"))) return resolve(path.join(dir, "brand.json"));
