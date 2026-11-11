@@ -323,39 +323,50 @@ setTimeout(() => process.exit(0), 40000);
 // On a Linux desktop Chrome hands a mailto: address to the desktop's portal
 // over the session bus, which opens the mail program, past the stand-ins on
 // PATH. Every Chrome launch-film starts gets a bus that leads nowhere
-// instead, a socket in its profile that is never made, and no display. This
-// stand-in Chrome writes down what it was given, and ends.
+// instead, a socket in its profile that is never made, and no display: no X
+// display, and as its Wayland display a path in its profile that is never
+// made, as a program Chrome starts would find a Wayland desktop's display
+// in XDG_RUNTIME_DIR without one. This stand-in Chrome writes down what it
+// was given, and what a Wayland program it started would find, and ends.
+const WAYLAND_CLIENT = 'import ctypes; w = ctypes.CDLL("libwayland-client.so.0"); w.wl_display_connect.restype = ctypes.c_void_p; print("connected" if w.wl_display_connect(None) else "none")';
+const waylandClient = spawnSync("python3", ["-c", "import ctypes; ctypes.CDLL('libwayland-client.so.0')"]).status === 0;
 test("every Chrome launch-film starts on Linux gets a session bus that leads nowhere and no display", { skip: process.platform !== "linux" && "the session bus and the stand-ins are Linux's" }, async () => {
   const dir = tmp();
-  // A desktop's bus, a socket that is there.
+  // A desktop's bus and its Wayland display, sockets that are there.
   const desktop = path.join(dir, "desktop-bus");
-  const listening = require("net").createServer().listen(desktop);
-  await new Promise((resolve) => listening.once("listening", resolve));
+  const runtime = path.join(dir, "run");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const listening = [desktop, path.join(runtime, "wayland-0")].map((socket) => require("net").createServer().listen(socket));
+  await Promise.all(listening.map((server) => new Promise((resolve) => server.once("listening", resolve))));
   const seen = path.join(dir, "seen");
   const chrome = path.join(dir, "chrome");
   fs.writeFileSync(chrome, `#!/bin/sh
 bus=\${DBUS_SESSION_BUS_ADDRESS#unix:path=}
-{ echo "$DBUS_SESSION_BUS_ADDRESS"; [ -e "$bus" ] && echo there || echo nothing; echo "display \${DISPLAY-unset} \${WAYLAND_DISPLAY-unset}"; echo "\${PATH%%:*}"; } > '${seen}'
+{ echo "$DBUS_SESSION_BUS_ADDRESS"; [ -e "$bus" ] && echo there || echo nothing; echo "display \${DISPLAY-unset} \${WAYLAND_SOCKET-unset}"; echo "$WAYLAND_DISPLAY"; [ -e "$WAYLAND_DISPLAY" ] && echo there || echo nothing
+  echo "\${PATH%%:*}"; env -u WAYLAND_SOCKET python3 -c '${WAYLAND_CLIENT}' 2>/dev/null || echo "no client"; } > '${seen}'
 exit 3
 `, { mode: 0o755 });
   try {
     for (const network of [false, true]) {
       const temp = tmp();
       const r = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).launch({ W: 320, H: 240, network: ${network} }).then(() => console.log("started"), (err) => console.log(err.message))`],
-        { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_CHROME: chrome, TMPDIR: temp, DBUS_SESSION_BUS_ADDRESS: `unix:path=${desktop}`, DISPLAY: ":99", WAYLAND_DISPLAY: "wayland-99" } });
+        { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_CHROME: chrome, TMPDIR: temp, DBUS_SESSION_BUS_ADDRESS: `unix:path=${desktop}`, DISPLAY: ":99", WAYLAND_DISPLAY: "wayland-0", WAYLAND_SOCKET: "9", XDG_RUNTIME_DIR: runtime } });
       assert.equal(r.stdout, "Chrome stopped (exit 3)\n", r.stderr);
-      const [address, there, display, first] = fs.readFileSync(seen, "utf8").trim().split("\n");
+      const [address, there, display, wayland, made, first, client] = fs.readFileSync(seen, "utf8").trim().split("\n");
       const profile = /^unix:path=(.+)\/no-bus$/.exec(address);
       assert.ok(profile, `network ${network}: ${address}`);
       assert.equal(path.dirname(profile[1]), temp);
       assert.match(path.basename(profile[1]), /^launch-film-chrome-/);
       assert.equal(there, "nothing", `network ${network}: the bus Chrome was given leads somewhere`);
       assert.equal(display, "display unset unset", `network ${network}`);
+      assert.equal(wayland, path.join(profile[1], "no-display"), `network ${network}`);
+      assert.equal(made, "nothing", `network ${network}: the Wayland display Chrome was given is there`);
+      if (waylandClient) assert.equal(client, "none", `network ${network}: a Wayland program Chrome started found a display`);
       assert.match(path.basename(first), /^launch-film-bin-/, `network ${network}: the stand-ins are not first on PATH`);
       assert.deepEqual(fs.readdirSync(temp), [], `network ${network}: left in the temp folder`);
     }
   } finally {
-    listening.close();
+    for (const server of listening) server.close();
   }
 });
 

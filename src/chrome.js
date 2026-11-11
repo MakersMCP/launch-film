@@ -199,11 +199,16 @@ function withoutOpeners(env = process.env) {
 // it starts, is given a session bus that leads nowhere, a socket in a folder
 // of the run's own (`folder`) that is never made. Left unset, the bus would
 // be looked for in XDG_RUNTIME_DIR, where the desktop's is. Chrome draws
-// offscreen, so it is given no display either.
+// offscreen, so it is given no display either: no X display, and as its
+// Wayland display a path in that folder that is never made, which Wayland
+// takes as the display's socket itself. Left unset, that display too is
+// looked for in XDG_RUNTIME_DIR, as wayland-0, which a Wayland desktop's
+// is, so a program Chrome starts could open a window there. A display
+// handed down already open (WAYLAND_SOCKET) goes as well.
 function offTheDesktop(env, folder) {
   if (process.platform !== "linux") return env;
-  const { DISPLAY, WAYLAND_DISPLAY, ...rest } = env;
-  return { ...rest, DBUS_SESSION_BUS_ADDRESS: `unix:path=${busPath(path.join(folder, "no-bus"))}` };
+  const { DISPLAY, WAYLAND_DISPLAY, WAYLAND_SOCKET, ...rest } = env;
+  return { ...rest, DBUS_SESSION_BUS_ADDRESS: `unix:path=${busPath(path.join(folder, "no-bus"))}`, WAYLAND_DISPLAY: path.join(folder, "no-display") };
 }
 
 // A path as a bus address holds it: every byte but a letter, a digit and
