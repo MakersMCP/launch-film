@@ -138,6 +138,13 @@ function handedOn(url) {
 function openerFolder() {
   if (process.platform !== "linux") return null;
   if (openers && fs.existsSync(path.join(openers, "opened"))) return openers;
+  // PATH reads a ":" as the end of a folder, so a stand-ins' folder whose
+  // path holds one would be passed over for what comes after it on PATH,
+  // while the try below, which runs a stand-in by its path, still passed.
+  if (os.tmpdir().includes(path.delimiter)) {
+    throw new Error(`launch-film cannot put its stand-ins for xdg-open, which keep a page from starting a program of the machine's, first on Chrome's PATH from the temp folder ${os.tmpdir()}, ` +
+      `as PATH reads the "${path.delimiter}" in its path as the end of a folder: set TMPDIR to a folder whose path has no "${path.delimiter}"`);
+  }
   const dir = tempDir("launch-film-bin-");
   for (const name of OPENERS) save(path.join(dir, name), name === "xdg-settings" ? "#!/bin/sh\nexit 0\n" : STAND_IN);
   for (const name of OPENERS) fs.chmodSync(path.join(dir, name), 0o700);

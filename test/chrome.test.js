@@ -340,6 +340,30 @@ test("a page file Chrome refuses fails the page at once, with Chrome's words", {
   }
 });
 
+// PATH reads a ":" as the end of a folder: a stand-ins' folder in a temp
+// folder whose path holds one was split, and Chrome ran what came after it.
+test("no Chrome starts where the temp folder's path holds a colon, and a render and a plan say so before any work", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, () => {
+  const temp = path.join(tmp(), "a:b");
+  fs.mkdirSync(temp);
+  const said = `launch-film cannot put its stand-ins for xdg-open, which keep a page from starting a program of the machine's, first on Chrome's PATH from the temp folder ${temp}, ` +
+    'as PATH reads the ":" in its path as the end of a folder: set TMPDIR to a folder whose path has no ":"\n';
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const cli = (...args) => spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: chrome } });
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ look: "launch", clips: [{ kind: "scene", seconds: 3, scene: { type: "headline", title: "A title" } }] }));
+  const render = cli("render", path.join(dir, "film.json"));
+  assert.equal(render.status, 1, render.stderr);
+  assert.equal(render.stderr, said);
+  assert.deepEqual(fs.readdirSync(dir), ["film.json"]);
+  const out = path.join(tmp(), "film");
+  const plan = cli("plan", "https://acme-notes.example", "--out", out, "--easybrandkit", path.join(tmp(), "easybrandkit.js"));
+  assert.equal(plan.status, 1, plan.stderr);
+  assert.equal(plan.stderr, said);
+  assert.ok(!fs.existsSync(out));
+  assert.deepEqual(fs.readdirSync(temp), []);
+});
+
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and
 // the system then starts the real xdg-open past them: no Chrome starts.
 test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
