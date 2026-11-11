@@ -59,6 +59,32 @@ function galleryClips(clips, { heroScreen }) {
   return list;
 }
 
+// The part of the site's screen the hero's window shows (motion.js
+// stillHtml): the window takes the picture's shape, from 1.25 to 1.9 times
+// as wide as it is tall, and the picture covers it from the top, so a
+// taller picture shows its top and a wider one its middle.
+function windowPart(w, h) {
+  const ratio = Math.max(1.25, Math.min(1.9, w / h));
+  const pw = Math.min(w, Math.round(h * ratio));
+  return { x: Math.floor((w - pw) / 2), y: 0, w: pw, h: Math.min(h, Math.round(w / ratio)) };
+}
+
+// What the stills' pages are given for the site's screen and the store
+// screenshots, by their names: the files as they are, or copies of those
+// larger than Chrome takes in one file (pagePicture). A still is laid out
+// 1920 px wide and at most as tall, and draws no picture larger than that,
+// so a copy is at most 2400 px, with a quarter to spare: the screen as its
+// window shows it, cut to that and no wider, and a screenshot whole, as its
+// card shows it. A tall screen fitted whole into 2400 px was a narrow strip
+// the window drew several times wider than it was.
+async function stillPictures({ screen = null, shots = [], work }) {
+  const files = {};
+  const copy = (s, opts) => pagePicture(s.src, { ...opts, out: path.join(work, s.file), what: `making a copy of ${s.src}`, named: s.named });
+  if (screen) files[screen.file] = await copy(screen, { maxW: 2400, part: windowPart });
+  for (const s of shots) files[s.file] = await copy(s, { maxW: 2400, maxH: 2400 });
+  return files;
+}
+
 const describe = (clip) => (clip.kind === "scene" ? `the ${clip.scene.type} scene` : { screen: "the site's screen", shots: "the store screenshots", phone: "the phone", scroll: "the page scrolling", logo: "the logo close" }[clip.kind]);
 
 // Makes the stills of a film.json. Returns { dir, files, notes }. They take
@@ -127,24 +153,20 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
 
   // The real screens: the site's, else the store screenshots. A file that is
   // no picture is refused, as the render refuses it.
-  const serve = (file, as) => {
+  const serve = (file, as, named) => {
     const info = pictureSize(file);
-    return { file: `${as}${path.extname(file).toLowerCase() === ".png" ? ".png" : ".jpg"}`, w: info.width, h: info.height, src: file };
+    return { file: `${as}${path.extname(file).toLowerCase() === ".png" ? ".png" : ".jpg"}`, w: info.width, h: info.height, src: file, named };
   };
   const screenClip = clips.find((c) => c.kind === "screen");
   const shotsClip = clips.find((c) => c.kind === "shots") || clips.find((c) => c.kind === "phone");
-  const screen = screenClip ? serve(screenClip.imageFile, "screen") : null;
-  const shots = shotsClip ? (shotsClip.imageFiles || [shotsClip.imageFile]).map((f, k) => serve(f, `shot-${k}`)) : [];
-  // A still is laid out 1920 px wide and at most as tall, so no picture in
-  // it is drawn larger than that: one larger than Chrome takes in one file
-  // goes as a copy that size, with a quarter to spare.
-  const given = (s) => pagePicture(s.src, { maxW: 2400, maxH: 2400, out: path.join(work, s.file), what: `making a copy of ${s.src}` });
+  const screen = screenClip ? serve(screenClip.imageFile, "screen", `clips[${screenClip.index}].image ${JSON.stringify(String(screenClip.image))}`) : null;
+  const shots = !shotsClip ? [] : shotsClip.imageFiles ? shotsClip.imageFiles.map((f, k) => serve(f, `shot-${k}`, `clips[${shotsClip.index}].images[${k}] ${JSON.stringify(String(shotsClip.images[k]))}`))
+    : [serve(shotsClip.imageFile, "shot-0", `clips[${shotsClip.index}].image ${JSON.stringify(String(shotsClip.image))}`)];
   const files = {
     ...(mark.file ? { "mark.png": fs.readFileSync(mark.file) } : {}),
     ...(square ? { "square.png": fs.readFileSync(square.file) } : {}),
-    ...(screen ? { [screen.file]: await given(screen) } : {}),
+    ...(await stillPictures({ screen, shots, work })),
   };
-  for (const s of shots) files[s.file] = await given(s);
 
   // A page for each picture: the hero and the tiles laid out 1920 px wide
   // in the picture's shape, the film's frames at 1920x1080 even when the
@@ -195,4 +217,4 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   return { dir: outDir, files: made, notes };
 }
 
-module.exports = { makeStills, parseTargets, galleryClips, TARGETS };
+module.exports = { makeStills, parseTargets, galleryClips, windowPart, stillPictures, TARGETS };

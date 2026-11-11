@@ -13,6 +13,8 @@ const motion = require("../src/motion");
 const { readBrand } = require("../src/brand");
 const { planFilm } = require("../src/plan");
 const { tmp, bigPicture } = require("./tmp");
+const { windowPart, stillPictures } = require("../src/stills");
+const { stillHtml } = require("../src/motion");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -192,4 +194,27 @@ test("the stills of a film whose screenshot is larger than Chrome takes in one f
   const r = stills([filmFile, "--for", "og"], {});
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual([probe(path.join(dir, "stills", "og.png")).width, probe(path.join(dir, "stills", "og.png")).height], [1200, 630]);
+});
+
+// The hero's window draws the site's screen at the window's width, cut from
+// the top. A tall screen larger than Chrome takes in one file went as a copy
+// that fit 2400 x 2400 whole: 400 px wide for a 2000 x 12000 picture, which
+// the window then drew more than twice as wide, blurred.
+test("a tall screen larger than Chrome takes in one file goes to the stills as the top their window shows, as wide as the window draws it", { skip: !available() && "ffmpeg not found", timeout: 120_000 }, async () => {
+  const dir = tmp();
+  const src = bigPicture(dir, "tall.bmp", [2000, 12000]);
+  assert.deepEqual(windowPart(2000, 12000), { x: 0, y: 0, w: 2000, h: 1600 });
+  // A picture of the window's own shape is shown whole, and a wide one by its middle.
+  assert.deepEqual(windowPart(1440, 900), { x: 0, y: 0, w: 1440, h: 900 });
+  assert.deepEqual(windowPart(10000, 1000), { x: 4050, y: 0, w: 1900, h: 1000 });
+  const files = await stillPictures({ screen: { file: "screen.jpg", src, w: 2000, h: 12000, named: 'clips[1].image "tall.bmp"' }, work: tmp() });
+  const copy = path.join(tmp(), "screen.jpg");
+  fs.writeFileSync(copy, files["screen.jpg"]);
+  const { width, height } = probe(copy);
+  assert.deepEqual([width, height], [2000, 1600]);
+  // og's window, laid out 1920 px wide, with a quarter to spare.
+  const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", weight: { head: 700, body: 500 } };
+  const { html } = stillHtml({ kind: "hero", look: "launch", W: 1920, H: 1008, brand: {}, fonts, mark: null, name: "Acme", title: "Notes that think", site: "acme.example", screen: { file: "screen.jpg", w: 2000, h: 12000 }, shots: [] });
+  const drawn = Number(/class="st-win" style="[^"]*width:(\d+)px/.exec(html)[1]);
+  assert.ok(width >= drawn * 1.25, `the copy is ${width} px wide and the window ${drawn}`);
 });

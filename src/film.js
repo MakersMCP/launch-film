@@ -252,18 +252,30 @@ function topColour(file) {
 }
 
 // The bytes a page is given for a picture the film names: the file as it is,
-// or, when it is larger than Chrome takes in one file (chrome.js), a copy
-// that fits `maxW` x `maxH`, the most the page draws it at, and is never
-// larger than the picture, written to `out` (a PNG, or a JPEG by its name).
-// A screenshot of 80 MB rendered when pages were opened from the disk, and
-// then failed.
-async function pagePicture(file, { maxW, maxH = Infinity, out, what }) {
+// or, when it is larger than Chrome takes in one file (chrome.js), a copy of
+// what the page shows of it, `part(width, height)` ({ x, y, w, h }, the whole
+// picture when not given), that fits `maxW` x `maxH`, the most the page draws
+// it at, and is never larger than the picture, written to `out` (a PNG, or a
+// JPEG by its name). A screenshot of 80 MB rendered when pages were opened
+// from the disk, and then failed. A copy that is still too large, as one of a
+// detailed picture a zoom draws nearly at its own size, is made smaller until
+// it fits, its size going with its pixels; `named` says which picture of the
+// film's it is, should none fit.
+async function pagePicture(file, { maxW, maxH = Infinity, part = null, out, what, named = file }) {
   if (fs.statSync(file).size <= PAGE_FILE_MAX) return fs.readFileSync(file);
   const info = pictureSize(file);
-  const k = Math.min(1, maxW / info.width, maxH / info.height);
-  const size = (n) => Math.max(2, 2 * Math.round((n * k) / 2));
-  await writePicture([...input(file), "-vf", `scale=${size(info.width)}:${size(info.height)}:flags=lanczos`, "-frames:v", "1", ...(/\.jpe?g$/i.test(out) ? ["-q:v", "2"] : [])], out, what);
-  return fs.readFileSync(out);
+  const shown = part ? part(info.width, info.height) : { x: 0, y: 0, w: info.width, h: info.height };
+  const crop = part ? `crop=${shown.w}:${shown.h}:${shown.x}:${shown.y},` : "";
+  let k = Math.min(1, maxW / shown.w, maxH / shown.h);
+  for (let tries = 0; tries < 4; tries++) {
+    const size = (n) => Math.max(2, 2 * Math.round((n * k) / 2));
+    await writePicture([...input(file), "-vf", `${crop}scale=${size(shown.w)}:${size(shown.h)}:flags=lanczos`, "-frames:v", "1", ...(/\.jpe?g$/i.test(out) ? ["-q:v", "2"] : [])], out, what);
+    const bytes = fs.statSync(out).size;
+    if (bytes <= PAGE_FILE_MAX) return fs.readFileSync(out);
+    // A tenth to spare.
+    k *= Math.sqrt((0.9 * PAGE_FILE_MAX) / bytes);
+  }
+  throw new Error(`${named} is more than the ${PAGE_FILE_MAX / 1048576} MB Chrome takes in one file, even as a smaller copy: give a smaller picture, or a JPEG`);
 }
 
 // One clip's page: { html, files, cues, W, H }.
@@ -289,7 +301,8 @@ async function buildClip(clip, ctx) {
       image: { file: `capture${ext}`, w: info.width, h: info.height }, soft: hasSoft ? "soft.jpg" : null, box: clip.box || null,
       side: clip.side || "center", phone: info.height > info.width, fonts });
     // With a quarter to spare, as the phone's screen below.
-    const capture = await pagePicture(clip.imageFile, { maxW: page.drawnW * 1.25, out: path.join(work, `capture-${clip.index}${ext}`), what: `clip ${clip.index + 1}` });
+    const capture = await pagePicture(clip.imageFile, { maxW: page.drawnW * 1.25, out: path.join(work, `capture-${clip.index}${ext}`), what: `clip ${clip.index + 1}`,
+      named: `clips[${clip.index}].image ${JSON.stringify(String(clip.image))}` });
     const files = { [`capture${ext}`]: capture, ...(hasSoft ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
@@ -300,7 +313,10 @@ async function buildClip(clip, ctx) {
     });
     const page = motion.galleryHtml({ look, port, seconds, accent: brandAccent, brand: colours, images, fonts });
     const files = {};
-    for (const [k, im] of images.entries()) files[im.file] = await pagePicture(im.src, { maxW: Infinity, maxH: page.drawnH * 1.25, out: path.join(work, `shot-${clip.index}-${k}${path.extname(im.file)}`), what: `clip ${clip.index + 1}` });
+    for (const [k, im] of images.entries()) {
+      files[im.file] = await pagePicture(im.src, { maxW: Infinity, maxH: page.drawnH * 1.25, out: path.join(work, `shot-${clip.index}-${k}${path.extname(im.file)}`), what: `clip ${clip.index + 1}`,
+        named: `clips[${clip.index}].images[${k}] ${JSON.stringify(String(clip.images[k]))}` });
+    }
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
   if (clip.kind === "phone" || clip.kind === "scroll") {

@@ -137,10 +137,10 @@ after(async () => {
 });
 
 // A picture in `dir` larger than Chrome takes in one file (chrome.js): a
-// black 24 bit BMP, 6400 x 4200 and 80 MB long, of which only the header is
-// written, so it takes next to no room on the disk.
-function bigPicture(dir, name = "big.bmp") {
-  const [W, H] = [6400, 4200];
+// black 24 bit BMP, 6400 x 4200 and 80 MB long unless given another size,
+// of which only the header is written, so it takes next to no room on the
+// disk.
+function bigPicture(dir, name = "big.bmp", [W, H] = [6400, 4200]) {
   const size = 54 + W * 3 * H;
   const head = Buffer.alloc(54);
   head.write("BM", 0);
@@ -158,4 +158,41 @@ function bigPicture(dir, name = "big.bmp") {
   return file;
 }
 
-module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture };
+// A PNG in `dir` of W x H pixels of noise, with an alpha channel when
+// `alpha`, stored without compression: as large as its pixels, and a copy of
+// it that ffmpeg writes is hardly smaller.
+function noisePicture(dir, name, W, H, { alpha = false } = {}) {
+  const zlib = require("zlib");
+  const crypto = require("crypto");
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (bytes) => {
+    let c = 0xffffffff;
+    for (const b of bytes) c = table[(c ^ b) & 255] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const head = Buffer.alloc(4);
+    head.writeUInt32BE(data.length);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc(body));
+    return Buffer.concat([head, body, tail]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(W, 0);
+  header.writeUInt32BE(H, 4);
+  header[8] = 8;
+  header[9] = alpha ? 6 : 2;
+  const row = 1 + W * (alpha ? 4 : 3);
+  const raw = crypto.randomBytes(row * H);
+  for (let y = 0; y < H; y++) raw[y * row] = 0;
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", zlib.deflateSync(raw, { level: 0 })), chunk("IEND", Buffer.alloc(0))]));
+  return file;
+}
+
+module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture };

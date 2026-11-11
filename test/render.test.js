@@ -10,7 +10,7 @@ const { findChrome, launch, openPage, evaluate } = require("../src/chrome");
 const { FFMPEG, available, probe, readPixels, mustRun } = require("../src/ffmpeg");
 const { renderFilm } = require("../src/film");
 const audio = require("../src/audio");
-const { tmp, WAITS, bigPicture } = require("./tmp");
+const { tmp, WAITS, bigPicture, noisePicture } = require("./tmp");
 
 const skip = !findChrome() ? "Chrome not found" : !available() ? "ffmpeg not found" : false;
 const noShell = process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : skip;
@@ -285,6 +285,31 @@ test("a picture larger than Chrome takes in one file goes to the page as a copy 
   // A picture Chrome takes as it is goes as it is.
   assert.ok(shots.files["shot-1.png"].equals(fs.readFileSync(path.join(dir, "brand", "appstore-1.png"))));
   assert.ok(small.files["capture.png"].equals(fs.readFileSync(path.join(dir, "brand", "screenshot-1.png"))));
+});
+
+// A zoom onto a small box draws the capture up to about 4 times the
+// window's width, so a detailed picture of 5900 px was copied as it was, and
+// the copy, still 68 MB, failed the clip in the page's own name for it.
+test("a copy still larger than Chrome takes in one file is made smaller until it fits", { skip: !available() && "ffmpeg not found", timeout: 180_000 }, async () => {
+  const { loadFilm, buildClip, brandColours } = require("../src/film");
+  const { PAGE_FILE_MAX } = require("../src/chrome");
+  const dir = filmFolder({ clips: [{ kind: "screen", seconds: 2.5, image: "noise.png", mode: "zoom", box: [100, 100, 300, 200] }, { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
+  const file = noisePicture(dir, "noise.png", 5900, 3000, { alpha: true });
+  assert.ok(fs.statSync(file).size > PAGE_FILE_MAX);
+  const loaded = loadFilm(path.join(dir, "film.json"));
+  assert.deepEqual(loaded.problems, []);
+  const fonts = { css: "", head: "Inter", body: "Inter", label: "JetBrains Mono", weight: { head: 700, body: 500 } };
+  const ctx = { look: "launch", port: false, fonts, colours: brandColours(loaded.brand), work: tmp(), lang: "", brand: loaded.brand, notes: [] };
+  const clip = loaded.clips[0];
+  clip.render = clip.seconds;
+  const page = await buildClip(clip, ctx);
+  const data = page.files["capture.png"];
+  assert.ok(data.length <= PAGE_FILE_MAX, `${data.length} bytes`);
+  const copy = path.join(tmp(), "copy.png");
+  fs.writeFileSync(copy, data);
+  const info = probe(copy);
+  // As large as fits, in the picture's shape.
+  assert.ok(info.width > 4000 && info.width < 5900 && Math.abs(info.width / info.height - 5900 / 3000) < 0.01, `the copy is ${info.width}x${info.height}`);
 });
 
 test("a film whose screenshot is larger than Chrome takes in one file renders", { skip, timeout: 240_000 }, async () => {
