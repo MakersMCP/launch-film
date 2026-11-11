@@ -211,6 +211,9 @@ function linkEnd(file) {
 // it lists. null when it is not one, else { name, track }: the name of the
 // track it was fitted from, as that cues.json gives it ("" when none does),
 // and its path when it is found beside the fit or beside film.json (`dir`).
+// With LAUNCH_FILM_CONFINE set, a path outside film.json's folder is not
+// looked at: the command would tell whether any file of the machine is
+// there.
 function earlierFit(track, folder, dir) {
   const beside = path.dirname(track);
   let cues = null;
@@ -231,7 +234,7 @@ function earlierFit(track, folder, dir) {
       return false;
     }
   };
-  const found = was ? [beside, dir].map((d) => path.resolve(d, was)).find(isTrack) : null;
+  const found = was ? [beside, dir].map((d) => path.resolve(d, was)).find((file) => !confine.outside(dir, file, "film.json") && isTrack(file)) : null;
   return { name: path.basename(was), track: found || null };
 }
 

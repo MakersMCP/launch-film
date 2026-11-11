@@ -390,6 +390,43 @@ test("on Windows a track's name that no quoting holds is named after the command
     "npx musicfit@latest '<track>' --length 5 --hit 2.5 --fps 25 --out /films/music, <track> being /films/two\\nlines.wav quoted for your shell");
 });
 
+// With LAUNCH_FILM_CONFINE set, film.json may name only files in its own
+// folder, and the track an earlier fit's cues.json names is held to it too:
+// the command named a track elsewhere by its path only when a file was
+// there, so a cues.json could learn whether any path of the machine was.
+test("with LAUNCH_FILM_CONFINE set, the command for an earlier fit names no track outside film.json's folder by its path", { skip: !available() && "ffmpeg" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const music = path.join(dir, "music");
+  fs.mkdirSync(music);
+  const wav = (file, seconds) => {
+    const bus = new Bus(seconds);
+    for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+    writeWav(file, bus);
+  };
+  wav(path.join(music, "fitted.wav"), 1);
+  const elsewhere = path.join(tmp(), "song.wav");
+  wav(elsewhere, 8);
+  const commandFor = async (track) => {
+    fs.writeFileSync(path.join(music, "cues.json"), JSON.stringify({ musicfit: "0.2.1", track, file: "fitted.wav", fps: 25 }));
+    return /: npx musicfit@latest (\S+) --length/.exec((await checkMusic(load("music/fitted.wav"))).problems[0])[1];
+  };
+  const climbs = path.relative(music, elsewhere);
+  const saved = process.env.LAUNCH_FILM_CONFINE;
+  try {
+    delete process.env.LAUNCH_FILM_CONFINE;
+    assert.equal(await commandFor(elsewhere), shellWord(elsewhere));
+    assert.equal(await commandFor(climbs), shellWord(elsewhere));
+    process.env.LAUNCH_FILM_CONFINE = "1";
+    for (const track of [elsewhere, climbs, path.join(path.dirname(elsewhere), "nothing-there.wav")]) assert.equal(await commandFor(track), `'<${path.basename(track)}>'`, track);
+    // One in film.json's folder is named by its path as before.
+    wav(path.join(dir, "song.wav"), 8);
+    assert.equal(await commandFor("song.wav"), shellWord(path.join(dir, "song.wav")));
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+    else process.env.LAUNCH_FILM_CONFINE = saved;
+  }
+});
+
 // A film.json's music is anyone's where others give launch-film their
 // film.json: a name of thousands of characters ran on in the render's note.
 test("the render's note shows the track's name on one line, cut in the middle when it is long", () => {
