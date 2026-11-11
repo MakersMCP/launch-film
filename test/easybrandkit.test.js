@@ -175,3 +175,60 @@ fs.writeFileSync(out + "/brand.json", "{}");`);
     assert.deepEqual([r.status, r.stdout, r.stderr], [0, "", ""], name);
   }
 });
+
+// easybrandkit 0.4.0's Chrome saves a file a page makes it download into the
+// Downloads folder of the user it runs as, where nothing removes it. This
+// stand-in starts the machine's Chrome as easybrandkit does, with the
+// environment it was given, on a page that makes it save one.
+test("a file easybrandkit's Chrome is made to save goes in the run's temp folder, and with it, on Linux", { skip: (process.platform !== "linux" && "XDG_CONFIG_HOME is Linux's") || (!require("../src/chrome").findChrome() && "Chrome not found"), timeout: 120_000 }, async () => {
+  const http = require("http");
+  const dir = tmp();
+  // Made when Chrome asks for the file.
+  const asked = path.join(dir, "asked");
+  const server = http.createServer((req, res) => {
+    if (req.url === "/file.bin") {
+      fs.writeFileSync(asked, "");
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="planted.desktop"' });
+      return res.end("[Desktop Entry]\n");
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end('<!doctype html><title>Acme</title><h1>Acme</h1><script>addEventListener("load", () => (location.href = "/file.bin"));</script>');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const fake = path.join(dir, "easybrandkit.js");
+  fs.writeFileSync(fake, `const fs = require("fs"); const os = require("os"); const path = require("path");
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fake-easybrandkit-"));
+const chrome = require("child_process").spawn(${JSON.stringify(require("../src/chrome").findChrome())}, ["--headless=new", "--no-first-run", "--user-data-dir=" + profile, process.argv[2]], { stdio: "ignore" });
+// Once Chrome has had the file, and a moment to save it.
+const since = Date.now();
+const wait = setInterval(() => {
+  if (!fs.existsSync(process.env.ASKED) && Date.now() - since < 60000) return;
+  clearInterval(wait);
+  setTimeout(() => {
+    chrome.kill("SIGKILL");
+    const out = process.argv[process.argv.indexOf("--out") + 1];
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(out + "/brand.json", "{}");
+  }, 3000);
+}, 100);`);
+  const home = tmp();
+  const temp = shortTmp();
+  const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
+  try {
+    const r = await new Promise((resolve) => {
+      const child = require("child_process").spawn(process.execPath, ["-e", `require(${brand}).runEasybrandkit(process.argv[1], process.argv[2], { command: process.argv[3] }).then(() => console.log("ran"), (e) => console.log(e.message))`,
+        `http://127.0.0.1:${server.address().port}/`, path.join(dir, "out"), fake], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: home, TMPDIR: temp, ASKED: asked } });
+      let said = "";
+      child.stdout.on("data", (d) => (said += d));
+      child.stderr.on("data", (d) => (said += d));
+      child.on("close", (code) => resolve({ code, said }));
+    });
+    assert.equal(r.code, 0, r.said);
+    assert.equal(r.said.trim(), "ran");
+    assert.ok(fs.existsSync(asked), "Chrome was not sent to the file");
+    assert.ok(!fs.existsSync(path.join(home, "Downloads")), "Chrome saved the file in HOME/Downloads");
+    assert.deepEqual(fs.readdirSync(temp), [], "the run's temp folder, with the file, is gone");
+  } finally {
+    server.close();
+  }
+});

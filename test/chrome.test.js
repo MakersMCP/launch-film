@@ -288,6 +288,38 @@ test("a Chrome that never answers is ended with its profile, so doctor and a pla
   }
 });
 
+// A Chrome that answers launch's first call and not its refusal of downloads
+// would open pages that may save a file: it is ended with its profile before
+// any page opens, as one that answers nothing is.
+test("a Chrome that does not take the refusal of downloads is ended before any page opens", { skip: process.platform === "win32" && "the stand-in Chrome is a script", timeout: 60_000 }, async () => {
+  const dir = tmp();
+  const chrome = path.join(dir, "chrome");
+  fs.writeFileSync(chrome, `#!${process.execPath}
+${SAVES_PID}
+savePid(process.env.MUTE_PID, process.pid);
+const fs = require("fs");
+let buf = "";
+fs.createReadStream("", { fd: 3 }).on("data", (d) => {
+  buf += d;
+  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) {
+    const msg = JSON.parse(buf.slice(0, i));
+    if (msg.method === "Browser.getVersion") fs.writeSync(4, JSON.stringify({ id: msg.id, result: { product: "Chrome/1" } }) + "\\0");
+  }
+});
+setTimeout(() => process.exit(0), 40000);
+`, { mode: 0o755 });
+  // launch-film's wait for an answer cut from 60 s to 2.
+  const stub = path.join(dir, "stub.js");
+  fs.writeFileSync(stub, "const real = global.setTimeout;\nglobal.setTimeout = (fn, ms, ...rest) => real(fn, ms === 60000 ? 2000 : ms, ...rest);\n");
+  const temp = tmp();
+  const pid = path.join(dir, "chrome.pid");
+  const r = spawnSync(process.execPath, ["--require", stub, "-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).launch({ W: 320, H: 240 }).then(() => console.log("started"), (err) => console.log(err.message))`],
+    { encoding: "utf8", timeout: 40_000, env: { ...process.env, LAUNCH_FILM_CHROME: chrome, MUTE_PID: pid, TMPDIR: temp } });
+  assert.equal(r.stdout, "Chrome did not answer Browser.setDownloadBehavior within 60 s, most often because the machine is too busy: run again once it is less busy\n", r.stderr);
+  assert.ok(!alive(await pidIn(pid)), "the stand-in Chrome still runs");
+  assert.deepEqual(fs.readdirSync(temp), [], "its profile is left");
+});
+
 test("a page file Chrome refuses fails the page at once, with Chrome's words", { skip: process.platform === "win32" && "the stand-in Chrome is a script" }, async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html><html><body></body></html>");

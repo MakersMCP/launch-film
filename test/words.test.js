@@ -167,3 +167,53 @@ test("a page that goes to a mailto: address as it loads, or opens one in a windo
     server.close();
   }
 });
+
+// A page can make Chrome save a file of its choosing, of any size, into the
+// Downloads folder of the user it runs as: a site a plan read left one there,
+// where nothing removed it.
+test("a page that makes Chrome save a file saves none, by readWords or by a plan", { skip: !findChrome() && "Chrome not found", timeout: 180_000 }, async () => {
+  let asked = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url === "/file.bin") {
+      asked++;
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="planted.desktop"' });
+      return res.end("[Desktop Entry]\nType=Application\nExec=sh -c 'echo planted'\n");
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end('<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p><script>addEventListener("load", () => (location.href = "/file.bin"));</script>');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  // Every file under a folder, by its path from it.
+  const files = (dir) => fs.readdirSync(dir, { recursive: true }).filter((name) => fs.statSync(path.join(dir, name)).isFile());
+  const run = (args, home) => new Promise((resolve) => {
+    const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: home, TMPDIR: tmp() } });
+    let said = "";
+    child.stdout.on("data", (d) => (said += d));
+    child.stderr.on("data", (d) => (said += d));
+    child.on("close", (code) => resolve({ code, said }));
+  });
+  try {
+    const home = tmp();
+    const read = await run(["-e", `require(${JSON.stringify(path.join(__dirname, "..", "src", "words.js"))}).readWords(${JSON.stringify(url)}).then((w) => console.log(w.headings[0].text))`], home);
+    assert.equal(read.code, 0, read.said);
+    assert.match(read.said, /Notes that think with you/);
+    const kit = path.join(tmp(), "kit");
+    fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
+    const brandFile = path.join(kit, "brand.json");
+    fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url }));
+    const out = path.join(tmp(), "film");
+    const planHome = tmp();
+    const plan = await run([path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--brand", kit, "--out", out], planHome);
+    assert.equal(plan.code, 0, plan.said);
+    // Chrome was sent to the file each time, and saved it nowhere.
+    assert.ok(asked >= 2, `the file was asked for ${asked} times`);
+    for (const dir of [home, planHome]) {
+      assert.ok(!fs.existsSync(path.join(dir, "Downloads")), `${dir}/Downloads was made`);
+      assert.deepEqual(files(dir).filter((name) => /planted/.test(name)), []);
+    }
+    assert.deepEqual(files(out).filter((name) => /planted/.test(name)), []);
+  } finally {
+    server.close();
+  }
+});

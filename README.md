@@ -106,6 +106,8 @@ Where launch-film runs for others, who give it their film.json or brand.json, se
 
 A page in Chrome can try to hand an address that no page shows to a program of the machine: Chrome hands a `mailto:`, `news:` or `snews:` address to the system without asking, so a site that goes to one as it loads would open your mail program. On Linux every Chrome launch-film starts, and the one easybrandkit starts for a plan, finds stand-ins first on its PATH, in a temp folder of the run's own, for xdg-open, xdg-email, x-www-browser, www-browser and sensible-browser, the programs Chrome hands such an address to there, and for xdg-settings, which Chrome asks first which program takes it. They start nothing. A temp folder on a disk mounted noexec cannot run them, so there a command that starts Chrome stops before any work: set `TMPDIR` to another folder. On macOS and Windows Chrome hands such an address to the system, which opens the program set for it, and launch-film has found nothing that keeps it from that: no switch of Chrome's, no preference of its profile and no call of the DevTools protocol stops these three kinds of address. No test of this has run on macOS or Windows. On each system a plan says in a note which such address a page it read asked for.
 
+A page can also make Chrome save a file, of any size, into the Downloads folder of the user it runs as, where nothing removes it. Every Chrome launch-film starts refuses downloads. The Chrome of easybrandkit 0.4.0, which reads the site for a plan, does not: on Linux launch-film gives it a Downloads folder in the run's own temp folder, which goes with the run, and on macOS and Windows a site it reads can save a file into your Downloads folder.
+
 A run leaves this behind:
 
 ```

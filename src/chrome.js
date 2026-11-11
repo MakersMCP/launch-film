@@ -10,6 +10,12 @@
 // dialog came up on every render. The real HOME stays, so Chrome finds its
 // own files; the profile is a temp folder of its own, removed once Chrome
 // has gone (and on a stop, with the pages' folders: out.js).
+//
+// A page can make Chrome save a file of its choosing, of any size, into the
+// Downloads folder of the user it runs as, where nothing removes it: a site a
+// plan read filled that folder, outside every folder of the run's. So every
+// Chrome is told to refuse downloads before any page opens, and its profile
+// names a folder inside it for them, should one still be saved.
 
 const fs = require("fs");
 const os = require("os");
@@ -186,6 +192,10 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // ends: Chrome killed by a stop leaves that folder in the temp folder.
   let socket = null;
   const profile = tempDir("launch-film-chrome-", (dir) => closeProfile(dir, socket));
+  // Downloads, should Chrome save one in spite of the refusal below, go in
+  // the profile, which goes with the run.
+  fs.mkdirSync(path.join(profile, "Default"));
+  save(path.join(profile, "Default", "Preferences"), JSON.stringify({ download: { default_directory: path.join(profile, "Downloads"), prompt_for_download: false } }));
   const args = chromeArgs({ W, H, network, profile });
   // A Chrome with network access, stopped as it starts, leaves a
   // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
@@ -261,9 +271,11 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // A Chrome that does not answer its first call, in time or at all, is
   // ended here with its profile, since the caller never gets it to close:
   // left running, its pipes kept the process up after doctor or a plan that
-  // went on with the page's HTML had ended.
+  // went on with the page's HTML had ended. One that does not take the
+  // refusal of downloads is ended the same way, before it opens a page.
   try {
     await send("Browser.getVersion");
+    await send("Browser.setDownloadBehavior", { behavior: "deny" });
   } catch (err) {
     if (!exited) child.kill("SIGKILL");
     release(profile);

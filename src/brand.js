@@ -6,10 +6,11 @@
 // next to it). Paths in brand.json are relative to its folder.
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { onPath, withoutOpeners } = require("./chrome");
-const { track, tempDir, tempEnv, release, stopping } = require("./out");
+const { track, tempDir, tempEnv, release, stopping, save } = require("./out");
 const confine = require("./confine");
 
 // ─── colour ────────────────────────────────────────────────────────────────
@@ -94,14 +95,31 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
   }
 }
 
+// The Chrome of easybrandkit 0.4.0 saves a file a page makes it download, of
+// any size, into the Downloads folder of the user it runs as, where nothing
+// removes it, as launch-film's own Chrome no longer does (chrome.js). On Linux
+// Chrome finds that folder in $XDG_CONFIG_HOME/user-dirs.dirs, so easybrandkit
+// is given such a folder in the run's temp folder, `temp`, that names one
+// there: a download goes with the run. The user's own fontconfig settings,
+// which that folder would hide from Chrome, are linked into it.
+function downloadsIn(temp, env) {
+  const config = path.join(temp, "config");
+  fs.mkdirSync(config);
+  const downloads = path.join(temp, "downloads").replace(/["\\]/g, "\\$&");
+  save(path.join(config, "user-dirs.dirs"), `XDG_DOWNLOAD_DIR="${downloads}"\n`);
+  const fonts = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "fontconfig");
+  if (fs.existsSync(fonts)) fs.symlinkSync(fonts, path.join(config, "fontconfig"));
+  return { ...env, XDG_CONFIG_HOME: config };
+}
+
 // easybrandkit runs a Chrome of its own, which a stop or a failure of the
 // run ends with it (out.js, watch). On Linux both get a temp folder of the
-// run's own, so what they leave goes with it. easybrandkit's own words name
-// the folder it was given as the user knows it (ownWords): that is the run's
-// copy of the folder's brand/, not a new file. A stop removes the temp folder
-// itself once what uses it has been killed: removed here while Chrome still
-// writes there, the removal's retries would hold the stop up past the moment
-// a supervisor kills the run.
+// run's own, so what they leave goes with it, a download among it.
+// easybrandkit's own words name the folder it was given as the user knows it
+// (ownWords): that is the run's copy of the folder's brand/, not a new file.
+// A stop removes the temp folder itself once what uses it has been killed:
+// removed here while Chrome still writes there, the removal's retries would
+// hold the stop up past the moment a supervisor kills the run.
 function runOnce([cmd, ...pre], url, dir, log) {
   return new Promise((resolve, reject) => {
     const temp = process.platform === "linux" ? tempDir("launch-film-brand-") : null;
@@ -114,7 +132,7 @@ function runOnce([cmd, ...pre], url, dir, log) {
     // stand-ins that keep a page from starting a program (chrome.js).
     let env;
     try {
-      env = withoutOpeners(tempEnv(temp));
+      env = withoutOpeners(temp ? downloadsIn(temp, tempEnv(temp)) : process.env);
     } catch (err) {
       done();
       return reject(err);
