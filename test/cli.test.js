@@ -127,6 +127,39 @@ test("a plan given another kit and a words.json that is not there, or a kit with
   }
 });
 
+// easybrandkit makes no kit in a brand/ of files that are not a kit's, so a
+// plan without --brand into such a folder is refused as that before it looks
+// at any program or starts easybrandkit: here the Chrome and the ffmpeg it
+// is given are not there, and the stand-in easybrandkit notes that it ran.
+test("a plan, the one-go command and stills of an address into a folder whose brand/ holds files and no kit are refused before any program is looked at", () => {
+  const ran = path.join(tmp(), "ran");
+  const kit = path.join(tmp(), "easybrandkit.js");
+  fs.writeFileSync(kit, `require("fs").writeFileSync(${JSON.stringify(ran)}, ""); process.stderr.write("easybrandkit: it ran\\n"); process.exit(1);`);
+  const nothing = path.join(tmp(), "nothing");
+  for (const command of [["plan"], [], ["stills"]]) {
+    const dir = tmp();
+    fs.mkdirSync(path.join(dir, "brand"));
+    fs.writeFileSync(path.join(dir, "brand", "notes.txt"), "the user's");
+    const before = snap(dir);
+    const r = cliWith({ LAUNCH_FILM_CHROME: nothing, LAUNCH_FILM_FFMPEG: nothing, LAUNCH_FILM_FFPROBE: nothing }, ...command, "https://acme-notes.example", "--out", dir, "--easybrandkit", kit);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${path.join(dir, "brand")} is not empty and holds no earlier brand kit, which a plan has easybrandkit make there: give a kit with --brand, move the files in it elsewhere, or pick another folder with --out\n`, command.join(" "));
+    assert.deepEqual(snap(dir), before);
+    assert.ok(!fs.existsSync(ran), `${command.join(" ")}: easybrandkit was started`);
+  }
+  // One whose brand/ holds only hidden files, or holds a brand.json, is left
+  // to easybrandkit, as is one given a kit.
+  for (const files of [{ ".DS_Store": "" }, { "brand.json": "{}", "notes.txt": "the user's" }]) {
+    const dir = tmp();
+    fs.mkdirSync(path.join(dir, "brand"));
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, "brand", name), text);
+    const r = cli("plan", "https://acme-notes.example", "--out", dir, "--easybrandkit", kit);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /easybrandkit failed \(exit 1\): easybrandkit: it ran\n/, Object.keys(files).join(" "));
+    fs.rmSync(ran);
+  }
+});
+
 test("a plan whose easybrandkit fails leaves the folder's kit as it was", () => {
   planFails(["--easybrandkit", failingEasybrandkit(tmp())], /easybrandkit failed \(exit 1\): easybrandkit: Could not open the page/);
 });

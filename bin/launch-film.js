@@ -245,7 +245,25 @@ function folderFor(url, flags) {
 // What a plan is given, read before anything else, the programs it runs
 // too: the words.json of --words, and the brand.json of the kit --brand
 // names. A wrong one refuses the plan before anything is fetched or started.
-function planArgs(flags) {
+// So does a plan without --brand into a folder whose brand/ holds files and
+// no brand.json at all: easybrandkit, which makes its kit again in the run's
+// copy of brand/ (makePlan), makes none in a folder of files that are not a
+// kit's, and every release of it refuses one. A brand/ that is a link is
+// left to makePlan, and so is a plan of an App Store page, which is read
+// from the store when easybrandkit cannot read it.
+function planArgs(flags, url) {
+  if (!flags.brand && !require("../src/store").appStoreId(url)) {
+    const own = path.join(folderFor(url, flags), "brand");
+    let names = [];
+    try {
+      if (!fs.lstatSync(own).isSymbolicLink()) names = fs.readdirSync(own);
+    } catch {
+      // No brand/ there, or one that makePlan tells of.
+    }
+    if (names.some((name) => !name.startsWith(".")) && !names.includes("brand.json")) {
+      throw new Error(`${own} is not empty and holds no earlier brand kit, which a plan has easybrandkit make there: give a kit with --brand, move the files in it elsewhere, or pick another folder with --out`);
+    }
+  }
   let words = null;
   if (flags.words) {
     try {
@@ -516,7 +534,7 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      const inputs = planArgs(flags);
+      const inputs = planArgs(flags, url);
       ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
@@ -531,7 +549,7 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
-  const inputs = planArgs(flags);
+  const inputs = planArgs(flags, url);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {
