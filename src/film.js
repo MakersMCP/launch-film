@@ -3,7 +3,8 @@
 // film.json in, an MP4 out: each clip is a page rendered on its own (two at a
 // time), the clips are joined with short crossfades that start on the cut,
 // and one sound track (the music bed, or the user's own track in its place,
-// and every clip's effects at their times) is laid under the whole film.
+// and every clip's effects at their times) is laid under the whole film, at
+// the loudness social apps play at.
 
 const fs = require("fs");
 const os = require("os");
@@ -11,7 +12,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage, PAGE_FILE_MAX } = require("./chrome");
-const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf } = require("./ffmpeg");
+const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf, loudnormPass } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -21,6 +22,12 @@ const confine = require("./confine");
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
 const FADE = 0.4;
+// The film's sound: -14 LUFS, the loudness YouTube, X and most social apps
+// play at and the skill checks a film at, its true peak at -1.5 dBTP or
+// under. loudnorm measures the sound first and sets it to that in a second
+// pass (ffmpeg.js loudnormPass): in one pass, aimed at -16, films came out
+// from -14.2 to -15.8 LUFS, a mastered track's at the far end.
+const LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11";
 const KINDS = new Set(["scene", "screen", "phone", "scroll", "shots", "logo"]);
 
 // Reads and checks a film.json; returns { film, dir, brand, clips, problems }.
@@ -499,7 +506,9 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
     audio.writeWav(wav, audio.mixFilm({ seconds: total, music: bed, cues, musicGain: film.music && film.music.volume !== undefined ? Number(film.music.volume) : 0.55 }));
     const timeline = { film: path.relative(path.dirname(out), path.resolve(file)), seconds: +total.toFixed(3), look,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
-    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+    // Measured, then set to the film's loudness as it goes in.
+    const measured = await loudnormPass(wav, LOUDNORM);
+    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}`, "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
       "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
     save(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };

@@ -94,7 +94,7 @@ You can't watch the film or hear it, so measure it:
 npx -y launch-film@0.2.1 check film/<name>/film.mp4 --expect 1920x1080@25 --seconds 20-40 --lufs -14
 ```
 
-launch-film renders at 25 fps, 1920x1080 (1080x1920 for 9:16). `--seconds 20-40` is the range a launch film keeps to; when the user asked for a length, give that instead (`--seconds 30` allows half a second either way). Clips last whole bars, so a film planned for 30 seconds can come out two seconds short: to hit a length exactly, give the last clip `seconds` in place of `bars` and render again. `--lufs -14` is the loudness YouTube, X and most social apps play at. If the user has music cues from another tool, add `--cues cues.json` to see whether the cuts land on the beat.
+launch-film renders at 25 fps, 1920x1080 (1080x1920 for 9:16). `--seconds 20-40` is the range a launch film keeps to; when the user asked for a length, give that instead (`--seconds 30` allows half a second either way). Clips last whole bars, so a film planned for 30 seconds can come out two seconds short: to hit a length exactly, give the last clip `seconds` in place of `bars` and render again. `--lufs -14` is the loudness YouTube, X and most social apps play at, and a render brings the film's sound to it. If the user has music cues from another tool, add `--cues cues.json` to see whether the cuts land on the beat.
 
 Read `film/<name>/check/CHECK.md` first. It says PASS or FAIL and why, for each check: size, frame rate, length, black, still and silent stretches, loudness, true peak, clipping and cuts on the beat. A warning is something to look at, not always a fault: a title that rests or an end card is a hold, and you can pass the stretches you meant with `--allow 27-30`.
 

@@ -243,6 +243,33 @@ async function loudnessOf(file, { seconds }) {
   return { integrated: num(/Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+|-inf) LUFS/), peak: num(/Sample peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/) };
 }
 
+// loudnorm's first pass over a sound file, given its `filter` (loudnorm=I=
+// and the rest): what it measured, as the options its second pass takes to
+// set the sound to that level (":measured_I=...:offset=..."), or "" for a
+// sound it measured no level in, as silence, which the second pass then takes
+// as it is. In one pass loudnorm sets the level from the first seconds it
+// has heard, and a film came out a LU or two away from it; with what the
+// first pass measured, it lands within a few tenths.
+const MEASURED = [["measured_I", "input_i", -99, 0], ["measured_TP", "input_tp", -99, 99], ["measured_LRA", "input_lra", 0, 99], ["measured_thresh", "input_thresh", -99, 0], ["offset", "target_offset", -99, 99]];
+async function loudnormPass(file, filter) {
+  const r = await run([...input(file), "-af", `${filter}:print_format=json`, "-f", "null", "-"], { loglevel: "info" });
+  if (r.short) throw new Error(r.short);
+  if (r.code !== 0) throw new Error(`measuring the sound: ${why(r, { lines: 2 })}`);
+  let said = null;
+  try {
+    said = JSON.parse(r.stderr.slice(r.stderr.lastIndexOf("{"), r.stderr.lastIndexOf("}") + 1));
+  } catch {
+    return "";
+  }
+  let options = "";
+  for (const [option, key, min, max] of MEASURED) {
+    const value = Number(said[key]);
+    if (!(value >= min && value <= max)) return "";
+    options += `:${option}=${value}`;
+  }
+  return options;
+}
+
 // A picture made exactly W x H: scaled to cover the size and cut to it from
 // the middle, as an opaque PNG (stores refuse transparency).
 function coverPng(from, output, W, H) {
@@ -316,4 +343,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, pictureSize, readSound, loudnessOf, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, pictureSize, readSound, loudnessOf, loudnormPass, coverPng, readPixels, writePng, encoder };

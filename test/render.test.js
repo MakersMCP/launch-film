@@ -174,6 +174,24 @@ test("a film plays the track film.json names, in place of the bed", { skip, time
   assert.ok(peak(end - 0.05, end) < 0.1 * peak(1, 4), `the last 50 ms peak at ${peak(end - 0.05, end).toFixed(3)} against ${peak(1, 4).toFixed(3)}`);
 });
 
+// The skill checks a film at -14 LUFS, give or take 1 LU, and the render
+// brings its sound there. In one pass, aimed at -16, the bed came out at
+// -15.0 and a mastered track at -15.8, so the check failed.
+test("a film's sound is brought to -14 LUFS, with the bed and with a mastered track of the user's", { skip, timeout: 240_000 }, async () => {
+  const { checkFilm } = require("../src/check");
+  const loudness = async (film) => (await checkFilm(film, { lufs: -14, out: path.join(tmp(), "check") })).audio.integrated;
+  const bed = await renderedFolder();
+  const withBed = await loudness(path.join(bed, "film.mp4"));
+  assert.ok(Math.abs(withBed + 14) <= 0.5, `the film with the bed measures ${withBed} LUFS`);
+  // A track mastered as musicfit writes one: -14 LUFS, its true peak at -1.
+  const dir = filmFolder({ music: "music/track.wav" });
+  fs.mkdirSync(path.join(dir, "music"));
+  await mustRun(["-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.3:duration=7:sample_rate=48000", "-af", "lowpass=f=6000,loudnorm=I=-14:TP=-1:LRA=11", "-ar", "48000", "-ac", "2", path.join(dir, "music", "track.wav")], "a track");
+  const result = await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
+  const withTrack = await loudness(result.output);
+  assert.ok(Math.abs(withTrack + 14) <= 0.5, `the film with the track measures ${withTrack} LUFS`);
+});
+
 // Every file in a folder, hidden ones too, with its bytes.
 function snap(dir) {
   const seen = {};
@@ -322,8 +340,9 @@ test("a film whose screenshot is larger than Chrome takes in one file renders", 
 test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);
-  // ffmpeg -y empties the file it writes before it fails.
-  const ffmpeg = standIn(`case "$*" in *loudnorm*) for last; do :; done; : > "$last"; echo 'stand-in: no sound today' >&2; exit 1;; esac`);
+  // ffmpeg -y empties the file it writes before it fails: the film, as the
+  // sound goes in.
+  const ffmpeg = standIn(`case "$*" in *"-map 1:a"*) for last; do :; done; : > "$last"; echo 'stand-in: no sound today' >&2; exit 1;; esac`);
   const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /adding the sound: ffmpeg failed: stand-in: no sound today\n/);
@@ -331,6 +350,14 @@ test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240
   assert.ok(r.stderr.endsWith(`\nlaunch-film: ${dir} is as it was.\n`), r.stderr);
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(leftBy(r.pid), []);
+  // So does a render whose sound cannot be measured.
+  const measuring = standIn(`case "$*" in *print_format=json*) echo 'stand-in: no measure today' >&2; exit 1;; esac`);
+  const m = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: measuring } });
+  assert.equal(m.status, 1, m.stderr);
+  assert.match(m.stderr, /measuring the sound: ffmpeg failed: stand-in: no measure today\n/);
+  assert.ok(m.stderr.endsWith(`\nlaunch-film: ${dir} is as it was.\n`), m.stderr);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(m.pid), []);
 });
 
 test("a render whose clip encoder stops ends with its words and keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
