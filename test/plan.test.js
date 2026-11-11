@@ -293,6 +293,57 @@ test("the musicfit command a short track's refusal gives runs in a shell as it i
   assert.deepEqual(fs.readdirSync(here), [], "nothing in the folder's name was run");
 });
 
+// A film that grew since its track was fitted: the track film.json names is
+// musicfit's fitted.wav in the music folder the refusal's command writes to.
+// musicfit refuses to fit a track it would replace, and a fit's faded end
+// fitted again would play twice, so the command names the track it was made
+// from, which musicfit's cues.json beside it gives.
+test("the musicfit command for a short earlier fit names the track it was fitted from, not the fit", { skip: (process.platform === "win32" || !available()) && "a POSIX shell, and ffmpeg" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const wav = (file, seconds) => {
+    const bus = new Bus(seconds);
+    for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+    writeWav(file, bus);
+  };
+  const music = path.join(dir, "music");
+  fs.mkdirSync(music);
+  wav(path.join(music, "fitted.wav"), 1);
+  const refusal = async () => (await checkMusic(load("music/fitted.wav"))).problems[0];
+  const lead = '"music" "music/fitted.wav" lasts 1.00 s and the film 5.00 s: give a track at least as long as the film. ';
+  const then = 'then set "music" in film.json to "music/fitted.wav"';
+  const tail = `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at 2.50 s: npx musicfit@latest`;
+  // Without a cues.json, by what it is.
+  assert.equal(await refusal(), `${lead}That track is an earlier fit, so fit the track it was made from again: ${tail} '<track>' --length 5 --hit 2.5 --fps 25 --out ${music}, ` +
+    `<track> being the path of the track it was made from, ${then}`);
+  // With musicfit's cues.json, by the track it names.
+  fs.writeFileSync(path.join(music, "cues.json"), JSON.stringify({ musicfit: "0.2.1", track: "song.wav", file: "fitted.wav", fps: 25 }));
+  const nameOnly = await refusal();
+  assert.equal(nameOnly, `${lead}That track is musicfit's earlier fit of song.wav, so fit song.wav again: ${tail} '<song.wav>' --length 5 --hit 2.5 --fps 25 --out ${music}, ` +
+    `<song.wav> being the path of song.wav, ${then}`);
+  // A shell that runs it as it is reads no < or > in it, so it makes no file.
+  const here = tmp();
+  const command = /: (npx musicfit@latest .*?), <song\.wav> being/.exec(nameOnly)[1];
+  const r = spawnSync("sh", ["-c", command.replace("npx musicfit@latest", "printf '%s\\n'")], { cwd: here, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.split("\n")[0], "<song.wav>");
+  assert.deepEqual(fs.readdirSync(here), []);
+  // Beside film.json, or beside the fit, by its whole path.
+  for (const place of [dir, music]) {
+    wav(path.join(place, "song.wav"), 8);
+    assert.equal(await refusal(), `${lead}That track is musicfit's earlier fit of song.wav, so fit song.wav again: ${tail} ${path.join(place, "song.wav")} --length 5 --hit 2.5 --fps 25 --out ${music}, ${then}`);
+    fs.rmSync(path.join(place, "song.wav"));
+  }
+  // A fit kept elsewhere is one all the same, when its cues.json lists it.
+  const kept = path.join(dir, "fits");
+  fs.mkdirSync(kept);
+  fs.renameSync(path.join(music, "fitted.wav"), path.join(kept, "fitted.wav"));
+  fs.renameSync(path.join(music, "cues.json"), path.join(kept, "cues.json"));
+  assert.match((await checkMusic(load("fits/fitted.wav"))).problems[0], /That track is musicfit's earlier fit of song\.wav, so fit song\.wav again: .* '<song\.wav>' --length 5/);
+  // A track of the user's in the music folder is fitted as it is.
+  wav(path.join(music, "mine.wav"), 1);
+  assert.match((await checkMusic(load("music/mine.wav"))).problems[0], new RegExp(`5\\.00 s: give a track at least as long as the film\\. musicfit makes one .*: npx musicfit@latest ${path.join(music, "mine.wav").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --length 5`));
+});
+
 test("a track the user may not read is refused for that, not as a file with no sound", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not read, and ffmpeg" }, async () => {
   const { dir, load } = filmWithMusic();
   const bus = new Bus(6);

@@ -159,6 +159,36 @@ function linkEnd(file) {
   return null;
 }
 
+// The track an earlier fit of musicfit's was made from, when `track` is such
+// a fit: a file musicfit writes (fitted.wav or mix.wav) in `folder`, where the
+// fit the refusal asks for goes, or one that a cues.json of musicfit's beside
+// it lists. null when it is not one, else { name, track }: the name of the
+// track it was fitted from, as that cues.json gives it ("" when none does),
+// and its path when it is found beside the fit or beside film.json (`dir`).
+function earlierFit(track, folder, dir) {
+  const beside = path.dirname(track);
+  let cues = null;
+  try {
+    const read = JSON.parse(fs.readFileSync(path.join(beside, "cues.json"), "utf8"));
+    if (read && typeof read === "object" && read.musicfit !== undefined) cues = read;
+  } catch {
+    // No cues.json of musicfit's there.
+  }
+  const name = path.basename(track);
+  const listed = Boolean(cues) && [cues.file, cues.mix].includes(name);
+  if (!listed && !(beside === folder && ["fitted.wav", "mix.wav"].includes(name))) return null;
+  const was = cues && typeof cues.track === "string" ? cues.track.trim() : "";
+  const isTrack = (file) => {
+    try {
+      return fs.statSync(file).isFile() && file !== track;
+    } catch {
+      return false;
+    }
+  };
+  const found = was ? [beside, dir].map((d) => path.resolve(d, was)).find(isTrack) : null;
+  return { name: path.basename(was), track: found || null };
+}
+
 // The user's own track, when film.json names one, read before anything
 // renders: its sound for the film's length, decoded, and its loudness over
 // it. Returns { track, problems }: a file that is missing, has no sound
@@ -214,17 +244,25 @@ async function checkMusic(loaded) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
     // In a folder of its own in the film's: the path set in film.json stays
     // good, whatever else musicfit is asked to do next to the film. The
-    // command is written to be run as it is, from any folder: the track it
-    // refused and the folder by their whole paths, each quoted for the shell.
-    // A path no quoting holds in every shell (Windows) is named beside it.
+    // command is written to be run as it is, from any folder: the track and
+    // the folder by their whole paths, each quoted for the shell. A path no
+    // quoting holds in every shell (Windows) is named beside it, and so is a
+    // track to give in place of a word in angle brackets.
     const folder = path.join(dir, "music");
-    const words = [[music.track, "<track>"], [folder, "<folder>"]].map(([file, name]) => ({ file, name, word: shellWord(file) }));
-    const unquoted = words.filter((w) => !w.word);
-    return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ` +
+    const fit = earlierFit(music.track, folder, dir);
+    const from = fit ? fit.track : music.track;
+    const words = [[from, fit ? `<${fit.name || "track"}>` : "<track>"], [folder, "<folder>"]].map(([file, name]) => ({ file, name, word: file && shellWord(file) }));
+    const said = words.filter((w) => !w.word).map((w) => (w.file ? `${w.name} being ${w.file} quoted for your shell` : `${w.name} being the path of ${fit.name || "the track it was made from"}`));
+    // A word in angle brackets goes in quotes, so a shell that runs the
+    // command as it is reads no < or > in it as a file to read or write.
+    const inert = (name) => (process.platform === "win32" ? `"${name}"` : `'${name}'`);
+    // An earlier fit is not fitted again: musicfit refuses a track it would
+    // replace, and a fit's faded end would play twice.
+    const again = !fit ? "" : fit.name ? `That track is musicfit's earlier fit of ${fit.name}, so fit ${fit.name} again: ` : "That track is an earlier fit, so fit the track it was made from again: ";
+    return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ${again}` +
       `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
-      `npx musicfit@latest ${words[0].word || words[0].name} --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${words[1].word || words[1].name}` +
-      `${unquoted.length ? `, ${unquoted.map((w) => `${w.name} being ${w.file}`).join(" and ")} quoted for your shell` : ""}, ` +
-      `then set "music" in film.json to "music/fitted.wav"`] };
+      `npx musicfit@latest ${words[0].word || inert(words[0].name)} --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${words[1].word || inert(words[1].name)}` +
+      `${said.length ? `, ${said.join(" and ")}` : ""}, then set "music" in film.json to "music/fitted.wav"`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });
   if (!(level.integrated > -70)) return refuse(`${at} is silent over the film's ${total.toFixed(2)} s: give a track with sound in it, or false for no music`);
