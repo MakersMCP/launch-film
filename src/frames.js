@@ -166,7 +166,7 @@ async function findCuts(film, { info, work, scan = null, given = null }) {
     const frames = (scan || (await scanVideo(film, { work, duration: info.duration }))).frames;
     cuts = detectCuts(frames).map((c) => ({ ...c, source, label: c.hard ? "" : "soft" }));
   }
-  cuts = cuts.filter((c) => c.at < info.duration - 0.05).sort((a, b) => a.at - b.at);
+  cuts = cuts.filter((c) => c.at < stillSpan(info).end - 0.05).sort((a, b) => a.at - b.at);
   if (!cuts.length || cuts[0].at > 0.05) cuts.unshift({ at: 0, hard: true, source, label: "" });
   cuts.forEach((c, i) => {
     c.index = i + 1;
@@ -175,19 +175,33 @@ async function findCuts(film, { info, work, scan = null, given = null }) {
   return { cuts, source };
 }
 
+// How much of a film its stills are taken from: `end`, where its picture
+// ends when that is more than a frame before the film's end (its sound runs
+// on), else the film's length, and `last`, the start of its picture's last
+// frame, the latest moment a still can be taken at. A still asked for past
+// the picture found no frame: ffmpeg 4.4 wrote nothing and ended well, and
+// newer builds failed.
+function stillSpan(info) {
+  const frame = 1 / (info.fps || 25);
+  const picture = info.picture || info.duration;
+  const end = picture < info.duration - frame ? picture : info.duration;
+  return { end, last: Math.max(0, Math.min(end, picture) - frame) };
+}
+
 // The shots between the cuts: [{ index, start, seconds, label }].
 const shotsOf = (cuts, duration) => cuts.map((c, i) => ({ index: c.index, start: c.at, seconds: (i + 1 < cuts.length ? cuts[i + 1].at : duration) - c.at, label: c.label, hard: c.hard }));
 
 // A shot's settled moment: once its entrance has played.
 const settled = (shot) => shot.start + Math.min(shot.seconds * 0.55, 2.4);
 
-// Saves a frame at each moment: [{ at, name }] in, [{ file, at, label }] out.
-async function grabFrames(film, moments, dir, { duration, ext = "jpg" }) {
+// Saves a frame at each moment, none past `last` (stillSpan): [{ at, name }]
+// in, [{ file, at, label }] out.
+async function grabFrames(film, moments, dir, { last, ext = "jpg" }) {
   const stills = [];
   for (const m of moments) {
-    const at = Math.max(0, Math.min(duration - 0.05, m.at));
+    const at = Math.max(0, Math.min(last, m.at));
     const file = path.join(dir, `${m.name}.${ext}`);
-    await writePicture(["-ss", at.toFixed(3), ...input(film), "-frames:v", "1", "-q:v", "3"], file, "saving a still");
+    await writePicture(["-ss", at.toFixed(3), ...input(film), "-frames:v", "1", "-q:v", "3"], file, "saving a still", { none: `${film} has no picture at ${at.toFixed(2)} s` });
     stills.push({ file, at: +at.toFixed(2), label: m.label || "" });
   }
   return stills;
@@ -236,16 +250,17 @@ async function saveFrames(file, { out = null } = {}) {
   const dir = path.resolve(out || path.join(path.dirname(film), "frames"));
   return within(dir, async (run) => {
     const { cuts } = await findCuts(film, { info, work: run.part });
+    const span = stillSpan(info);
     const moments = [];
     if (cuts.length > 1) {
-      for (const s of shotsOf(cuts, info.duration)) {
+      for (const s of shotsOf(cuts, span.end)) {
         moments.push({ at: settled(s), name: `clip-${s.index}-a`, label: s.label });
         moments.push({ at: s.start + s.seconds - 0.3, name: `clip-${s.index}-b`, label: s.label });
       }
     } else {
-      for (let i = 0; i < 12; i++) moments.push({ at: ((i + 0.5) * info.duration) / 12, name: `still-${i + 1}` });
+      for (let i = 0; i < 12; i++) moments.push({ at: ((i + 0.5) * span.end) / 12, name: `still-${i + 1}` });
     }
-    const stills = await grabFrames(film, moments, run.part, { duration: info.duration });
+    const stills = await grabFrames(film, moments, run.part, { last: span.last });
     for (const s of stills) run.out(path.basename(s.file));
     stills.forEach((s, i) => (s.number = cuts.length > 1 ? `${Math.floor(i / 2) + 1}${i % 2 ? "B" : "A"}` : `${i + 1}`));
     await contactSheet(stills, run.out("sheet.jpg"), { title: `${path.basename(film)}  ${info.duration.toFixed(2)} S  ${info.width}X${info.height}` });
@@ -255,4 +270,4 @@ async function saveFrames(file, { out = null } = {}) {
   });
 }
 
-module.exports = { saveFrames, scanVideo, detectCuts, findCuts, givenCuts, shotsOf, settled, grabFrames, contactSheet, readTimeline, joinStretches, filterPath };
+module.exports = { saveFrames, scanVideo, detectCuts, findCuts, givenCuts, stillSpan, shotsOf, settled, grabFrames, contactSheet, readTimeline, joinStretches, filterPath };

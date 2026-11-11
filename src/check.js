@@ -290,10 +290,12 @@ async function measure(film, { info, expect, seconds, target, allow, cues, cutsG
   const warned = checks.filter((c) => c.status === "warn");
   const pass = !failed.length;
 
-  // The pictures: a frame for each cut, and the sound over time.
-  const shots = frames.shotsOf(cuts, duration);
+  // The pictures: a frame for each cut, from the film's picture, and the
+  // sound over time.
+  const span = frames.stillSpan(info);
+  const shots = frames.shotsOf(cuts, span.end);
   const temp = shots.map((s) => ({ at: frames.settled(s), name: `.cut-${process.pid}-${s.index}`, label: s.label }));
-  const stills = await frames.grabFrames(film, temp, job.part, { duration });
+  const stills = await frames.grabFrames(film, temp, job.part, { last: span.last });
   stills.forEach((s, i) => {
     const c = cuts[i];
     s.number = String(c.index);

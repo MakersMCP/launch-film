@@ -63,9 +63,19 @@ function whole(file) {
 }
 
 // Writes one picture to `file` with ffmpeg (`args` up to the output), and
-// fails, after `what` it was doing, when it is not whole.
-async function writePicture(args, file, what, opts) {
-  const r = await mustRun([...args, ...picture(file)], what, opts);
+// fails, after `what` it was doing, when it is not whole. A picture ffmpeg
+// found no frame for, as at a time past the end of a video's picture, is
+// said as `none`: ffmpeg 4.4 then writes nothing and ends well, where newer
+// builds fail, and either was told of as a disk that is full or in ffmpeg's
+// own words. The file is cleared first, so that one left there is never
+// taken for the new one.
+async function writePicture(args, file, what, { none = null, ...opts } = {}) {
+  fs.rmSync(file, { force: true });
+  const r = await run([...args, ...picture(file)], opts);
+  const nothing = !fs.existsSync(file) && (r.code === 0 || /Nothing was written into output file|Output file is empty/.test(r.stderr));
+  if (nothing && none) throw new Error(`${what}: ${none}`);
+  if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
+  if (nothing) throw new Error(`${what}: ffmpeg wrote no picture`);
   if (!whole(file)) throw new Error(`${what}: the picture was cut short, most often because the disk is full`);
   return r;
 }
@@ -149,9 +159,13 @@ const rate = (r) => {
   return a && b ? a / b : Number(a) || 0;
 };
 
+// What ffprobe says of a file: its size, length, frame rate and sound, and
+// `picture`, where its picture ends, from the film's start. A video whose
+// sound runs on past its picture ends its picture before the film ends; the
+// film's length when ffprobe does not say.
 function probe(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-show_entries",
-    "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels",
+    "format=duration,start_time:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels,duration,start_time",
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
   const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
   if (stopped) throw stopped;
@@ -161,10 +175,14 @@ function probe(file) {
     const info = JSON.parse(r.stdout);
     const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
     const sound = (info.streams || []).find((s) => s.codec_type === "audio") || null;
+    const format = info.format || {};
+    const duration = Number(format.duration) || 0;
+    const shown = Number(video.duration) > 0 ? Number(video.duration) + (Number(video.start_time) || 0) - (Number(format.start_time) || 0) : 0;
     return {
       width: Number(video.width) || 0,
       height: Number(video.height) || 0,
-      duration: Number((info.format || {}).duration) || 0,
+      duration,
+      picture: shown > 0 ? shown : duration,
       audio: Boolean(sound),
       fps: rate(video.avg_frame_rate) || rate(video.r_frame_rate),
       baseFps: rate(video.r_frame_rate),
@@ -177,7 +195,7 @@ function probe(file) {
       failed,
     };
   } catch {
-    return { width: 0, height: 0, duration: 0, audio: false, fps: 0, baseFps: 0, codec: "", pixFmt: "", sar: "", audioCodec: "", sampleRate: 0, channels: 0, failed };
+    return { width: 0, height: 0, duration: 0, picture: 0, audio: false, fps: 0, baseFps: 0, codec: "", pixFmt: "", sar: "", audioCodec: "", sampleRate: 0, channels: 0, failed };
   }
 }
 

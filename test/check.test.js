@@ -416,3 +416,45 @@ test("a failure that names a picture the run made calls it the new one", { skip:
   assert.equal(r.stderr, `launch-film: the new ${path.join(dir, "frames", "clip-1-a.jpg")} could not be read as a picture\nlaunch-film: ${path.join(dir, "frames")} is as it was.\n`);
   assert.deepEqual(snap(dir), before);
 });
+
+// A film whose sound runs on past its picture: stills were taken at times
+// from the film's length, which the picture does not reach. ffmpeg 8 then
+// failed in its own words, and 4.4, which writes nothing and ends well, was
+// said to have cut the picture short on a full disk.
+async function longSound(dir) {
+  const file = path.join(dir, "long-sound.mp4");
+  await mustRun(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=4", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", file], "making a test film");
+  const info = probe(file);
+  assert.ok(Math.abs(info.picture - 4) < 0.05 && info.duration > 5.9, `picture ${info.picture} s of ${info.duration} s`);
+  return file;
+}
+
+test("frames and check of a film whose sound runs on past its picture take their stills from the picture", { skip }, async () => {
+  const dir = tmp();
+  const file = await longSound(dir);
+  const frames = cli(["frames", file]);
+  assert.equal(frames.status, 0, frames.stderr);
+  assert.equal(fs.readdirSync(path.join(dir, "frames")).filter((n) => /^still-\d+\.jpg$/.test(n)).length, 12);
+  const check = cli(["check", file]);
+  assert.equal(check.status, 0, check.stderr);
+  // So does a film whose timeline has its cuts past its picture.
+  fs.writeFileSync(path.join(dir, "long-sound.timeline.json"), JSON.stringify({ clips: [{ start: 0 }, { start: 2 }, { start: 3.98 }, { start: 5 }] }));
+  for (const command of ["frames", "check"]) {
+    const r = cli([command, file, "--out", path.join(dir, `${command}-cut`)]);
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+  }
+});
+
+test("a still asked for past a film's picture is said to be that, on ffmpeg 4.4 as on newer builds", { skip: noShell }, async () => {
+  const dir = tmp();
+  const file = await longSound(dir);
+  // 4.4 ends well and writes nothing where newer builds fail.
+  const old = standIn(tmp(), `out=$('${(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''")}' "$@" 2>&1); code=$?; case "$out" in *"Nothing was written"*) exit 0;; esac; printf '%s' "$out" >&2; exit $code`);
+  const script = `require(${JSON.stringify(path.join(root, "src", "frames.js"))}).grabFrames(${JSON.stringify(file)}, [{ at: 5.5, name: "x" }], ${JSON.stringify(dir)}, { last: 5.9 })
+    .then(() => console.log("made"), (err) => console.log(err.message));`;
+  for (const ffmpeg of [process.env.LAUNCH_FILM_FFMPEG || "ffmpeg", old]) {
+    const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+    assert.equal(r.stdout, `saving a still: ${file} has no picture at 5.50 s\n`, ffmpeg);
+  }
+  assert.ok(!fs.existsSync(path.join(dir, "x.jpg")));
+});
