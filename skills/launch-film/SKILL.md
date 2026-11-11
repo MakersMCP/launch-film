@@ -13,7 +13,7 @@ The tool is the `launch-film` npm package. It needs Node 22 or newer, Chrome or 
 npx -y launch-film@0.2.1 doctor
 ```
 
-If ffmpeg is missing or older than 4.4, tell the user how to install it (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer) and stop. doctor also starts Chrome once: if it finds no Chrome, or says that Chrome could not start its sandbox or did not start, tell the user what it says and stop. Each program's line says what is wrong with it. A command that cannot start ffmpeg, ffprobe or Chrome stops before any work with a message that starts `launch-film needs ffmpeg` (or ffprobe, or Chrome) and names the setting or the PATH entry that gave it, what is wrong with it and how to point to one that works: pass that on to the user and stop.
+If ffmpeg or ffprobe is missing, cannot be started or is older than 4.4, tell the user how to install ffmpeg, which comes with ffprobe (`brew install ffmpeg` on a Mac, `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer), and stop. doctor also starts Chrome once: if it finds no Chrome, or says that Chrome could not start its sandbox or did not start, tell the user what it says and stop. Each program's line says what is wrong with it. A command that cannot start ffmpeg, ffprobe or Chrome stops before any work with a message that starts `launch-film needs ffmpeg` (or ffprobe, or Chrome) and names the setting or the PATH entry that gave it, what is wrong with it and how to point to one that works. A message that starts `launch-film could not start` (the system was short of open files, processes or memory), `launch-film could not run its stand-ins` or `launch-film cannot put its stand-ins` (the temp folder cannot hold the programs that keep a page from starting one of the machine's) says what to do as well. Pass any of these on to the user and stop.
 
 ## 1. Get the brand and a first plan
 
@@ -31,7 +31,7 @@ Then read, in this order:
 - `film/<name>/words.json`: the page's title, description, headings and the line under each heading.
 - `film/<name>/film.json`: the plan.
 
-If the brand looks wrong (a cookie wall, a login page, no logo), tell the user what you got and ask for the logo file or the right page. A note that the page tried to open an address that is not a web address, such as mailto:, means the site asked the browser to start a program, and none was started. Do not go on with a wrong brand. If the site answered easybrandkit with a bot check, there is no kit: ask the user for the logo file and the main colors instead of guessing.
+If the brand looks wrong (a cookie wall, a login page, no logo), tell the user what you got and ask for the logo file or the right page. A note that the page tried to open an address that is not a web address, such as mailto:, means the site asked the browser to start a program: on Linux none was started, and on a Mac or Windows the note says a program may have opened, so tell the user. Do not go on with a wrong brand. If the site answered easybrandkit with a bot check, there is no kit: ask the user for the logo file and the main colors instead of guessing.
 
 If launch-film says easybrandkit could not be fetched, npx could not download it (no network, or a registry without it): tell the user they can install it with `npm install -g easybrandkit`, and use `--easybrandkit <path to easybrandkit's skills/easybrandkit/scripts/easybrandkit.js>` when they have a copy.
 
