@@ -207,12 +207,16 @@ async function checkMusic(loaded) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
     // In a folder of its own in the film's: the path set in film.json stays
     // good, whatever else musicfit is asked to do next to the film. The
-    // command is written to be run as it is, the folder quoted for the shell.
+    // command is written to be run as it is, from any folder: the track it
+    // refused and the folder by their whole paths, each quoted for the shell.
+    // A path no quoting holds in every shell (Windows) is named beside it.
     const folder = path.join(dir, "music");
-    const word = shellWord(folder);
+    const words = [[music.track, "<track>"], [folder, "<folder>"]].map(([file, name]) => ({ file, name, word: shellWord(file) }));
+    const unquoted = words.filter((w) => !w.word);
     return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ` +
       `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
-      `npx musicfit@latest <track> --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${word || `<folder>, <folder> being ${folder} quoted for your shell`}, ` +
+      `npx musicfit@latest ${words[0].word || words[0].name} --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${words[1].word || words[1].name}` +
+      `${unquoted.length ? `, ${unquoted.map((w) => `${w.name} being ${w.file}`).join(" and ")} quoted for your shell` : ""}, ` +
       `then set "music" in film.json to "music/fitted.wav"`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });

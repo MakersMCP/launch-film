@@ -263,7 +263,7 @@ test("a track with no sound, a silent one and one shorter than the film are refu
   assert.deepEqual((await checkMusic(load("brand/brand.json"))).problems, ['"music" "brand/brand.json" has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound']);
   const [short] = (await checkMusic(load(wav("short.wav", 1, 0.3)))).problems;
   assert.match(short, /^"music" "short\.wav" lasts 1\.00 s and the film 5\.00 s: give a track at least as long as the film\. musicfit makes one/);
-  assert.ok(short.endsWith(`npx musicfit@latest <track> --length 5 --hit 2.5 --fps 25 --out ${path.join(dir, "music")}, then set "music" in film.json to "music/fitted.wav"`), short);
+  assert.ok(short.endsWith(`npx musicfit@latest ${path.join(dir, "short.wav")} --length 5 --hit 2.5 --fps 25 --out ${path.join(dir, "music")}, then set "music" in film.json to "music/fitted.wav"`), short);
   assert.deepEqual((await checkMusic(load(wav("silent.wav", 6, 0)))).problems, ['"music" "silent.wav" is silent over the film\'s 5.00 s: give a track with sound in it, or false for no music']);
   // A track as long as the film, give or take half a frame, is taken.
   for (const seconds of [6, 4.99]) {
@@ -282,13 +282,14 @@ test("the musicfit command a short track's refusal gives runs in a shell as it i
   for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
   writeWav(path.join(dir, "short.wav"), bus);
   const [short] = (await checkMusic(load("short.wav"))).problems;
-  const command = /: (npx musicfit@latest <track> .*), then set "music" in film\.json to "music\/fitted\.wav"$/.exec(short);
+  const command = /: (npx musicfit@latest .*), then set "music" in film\.json to "music\/fitted\.wav"$/.exec(short);
   assert.ok(command, short);
-  // Each word as the shell hands it to musicfit, printed in its place.
+  // Each word as the shell hands it to musicfit, printed in its place: the
+  // track it refused, then the length, the hit and the folder.
   const here = tmp();
-  const r = spawnSync("sh", ["-c", command[1].replace("npx musicfit@latest <track>", "printf '%s\\n' track")], { cwd: here, encoding: "utf8" });
+  const r = spawnSync("sh", ["-c", command[1].replace("npx musicfit@latest", "printf '%s\\n'")], { cwd: here, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(r.stdout.split("\n").slice(0, -1), ["track", "--length", "5", "--hit", "2.5", "--fps", "25", "--out", path.join(dir, "music")]);
+  assert.deepEqual(r.stdout.split("\n").slice(0, -1), [path.join(dir, "short.wav"), "--length", "5", "--hit", "2.5", "--fps", "25", "--out", path.join(dir, "music")]);
   assert.deepEqual(fs.readdirSync(here), [], "nothing in the folder's name was run");
 });
 
