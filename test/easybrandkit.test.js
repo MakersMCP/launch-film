@@ -150,6 +150,8 @@ test("a temp folder too long for Chrome's socket is not given", { skip: process.
   const room = 107 - "/com.google.Chrome.XXXXXX/SingletonSocket".length;
   assert.equal(tempEnv("/".padEnd(room, "x")).TMPDIR, "/".padEnd(room, "x"));
   assert.equal(tempEnv("/".padEnd(room + 1, "x")).TMPDIR, process.env.TMPDIR);
+  // A socket's path is counted in bytes: é takes two.
+  assert.equal(tempEnv(`${"/".padEnd(room - 1, "x")}é`).TMPDIR, process.env.TMPDIR);
   assert.equal(tempEnv(null).TMPDIR, process.env.TMPDIR);
 });
 

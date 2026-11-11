@@ -11,7 +11,7 @@ const { spawn, spawnSync } = require("child_process");
 const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate, busPath } = require("../src/chrome");
 const { available, readPixels, writePng } = require("../src/ffmpeg");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-const { tmp, SAVES_PID, pidIn, alive } = require("./tmp");
+const { tmp, shortTmp, SAVES_PID, pidIn, alive } = require("./tmp");
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -431,6 +431,40 @@ test("no Chrome starts where the temp folder's path holds a colon, and a render 
   assert.equal(plan.stderr, said);
   assert.ok(!fs.existsSync(out));
   assert.deepEqual(fs.readdirSync(temp), []);
+});
+
+// Chrome makes a socket in a folder of its own in the temp folder, and a
+// socket's path holds 107 characters at most: from a temp folder of 67
+// characters or more, every Chrome stopped with SIGABRT as it started, said
+// nothing of why and left that folder behind.
+test("no Chrome starts where the temp folder's path is too long for Chrome's socket, and a render and doctor say so before any work", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, () => {
+  const base = shortTmp();
+  const temp = path.join(base, "x".repeat(66 - base.length));
+  fs.mkdirSync(temp);
+  assert.equal(temp.length, 67);
+  const said = `launch-film cannot start Chrome from the temp folder ${temp}, as the socket Chrome makes in a folder there would have a path longer than the 107 characters ` +
+    "a socket's path may have: set TMPDIR to a folder whose path has at most 66 characters";
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const cli = (TMPDIR, ...args) => spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR, LAUNCH_FILM_CHROME: chrome } });
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ look: "launch", clips: [{ kind: "scene", seconds: 3, scene: { type: "headline", title: "A title" } }] }));
+  const render = cli(temp, "render", path.join(dir, "film.json"));
+  assert.equal(render.status, 1, render.stderr);
+  assert.equal(render.stderr, `${said}\n`);
+  assert.deepEqual(fs.readdirSync(dir), ["film.json"]);
+  const doctor = cli(temp, "doctor");
+  assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr);
+  assert.match(doctor.stdout, new RegExp(`^chrome  ${escape(said)}$`, "m"));
+  assert.deepEqual(fs.readdirSync(temp), []);
+  // A character less, and the stand-ins that every Chrome starts with are
+  // made there.
+  const fits = path.join(base, "x".repeat(65 - base.length));
+  fs.mkdirSync(fits);
+  const r = spawnSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))}).standIns())`], { encoding: "utf8", env: { ...process.env, TMPDIR: fits } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^${escape(fits)}/launch-film-bin-\\d+-\\w+\n$`));
+  assert.deepEqual(fs.readdirSync(fits), []);
 });
 
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and

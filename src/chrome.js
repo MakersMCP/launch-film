@@ -23,7 +23,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
 const { getSystemErrorMap } = require("util");
-const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save } = require("./out");
+const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save, socketFits, SOCKET_ROOM } = require("./out");
 
 // A wait on Chrome that ran out, said with what to do: a machine too busy for
 // Chrome is what made it this slow in the runs seen. A render of more than
@@ -155,6 +155,14 @@ function openerFolder() {
   if (os.tmpdir().includes(path.delimiter)) {
     throw new Error(`launch-film cannot put its stand-ins for xdg-open, which keep a page from starting a program of the machine's, first on Chrome's PATH from the temp folder ${os.tmpdir()}, ` +
       `as PATH reads the "${path.delimiter}" in its path as the end of a folder: set TMPDIR to a folder whose path has no "${path.delimiter}"`);
+  }
+  // Chrome makes a socket in a folder of its own in the temp folder: where
+  // that socket's path would pass what a socket may have, every Chrome
+  // stopped with SIGABRT as it started, which said nothing of why, and left
+  // that folder behind.
+  if (!socketFits(os.tmpdir())) {
+    throw new Error(`launch-film cannot start Chrome from the temp folder ${os.tmpdir()}, as the socket Chrome makes in a folder there would have a path longer than the 107 characters ` +
+      `a socket's path may have: set TMPDIR to a folder whose path has at most ${SOCKET_ROOM} characters`);
   }
   const dir = tempDir("launch-film-bin-");
   for (const name of OPENERS) save(path.join(dir, name), name === "xdg-settings" ? "#!/bin/sh\nexit 0\n" : STAND_IN);

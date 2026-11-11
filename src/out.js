@@ -785,16 +785,22 @@ function tempDir(prefix, before = null) {
   return dir;
 }
 
+// Whether the socket Chrome makes in a temp folder, at
+// <folder>/com.google.Chrome.XXXXXX/SingletonSocket, fits under `folder`
+// on Linux: a socket's path holds 107 bytes at most, and Chrome given a
+// longer one stops as it starts. SOCKET_ROOM is the longest such folder.
+const SOCKET_PATH = "/com.google.Chrome.XXXXXX/SingletonSocket";
+const SOCKET_ROOM = 107 - SOCKET_PATH.length;
+const socketFits = (folder) => Buffer.byteLength(folder) <= SOCKET_ROOM;
+
 // The environment for a program whose own temp files should go with the
 // temp folder `folder` of this run's. Chrome makes folders of its own in
 // TMPDIR, and one stopped as it starts leaves some there that nothing ties
 // to it, as does a program that is stopped before it has tidied up. On Linux
-// only, and when Chrome's socket there still fits the 107 characters a
-// socket's path may have: on a Mac that path is tighter, and elsewhere there
-// is no TMPDIR to set.
-const SOCKET_PATH = "/com.google.Chrome.XXXXXX/SingletonSocket";
+// only, and when Chrome's socket there still fits (socketFits): on a Mac
+// that path is tighter, and elsewhere there is no TMPDIR to set.
 function tempEnv(folder) {
-  return folder && process.platform === "linux" && folder.length + SOCKET_PATH.length <= 107 ? { ...process.env, TMPDIR: folder } : process.env;
+  return folder && process.platform === "linux" && socketFits(folder) ? { ...process.env, TMPDIR: folder } : process.env;
 }
 
 // The temp folders of a kind that runs killed outright left: this user's
@@ -1230,4 +1236,4 @@ function noticed() {
 }
 
 module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
-  socketFolder, closeProfile, STALE, LOCK };
+  socketFolder, closeProfile, socketFits, STALE, LOCK, SOCKET_ROOM };

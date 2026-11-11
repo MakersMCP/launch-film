@@ -5,6 +5,11 @@
 // found it. Each process a test starts is ended when the file's tests have
 // run, whatever became of the test, so a run of the tests leaves no process
 // running.
+//
+// The tests need a TMPDIR whose path has at most 32 characters. Many give
+// the program they run a folder of tmp() as its temp folder, and the Chrome
+// it starts makes its socket in a folder there, whose whole path a socket's
+// 107 characters must hold (out.js, socketFits).
 const { after } = require("node:test");
 const fs = require("fs");
 const os = require("os");
