@@ -142,14 +142,46 @@ function musicOf(value, dir, problems) {
 // nothing is expanded or run. On Windows in double quotes, as cmd.exe takes no
 // single quotes, with / for every \, which Node takes too, since Git Bash
 // reads \\ there as one \. Inside double quotes cmd.exe, PowerShell and Git
-// Bash still expand %, $, ` and !, so a path that holds one gets null.
+// Bash still expand %, $, ` and !, so a path that holds one gets null. So
+// does one with a line break or another control character in it, which
+// would break the line the command is printed on.
 function shellWord(file, platform = process.platform) {
+  if (CONTROL.test(file)) return null;
   if (platform === "win32") {
     const name = String(file).replace(/\\/g, "/");
     if (/^[\w.:/-]+$/.test(name)) return name;
     return /[%$`!"]/.test(name) ? null : `"${name}"`;
   }
   return /^[\w@%+=:,./-]+$/.test(file) ? file : `'${String(file).replace(/'/g, "'\\''")}'`;
+}
+
+// A name as a message shows it, on one line: a line break or another
+// control character in it is written escaped. A name a film.json or a
+// cues.json gives can hold anything.
+const CONTROL = /[\p{Cc}\u2028\u2029]/u;
+const oneLine = (name) => String(name).replace(new RegExp(CONTROL.source, "gu"), (c) => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+// The musicfit command that fits a track to the film, `seconds` long with
+// its hit at `hit`, into `folder`, as the refusal of a short track gives it:
+// `from` is the track to fit, by its path, or null when it was not found,
+// and `name` the name of that track, when known. Each path is one word the
+// shell takes as it is (shellWord). In the place of a path that was not
+// found, or that no quoting holds, goes a word in angle brackets, quoted
+// the same way, so a shell that runs the command reads no quote, ; or $( )
+// in it, and no < or > as a file to read or write; what to put there is said
+// after the command. A name no quoting holds either goes in the sentence
+// alone, after the plain word <track>. A name is shown on one line, and cut
+// in the middle when it is long.
+function musicfitCommand({ from, name = "", folder, seconds, hit }, platform = process.platform) {
+  const shown = name ? confine.said(oneLine(name)) : "";
+  const stand = shellWord(`<${shown || "track"}>`, platform) ? `<${shown || "track"}>` : "<track>";
+  const words = [[from, stand, shown || "the track it was made from"], [folder, "<folder>"]].map(([file, word, of]) => {
+    const quoted = file && shellWord(file, platform);
+    if (quoted) return { text: quoted };
+    return { text: shellWord(word, platform), said: file ? `${word} being ${oneLine(file)} quoted for your shell` : `${word} being the path of ${of}` };
+  });
+  const said = words.filter((w) => w.said).map((w) => w.said);
+  return `npx musicfit@latest ${words[0].text} --length ${+seconds.toFixed(3)} --hit ${+hit.toFixed(3)} --fps ${FPS} --out ${words[1].text}${said.length ? `, ${said.join(" and ")}` : ""}`;
 }
 
 // Where a link that leads nowhere ends: the first path along it that is not
@@ -258,29 +290,30 @@ async function checkMusic(loaded) {
     const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
     // In a folder of its own in the film's: the path set in film.json stays
     // good, whatever else musicfit is asked to do next to the film. The
-    // command is written to be run as it is, from any folder: the track and
-    // the folder by their whole paths, each quoted for the shell. A path no
-    // quoting holds in every shell (Windows) is named beside it, and so is a
-    // track to give in place of a word in angle brackets.
+    // command is written to be run as it is, from any folder
+    // (musicfitCommand).
     const folder = path.join(dir, "music");
     const fit = earlierFit(music.track, folder, dir);
-    const from = fit ? fit.track : music.track;
-    const words = [[from, fit ? `<${fit.name || "track"}>` : "<track>"], [folder, "<folder>"]].map(([file, name]) => ({ file, name, word: file && shellWord(file) }));
-    const said = words.filter((w) => !w.word).map((w) => (w.file ? `${w.name} being ${w.file} quoted for your shell` : `${w.name} being the path of ${fit.name || "the track it was made from"}`));
-    // A word in angle brackets goes in quotes, so a shell that runs the
-    // command as it is reads no < or > in it as a file to read or write.
-    const inert = (name) => (process.platform === "win32" ? `"${name}"` : `'${name}'`);
     // An earlier fit is not fitted again: musicfit refuses a track it would
     // replace, and a fit's faded end would play twice.
-    const again = !fit ? "" : fit.name ? `That track is musicfit's earlier fit of ${fit.name}, so fit ${fit.name} again: ` : "That track is an earlier fit, so fit the track it was made from again: ";
+    const was = fit && fit.name ? confine.said(oneLine(fit.name)) : "";
+    const again = !fit ? "" : was ? `That track is musicfit's earlier fit of ${was}, so fit ${was} again: ` : "That track is an earlier fit, so fit the track it was made from again: ";
+    const command = musicfitCommand({ from: fit ? fit.track : music.track, name: fit ? fit.name : "", folder, seconds: total, hit: close });
     return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ${again}` +
-      `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ` +
-      `npx musicfit@latest ${words[0].word || inert(words[0].name)} --length ${+total.toFixed(3)} --hit ${+close.toFixed(3)} --fps ${FPS} --out ${words[1].word || inert(words[1].name)}` +
-      `${said.length ? `, ${said.join(" and ")}` : ""}, then set "music" in film.json to "music/fitted.wav"`] };
+      `musicfit makes one exactly that long with its hit on the beat you choose, such as the last clip at ${close.toFixed(2)} s: ${command}, then set "music" in film.json to "music/fitted.wav"`] };
   }
   const level = await loudnessOf(music.track, { seconds: total });
   if (!(level.integrated > -70)) return refuse(`${at} is silent over the film's ${total.toFixed(2)} s: give a track with sound in it, or false for no music`);
   return { track: { ...sound, ...level, name: music.name }, problems: [] };
+}
+
+// What the render's note says of the user's track (checkMusic's), in a film
+// `seconds` long. Its name is shown on one line, and cut in the middle when
+// it is long, as one made to run to thousands of characters is.
+function trackNote(track, seconds) {
+  const under = (audio.TRACK_LUFS - track.integrated) - 20 * Math.log10(audio.trackGain(track));
+  return `The music is ${confine.said(oneLine(track.name))}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, ` +
+    `from the film's first frame to its end at ${seconds.toFixed(2)} s, faded out over the last second.`;
 }
 
 // The colours a brand gives the looks: its accent, a second colour, and a
@@ -600,11 +633,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
     // The sound: the bed for these cuts, or the user's own track in its
     // place, and every clip's effects.
     const cues = film.sfx === false ? [] : rendered.flatMap((r) => r.cues);
-    if (track) {
-      const gain = audio.trackGain(track);
-      const under = (audio.TRACK_LUFS - track.integrated) - 20 * Math.log10(gain);
-      notes.push(`The music is ${track.name}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, from the film's first frame to its end at ${total.toFixed(2)} s, faded out over the last second.`);
-    }
+    if (track) notes.push(trackNote(track, total));
     const bed = film.music === false ? null : track ? audio.trackBus({ left: track.left, right: track.right, seconds: total, gain: audio.trackGain(track) })
       : audio.music({ look, seconds: total, cuts: clips.map((c) => c.start), seed: clips.length }).bus;
     const wav = path.join(work, "sound.wav");
@@ -622,4 +651,4 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
   }
 }
 
-module.exports = { loadFilm, checkMusic, shellWord, renderFilm, addSound, buildClip, markFor, brandColours, pagePicture, FPS, FADE };
+module.exports = { loadFilm, checkMusic, shellWord, musicfitCommand, trackNote, renderFilm, addSound, buildClip, markFor, brandColours, pagePicture, FPS, FADE };

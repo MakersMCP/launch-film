@@ -9,7 +9,7 @@ const { once } = require("events");
 const { spawnSync } = require("child_process");
 const { readBrand, pickLook } = require("../src/brand");
 const { planFilm, copyFrom, markEnd, findNumber, withoutName, fit } = require("../src/plan");
-const { loadFilm, checkMusic, shellWord } = require("../src/film");
+const { loadFilm, checkMusic, shellWord, musicfitCommand, trackNote } = require("../src/film");
 const { MOODS, Bus, SR, writeWav } = require("../src/audio");
 const { available } = require("../src/ffmpeg");
 const { tmp } = require("./tmp");
@@ -342,6 +342,61 @@ test("the musicfit command for a short earlier fit names the track it was fitted
   // A track of the user's in the music folder is fitted as it is.
   wav(path.join(music, "mine.wav"), 1);
   assert.match((await checkMusic(load("music/mine.wav"))).problems[0], new RegExp(`5\\.00 s: give a track at least as long as the film\\. musicfit makes one .*: npx musicfit@latest ${path.join(music, "mine.wav").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --length 5`));
+});
+
+// A track's name in cues.json is anyone's: an apostrophe in a song's title
+// broke the command a shell runs as it is, and a ; or a $( ) in it ran a
+// command of its own there. In place of a track not to be found, the
+// command has a word quoted as a path is, and nothing in it is run.
+test("the musicfit command for an earlier fit whose track is not found runs in a shell as it is, whatever that track is named", { skip: (process.platform === "win32" || !available()) && "a POSIX shell, and ffmpeg" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const music = path.join(dir, "music");
+  fs.mkdirSync(music);
+  const bus = new Bus(1);
+  for (let i = 0; i < bus.length; i++) bus.L[i] = bus.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+  writeWav(path.join(music, "fitted.wav"), bus);
+  // An npx that prints what it was given, a word a line, and runs nothing.
+  const bin = tmp();
+  fs.writeFileSync(path.join(bin, "npx"), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o755 });
+  for (const name of ["Don't Stop Me Now.mp3", "Don't Stop; touch PWNED; It's Over $(touch PWNED2) `touch PWNED3`.mp3", "two\nlines.mp3"]) {
+    fs.writeFileSync(path.join(music, "cues.json"), JSON.stringify({ musicfit: "0.2.1", track: name, file: "fitted.wav", fps: 25 }));
+    const [refusal] = (await checkMusic(load("music/fitted.wav"))).problems;
+    // A line break in the name is written escaped, so the refusal is one line.
+    assert.ok(!refusal.includes("\n"), refusal);
+    const shown = name.replace("\n", "\\n");
+    assert.ok(refusal.includes(`That track is musicfit's earlier fit of ${shown}, so fit ${shown} again: `), refusal);
+    const command = /: (npx musicfit@latest .* --out \S+), /.exec(refusal);
+    assert.ok(command, refusal);
+    const here = tmp();
+    const r = spawnSync("sh", ["-c", command[1]], { cwd: here, encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(r.stdout.split("\n").slice(0, -1), ["musicfit@latest", `<${shown}>`, "--length", "5", "--hit", "2.5", "--fps", "25", "--out", music], name);
+    assert.deepEqual(fs.readdirSync(here), [], `something in ${JSON.stringify(name)} was run`);
+  }
+});
+
+// On Windows no quoting holds a %, $, ` or ! in every shell, nor a ", so a
+// track's name with one goes after the command alone, behind a plain word.
+test("on Windows a track's name that no quoting holds is named after the command, behind a plain <track>", () => {
+  const folder = "C:\\Users\\emin\\films\\music";
+  assert.equal(musicfitCommand({ from: null, name: "Don't Stop.mp3", folder, seconds: 5, hit: 2.5 }, "win32"),
+    "npx musicfit@latest \"<Don't Stop.mp3>\" --length 5 --hit 2.5 --fps 25 --out C:/Users/emin/films/music, <Don't Stop.mp3> being the path of Don't Stop.mp3");
+  for (const name of ["100% mix.mp3", "$(x).mp3", "say \"hi\".mp3", "wow!.mp3", "a `b`.mp3"]) {
+    assert.equal(musicfitCommand({ from: null, name, folder, seconds: 5, hit: 2.5 }, "win32"),
+      `npx musicfit@latest "<track>" --length 5 --hit 2.5 --fps 25 --out C:/Users/emin/films/music, <track> being the path of ${name}`, name);
+  }
+  // A path with a line break in it is named after the command too, escaped.
+  assert.equal(musicfitCommand({ from: "/films/two\nlines.wav", folder: "/films/music", seconds: 5, hit: 2.5 }, "linux"),
+    "npx musicfit@latest '<track>' --length 5 --hit 2.5 --fps 25 --out /films/music, <track> being /films/two\\nlines.wav quoted for your shell");
+});
+
+// A film.json's music is anyone's where others give launch-film their
+// film.json: a name of thousands of characters ran on in the render's note.
+test("the render's note shows the track's name on one line, cut in the middle when it is long", () => {
+  assert.equal(trackNote({ name: "music/a\nb.wav", integrated: -14, peak: -3 }, 5), "The music is music/a\\nb.wav, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.");
+  const long = `/${"./".repeat(2100)}x.wav`;
+  const note = trackNote({ name: long, integrated: -14, peak: -3 }, 5);
+  assert.equal(note, `The music is ${long.slice(0, 50)}...${long.slice(-40)}, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.`);
 });
 
 test("a track the user may not read is refused for that, not as a file with no sound", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not read, and ffmpeg" }, async () => {
