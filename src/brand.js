@@ -216,7 +216,7 @@ function readBrand(file) {
     }
     const abs = path.resolve(dir, rel);
     if (!fs.existsSync(abs)) {
-      notes.push(`${rel} is listed in brand.json but missing`);
+      notes.push(`${confine.said(rel)} is listed in brand.json but missing`);
       return null;
     }
     return abs;

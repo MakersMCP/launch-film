@@ -242,6 +242,56 @@ test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file 
   }
 });
 
+// A name film.json or brand.json gives can hold a line break, after which
+// the rest of a message read as a line of launch-film's own, and can run to
+// thousands of characters, which a message printed whole.
+test("every refusal of a name film.json or brand.json gives shows it on one line, cut in the middle when it is long", { skip: process.platform === "win32" && "links need rights on Windows" }, async () => {
+  const { dir, load } = filmWithMusic();
+  const lines = (problems) => {
+    for (const problem of problems) {
+      assert.doesNotMatch(problem, /[\p{Cc}\u2028\u2029]/u, problem);
+      assert.ok(problem.length < 500, `${problem.length} characters: ${problem.slice(0, 200)}`);
+    }
+    return problems;
+  };
+  const forged = "a\nlaunch-film: Rendered 30.0 s: film.mp4";
+  const long = `songs/${forged}/${"./".repeat(2000)}a.wav`;
+  // A track that is not there, by a short name and by a long one.
+  const [short] = lines((await checkMusic(load(`songs/${forged}.wav`))).problems);
+  assert.equal(short, `"music" "songs/a\\nlaunch-film: Rendered 30.0 s: film.mp4.wav" is not a file. It was looked for at ${path.join(dir, "songs", "a\\nlaunch-film: Rendered 30.0 s: film.mp4.wav")}, ` +
+    "as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)");
+  const [cut] = lines((await checkMusic(load(long))).problems);
+  assert.ok(cut.startsWith(`"music" "${`songs/a\\nlaunch-film: Rendered 30.0 s: film.mp4/${"./".repeat(20)}`.slice(0, 50)}...${`${"./".repeat(2000)}a.wav`.slice(-40)}" is not a file. `), cut);
+  // A link to a track that is not there.
+  fs.symlinkSync(`gone\n${"x".repeat(200)}.wav`, path.join(dir, "link.wav"));
+  lines((await checkMusic(load("link.wav"))).problems);
+  // A clip's picture and the brand that are not there.
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: `brand/${forged}/${"./".repeat(2000)}brand.json`, look: "launch",
+    clips: [{ kind: "screen", seconds: 2.5, image: `brand/${forged}.png` }, { kind: "logo", seconds: 2.5, logo: long }] }));
+  const problems = lines(loadFilm(path.join(dir, "film.json")).problems);
+  assert.equal(problems.length, 3, problems.join(" | "));
+  assert.ok(problems[0].startsWith("the brand could not be read from brand/a\\nlaunch-film: Rendered 30.0 s: film.mp4/./..."), problems[0]);
+  assert.ok(problems[0].endsWith(": no such file or directory (ENOENT)"), problems[0]);
+  assert.equal(problems[1], 'clips[0].image "brand/a\\nlaunch-film: Rendered 30.0 s: film.mp4.png" is not a file');
+  // With LAUNCH_FILM_CONFINE set: a track and a kit's file outside, and a
+  // track inside film.json's folder that is not there.
+  const saved = process.env.LAUNCH_FILM_CONFINE;
+  process.env.LAUNCH_FILM_CONFINE = "1";
+  try {
+    lines((await checkMusic(load(`../${forged}.wav`))).problems);
+    const [inside] = lines((await checkMusic(load(`${"./".repeat(2100)}missing.wav`))).problems);
+    assert.match(inside, /^"music" "(\.\/){25}\.\.\.\/(\.\/){14}missing\.wav" is not a file\. It was looked for at /);
+    const kit = path.join(dir, "brand", "brand.json");
+    const raw = JSON.parse(fs.readFileSync(kit, "utf8"));
+    raw.logos[0].file = `../${forged}/${"./".repeat(2000)}logo.png`;
+    fs.writeFileSync(kit, JSON.stringify(raw));
+    assert.throws(() => readBrand(kit), (err) => lines([err.message]).length === 1);
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+    else process.env.LAUNCH_FILM_CONFINE = saved;
+  }
+});
+
 test("a path goes into a command line as one word the shell takes as it is", () => {
   assert.equal(shellWord("/films/acme-notes/music", "linux"), "/films/acme-notes/music");
   assert.equal(shellWord("/films/Emin's films `touch PWNED` $HOME/music", "darwin"), "'/films/Emin'\\''s films `touch PWNED` $HOME/music'");

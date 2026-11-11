@@ -72,7 +72,8 @@ function loadFilm(file) {
     try {
       brand = readBrand(path.resolve(dir, film.brand));
     } catch (err) {
-      problems.push(`the brand could not be read from ${film.brand}: ${err.message}`);
+      // A file error names the file, which film.json named: it is said once.
+      problems.push(`the brand could not be read from ${confine.said(film.brand)}: ${confine.oneLine(reason(err))}`);
     }
   }
   const mood = (knownLook && audio.MOODS[film.look]) || audio.MOODS.launch;
@@ -94,7 +95,7 @@ function loadFilm(file) {
         return null;
       }
       const abs = rel ? path.resolve(dir, rel) : null;
-      if (!abs || !fs.existsSync(abs)) problems.push(`${at}.${what} "${rel || ""}" is not a file`);
+      if (!abs || !fs.existsSync(abs)) problems.push(`${at}.${what} "${confine.said(rel || "")}" is not a file`);
       return abs;
     };
     const clip = { ...c, index: i, seconds };
@@ -160,11 +161,8 @@ function shellWord(file, platform = process.platform) {
   return /^[\w@%+=:,./-]+$/.test(file) ? file : `'${String(file).replace(/'/g, "'\\''")}'`;
 }
 
-// A name as a message shows it, on one line: a line break or another
-// control character in it is written escaped. A name a film.json or a
-// cues.json gives can hold anything.
-const CONTROL = /[\p{Cc}\u2028\u2029]/u;
-const oneLine = (name) => String(name).replace(new RegExp(CONTROL.source, "gu"), (c) => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+// A name as a message shows it, on one line (confine.js).
+const { CONTROL, oneLine } = confine;
 
 // The musicfit command that fits a track to the film, `seconds` long with
 // its hit at `hit`, into `folder`, as the refusal of a short track gives it:
@@ -178,7 +176,7 @@ const oneLine = (name) => String(name).replace(new RegExp(CONTROL.source, "gu"),
 // alone, after the plain word <track>. A name is shown on one line, and cut
 // in the middle when it is long.
 function musicfitCommand({ from, name = "", folder, seconds, hit }, platform = process.platform) {
-  const shown = name ? confine.said(oneLine(name)) : "";
+  const shown = name ? confine.said(name) : "";
   const stand = shellWord(`<${shown || "track"}>`, platform) ? `<${shown || "track"}>` : "<track>";
   const words = [[from, stand, shown || "the track it was made from"], [folder, "<folder>"]].map(([file, word, of]) => {
     const quoted = file && shellWord(file, platform);
@@ -251,11 +249,12 @@ function earlierFit(track, folder, dir) {
 async function checkMusic(loaded) {
   const { music, seconds: total, clips, dir } = loaded;
   if (!music || !music.track) return { track: null, problems: [] };
-  const at = `"music" ${JSON.stringify(music.name)}`;
+  // The name on one line, and cut when long, in every refusal (confine.js).
+  const at = `"music" "${confine.said(music.name)}"`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
   const outside = confine.outside(dir, music.name, "film.json");
-  if (outside) return refuse(`"music" "${confine.said(music.name)}" ${outside}, and LAUNCH_FILM_CONFINE allows only files in it`);
+  if (outside) return refuse(`${at} ${outside}, and LAUNCH_FILM_CONFINE allows only files in it`);
   const instead = "give the path of a track (true plays the look's own music, false none)";
   let kind = null;
   let missed = null;
@@ -274,12 +273,12 @@ async function checkMusic(loaded) {
     // A link is there, though what it leads to is not: it is told of as one.
     if (missed.code === "ELOOP") return refuse(`${at} is a link that never reaches a file, through too many links one after another: ${instead}`);
     const end = linkEnd(music.track);
-    if (end) return refuse(`${at} is a link to ${end}, which is not there: ${instead}`);
+    if (end) return refuse(`${at} is a link to ${confine.saidPath(end)}, which is not there: ${instead}`);
     // A relative path is read from film.json's folder, which may not be
     // where the user stood when they wrote it: the message says where it
     // looked.
     return refuse(path.isAbsolute(music.name) ? `${at} is not a file: ${instead}`
-      : `${at} is not a file. It was looked for at ${music.track}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)`);
+      : `${at} is not a file. It was looked for at ${confine.saidPath(music.track)}, as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)`);
   }
   // A good file the user may not read would read as a file with no sound.
   try {
@@ -304,7 +303,7 @@ async function checkMusic(loaded) {
     const fit = earlierFit(music.track, folder, dir);
     // An earlier fit is not fitted again: musicfit refuses a track it would
     // replace, and a fit's faded end would play twice.
-    const was = fit && fit.name ? confine.said(oneLine(fit.name)) : "";
+    const was = fit && fit.name ? confine.said(fit.name) : "";
     const again = !fit ? "" : was ? `That track is musicfit's earlier fit of ${was}, so fit ${was} again: ` : "That track is an earlier fit, so fit the track it was made from again: ";
     const command = musicfitCommand({ from: fit ? fit.track : music.track, name: fit ? fit.name : "", folder, seconds: total, hit: close });
     return { track: null, problems: [`${at} lasts ${sound.seconds.toFixed(2)} s and the film ${total.toFixed(2)} s: give a track at least as long as the film. ${again}` +
@@ -320,7 +319,7 @@ async function checkMusic(loaded) {
 // it is long, as one made to run to thousands of characters is.
 function trackNote(track, seconds) {
   const under = (audio.TRACK_LUFS - track.integrated) - 20 * Math.log10(audio.trackGain(track));
-  return `The music is ${confine.said(oneLine(track.name))}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, ` +
+  return `The music is ${confine.said(track.name)}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, ` +
     `from the film's first frame to its end at ${seconds.toFixed(2)} s, faded out over the last second.`;
 }
 
@@ -403,7 +402,7 @@ async function buildClip(clip, ctx) {
       side: clip.side || "center", phone: info.height > info.width, fonts });
     // With a quarter to spare, as the phone's screen below.
     const capture = await pagePicture(clip.imageFile, { maxW: page.drawnW * 1.25, out: path.join(work, `capture-${clip.index}${ext}`), what: `clip ${clip.index + 1}`,
-      named: `clips[${clip.index}].image ${JSON.stringify(String(clip.image))}` });
+      named: `clips[${clip.index}].image "${confine.said(clip.image)}"` });
     const files = { [`capture${ext}`]: capture, ...(hasSoft ? { "soft.jpg": fs.readFileSync(soft) } : {}) };
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
@@ -416,7 +415,7 @@ async function buildClip(clip, ctx) {
     const files = {};
     for (const [k, im] of images.entries()) {
       files[im.file] = await pagePicture(im.src, { maxW: Infinity, maxH: page.drawnH * 1.25, out: path.join(work, `shot-${clip.index}-${k}${path.extname(im.file)}`), what: `clip ${clip.index + 1}`,
-        named: `clips[${clip.index}].images[${k}] ${JSON.stringify(String(clip.images[k]))}` });
+        named: `clips[${clip.index}].images[${k}] "${confine.said(clip.images[k])}"` });
     }
     return { html: page.html, files, cues: page.cues, W: page.W, H: page.H };
   }
@@ -457,11 +456,11 @@ async function markFor({ logoFile = null, iconFile = null, brand = null, out, po
   for (const t of tries) {
     try {
       const mark = t.icon ? await prepareIcon(t.icon, out) : await prepareLogo(t.logo, out, { portrait });
-      if (refused.length) notes.push(`${what} uses ${path.basename(t.icon || t.logo)}: ${refused.join("; ")}.`);
+      if (refused.length) notes.push(`${what} uses ${confine.said(path.basename(t.icon || t.logo))}: ${refused.join("; ")}.`);
       return mark;
     } catch (err) {
       if (!err.refused) throw err;
-      refused.push(`${path.basename(t.icon || t.logo)} was passed over (${err.message})`);
+      refused.push(`${confine.said(path.basename(t.icon || t.logo))} was passed over (${err.message})`);
     }
   }
   return { file: null, refused };

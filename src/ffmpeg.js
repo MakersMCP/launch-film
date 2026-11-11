@@ -22,6 +22,9 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { track } = require("./out");
 const { short } = require("./programs");
+// A file's name as a message says it: on one line, and cut when long, as a
+// film.json or brand.json can name anything (confine.js).
+const confine = require("./confine");
 
 const FFMPEG = process.env.LAUNCH_FILM_FFMPEG || "ffmpeg";
 const FFPROBE = process.env.LAUNCH_FILM_FFPROBE || "ffprobe";
@@ -87,7 +90,9 @@ async function writePicture(args, file, what, { none = null, ...opts } = {}) {
 // killed outright with no word was most often ended by the system running
 // out of memory.
 function why(r, { lines = 3, name = "ffmpeg" } = {}) {
-  const said = String(r.stderr || "").trim().split("\n").slice(-lines).join(" | ");
+  // A name in them can hold a control character of its own, as a carriage
+  // return that would write over the line: it is written escaped.
+  const said = confine.oneLine(String(r.stderr || "").trim().split("\n").slice(-lines).join(" | "));
   if (said) return `${name} failed: ${said}`;
   if (r.signal) return `${name} was stopped by ${r.signal}${r.signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`;
   return `${name} failed with exit code ${r.code}`;
@@ -181,7 +186,7 @@ function clock(text) {
 function lastPacket(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", ...input(file)],
     { encoding: "utf8", timeout: 60_000, maxBuffer: 64 << 20 });
-  const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
+  const stopped = stoppedSync(r, "ffprobe", `reading ${confine.saidPath(file)}`);
   if (stopped) throw stopped;
   if (short(r.error, "ffprobe")) throw new Error(short(r.error, "ffprobe"));
   let end = 0;
@@ -202,7 +207,7 @@ function probe(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-show_entries",
     "format=duration,start_time:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels,duration,start_time:stream_tags=DURATION",
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
-  const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
+  const stopped = stoppedSync(r, "ffprobe", `reading ${confine.saidPath(file)}`);
   if (stopped) throw stopped;
   if (short(r.error, "ffprobe")) throw new Error(short(r.error, "ffprobe"));
   // Why ffprobe could not read it, when that is not that it holds nothing.
@@ -251,9 +256,9 @@ function probe(file) {
 function readSound(file, { seconds }) {
   const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-vn", "-t", seconds.toFixed(3), "-ac", "2", "-ar", "48000", "-f", "f32le", "-"],
     { maxBuffer: Math.ceil(seconds * 48000) * 8 + (1 << 20), timeout: 120_000 });
-  const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
+  const stopped = stoppedSync(r, "ffmpeg", `reading ${confine.saidPath(file)}`);
   if (stopped) throw stopped;
-  if (r.error) throw new Error(short(r.error, "ffmpeg") || `reading ${file}: ${r.error.message}`);
+  if (r.error) throw new Error(short(r.error, "ffmpeg") || `reading ${confine.saidPath(file)}: ${r.error.message}`);
   if (r.status !== 0) {
     const failed = unread(r, "ffmpeg");
     return failed ? { failed } : null;
@@ -276,7 +281,7 @@ function readSound(file, { seconds }) {
 async function loudnessOf(file, { seconds }) {
   const r = await run([...input(file), "-vn", "-t", seconds.toFixed(3), "-af", "ebur128=peak=sample:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
   if (r.short) throw Object.assign(new Error(r.short), { short: true });
-  if (r.code !== 0) throw new Error(`measuring ${file}: ${why(r, { lines: 2 })}`);
+  if (r.code !== 0) throw new Error(`measuring ${confine.saidPath(file)}: ${why(r, { lines: 2 })}`);
   const num = (re) => {
     const m = re.exec(r.stderr);
     return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : null;
@@ -332,7 +337,7 @@ function coverPng(from, output, W, H) {
 // its words.
 function pictureSize(file) {
   const info = probe(file);
-  if (!info.width || !info.height) throw new Error(`${file} could not be read as a picture${info.failed ? ` (${info.failed})` : ""}`);
+  if (!info.width || !info.height) throw new Error(`${confine.saidPath(file)} could not be read as a picture${info.failed ? ` (${info.failed})` : ""}`);
   return info;
 }
 
@@ -345,11 +350,11 @@ function readPixels(file, max = 0) {
   const height = Math.max(1, Math.round(info.height * k));
   const r = spawnSync(FFMPEG, ["-v", "error", ...input(file), "-frames:v", "1", "-vf", `scale=${width}:${height}:flags=area,format=rgba`, "-f", "rawvideo", "-"],
     { timeout: 30_000, maxBuffer: width * height * 4 + 1024 });
-  const stopped = stoppedSync(r, "ffmpeg", `reading ${file}`);
+  const stopped = stoppedSync(r, "ffmpeg", `reading ${confine.saidPath(file)}`);
   if (stopped) throw stopped;
   if (short(r.error, "ffmpeg")) throw new Error(short(r.error, "ffmpeg"));
   const failed = r.status !== 0 ? unread(r, "ffmpeg") : null;
-  if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${file} could not be read as a picture${failed ? ` (${failed})` : ""}`);
+  if (r.status !== 0 || !r.stdout || r.stdout.length !== width * height * 4) throw new Error(`${confine.saidPath(file)} could not be read as a picture${failed ? ` (${failed})` : ""}`);
   return { data: r.stdout, width, height, scale: k, sourceWidth: info.width, sourceHeight: info.height };
 }
 

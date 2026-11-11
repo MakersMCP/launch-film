@@ -45,11 +45,24 @@ function outside(folder, name, of) {
   return inside(base, real) ? null : `leads out of ${of}'s folder through a link`;
 }
 
-// A name as it is said in a message: one that runs to thousands of
-// characters, as one made to slip past a check, is cut in the middle.
-const said = (name) => {
-  const text = String(name);
-  return text.length > 100 ? `${text.slice(0, 50)}...${text.slice(-40)}` : text;
+// A name as a message shows it, on one line: a line break or another
+// control character in it is written escaped, as a line of its own could
+// pass for one of launch-film's. A film.json, a brand.json or a cues.json can
+// name anything.
+const CONTROL = /[\p{Cc}\u2028\u2029]/u;
+const oneLine = (name) => String(name).replace(new RegExp(CONTROL.source, "gu"), (c) => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+// A name as it is said in a message: on one line (oneLine), and cut in the
+// middle when it is longer than `room`, as one made to slip past a check,
+// which runs to thousands of characters, is.
+const said = (name, room = 100) => {
+  const text = oneLine(name);
+  const head = Math.round(room / 2);
+  return text.length > room ? `${text.slice(0, head)}...${text.slice(-(room - head - 10))}` : text;
 };
 
-module.exports = { confined, outside, said };
+// A path made from such a name, as a message says it: cut only past 300
+// characters, so that a folder's own long path is said whole.
+const saidPath = (file) => said(file, 300);
+
+module.exports = { confined, outside, said, saidPath, oneLine, CONTROL };
