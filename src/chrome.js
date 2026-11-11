@@ -159,10 +159,11 @@ function openerFolder() {
   // Chrome makes a socket in a folder of its own in the temp folder: where
   // that socket's path would pass what a socket may have, every Chrome
   // stopped with SIGABRT as it started, which said nothing of why, and left
-  // that folder behind.
+  // that folder behind. A socket's path is counted in bytes, and a letter
+  // outside ASCII takes two or more, so the message counts in bytes too.
   if (!socketFits(os.tmpdir())) {
-    throw new Error(`launch-film cannot start Chrome from the temp folder ${os.tmpdir()}, as the socket Chrome makes in a folder there would have a path longer than the 107 characters ` +
-      `a socket's path may have: set TMPDIR to a folder whose path has at most ${SOCKET_ROOM} characters`);
+    throw new Error(`launch-film cannot start Chrome from the temp folder ${os.tmpdir()}, as the socket Chrome makes in a folder there would have a path longer than the 107 bytes ` +
+      `a socket's path may have: set TMPDIR to a folder whose path takes at most ${SOCKET_ROOM} bytes (this one takes ${Buffer.byteLength(os.tmpdir())}, and a letter outside ASCII takes two or more)`);
   }
   const dir = tempDir("launch-film-bin-");
   for (const name of OPENERS) save(path.join(dir, name), name === "xdg-settings" ? "#!/bin/sh\nexit 0\n" : STAND_IN);

@@ -445,16 +445,17 @@ test("no Chrome starts where the temp folder's path holds a colon, and a render 
 });
 
 // Chrome makes a socket in a folder of its own in the temp folder, and a
-// socket's path holds 107 characters at most: from a temp folder of 67
-// characters or more, every Chrome stopped with SIGABRT as it started, said
-// nothing of why and left that folder behind.
+// socket's path holds 107 bytes at most: from a temp folder of 67 bytes or
+// more, every Chrome stopped with SIGABRT as it started, said nothing of why
+// and left that folder behind. A letter outside ASCII takes two bytes or
+// more, so a path of fewer than 67 characters can be too long.
 test("no Chrome starts where the temp folder's path is too long for Chrome's socket, and a render and doctor say so before any work", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, () => {
   const base = shortTmp();
   const temp = path.join(base, "x".repeat(66 - base.length));
   fs.mkdirSync(temp);
   assert.equal(temp.length, 67);
-  const said = `launch-film cannot start Chrome from the temp folder ${temp}, as the socket Chrome makes in a folder there would have a path longer than the 107 characters ` +
-    "a socket's path may have: set TMPDIR to a folder whose path has at most 66 characters";
+  const said = `launch-film cannot start Chrome from the temp folder ${temp}, as the socket Chrome makes in a folder there would have a path longer than the 107 bytes ` +
+    "a socket's path may have: set TMPDIR to a folder whose path takes at most 66 bytes (this one takes 67, and a letter outside ASCII takes two or more)";
   const chrome = path.join(tmp(), "chrome");
   fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const cli = (TMPDIR, ...args) => spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), ...args], { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR, LAUNCH_FILM_CHROME: chrome } });
@@ -476,6 +477,17 @@ test("no Chrome starts where the temp folder's path is too long for Chrome's soc
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, new RegExp(`^${escape(fits)}/launch-film-bin-\\d+-\\w+\n$`));
   assert.deepEqual(fs.readdirSync(fits), []);
+  // 66 characters, some of them letters outside ASCII, are more than 66
+  // bytes, and the message says so.
+  const letters = path.join(base, "\u00e9".repeat(65 - base.length));
+  fs.mkdirSync(letters);
+  assert.equal(letters.length, 66);
+  const bytes = Buffer.byteLength(letters);
+  const refused = cli(letters, "render", path.join(dir, "film.json"));
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(refused.stderr, `launch-film cannot start Chrome from the temp folder ${letters}, as the socket Chrome makes in a folder there would have a path longer than the 107 bytes ` +
+    `a socket's path may have: set TMPDIR to a folder whose path takes at most 66 bytes (this one takes ${bytes}, and a letter outside ASCII takes two or more)\n`);
+  assert.deepEqual(fs.readdirSync(letters), []);
 });
 
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and
