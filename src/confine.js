@@ -7,7 +7,9 @@
 // only files in its own folder. A name that is absolute or climbs with ..
 // and lands outside the folder is refused, however long it is and whether
 // or not anything is there, and so is one in the folder that a link leads
-// out of it.
+// out of it. A file in the folder may not be a list of other files that
+// ffmpeg opens wherever they are, such as an HLS playlist (listOf): a name
+// says nothing of what such a list names.
 
 const fs = require("fs");
 const path = require("path");
@@ -45,6 +47,49 @@ function outside(folder, name, of) {
   return inside(base, real) ? null : `leads out of ${of}'s folder through a link`;
 }
 
+// The lists of other files that ffmpeg opens on its own, by the marks its
+// probes look for in a file's first bytes, read as latin1 so that a byte is
+// a character: ffmpeg reads at most PROBE bytes to tell a file's kind, and
+// its probes stop at the first NUL byte. A playlist named track.wav or
+// logo.png is read as one all the same.
+const LISTS = [
+  ["an HLS playlist", /^(?:\xEF\xBB\xBF)?\s*#EXTM3U/],
+  ["a DASH manifest", /<MPD/i],
+  ["an ffconcat list", /^(?:\xEF\xBB\xBF)?\s*ffconcat\s+version/i],
+  ["an IMF composition playlist", /<CompositionPlaylist/i],
+];
+const PROBE = 5_000_000;
+
+// With LAUNCH_FILM_CONFINE set, which of those lists the file `file` is
+// ("an HLS playlist"), or null: always null without it, and for what is
+// not a regular file, which is told of as what it is.
+function listOf(file) {
+  if (!confined()) return null;
+  let fd = null;
+  try {
+    if (!fs.statSync(file).isFile()) return null;
+    fd = fs.openSync(file, "r");
+    const chunk = Buffer.alloc(1 << 16);
+    const parts = [];
+    for (let at = 0; at < PROBE;) {
+      const n = fs.readSync(fd, chunk, 0, Math.min(chunk.length, PROBE - at), at);
+      if (n <= 0) break;
+      const end = chunk.subarray(0, n).indexOf(0);
+      parts.push(Buffer.from(chunk.subarray(0, end < 0 ? n : end)));
+      if (end >= 0) break;
+      at += n;
+    }
+    const text = Buffer.concat(parts).toString("latin1");
+    const found = LISTS.find(([, mark]) => mark.test(text));
+    return found ? found[0] : null;
+  } catch {
+    // One that cannot be read is told of when it is read.
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
 // A name as a message shows it, on one line: a line break or another
 // control character in it is written escaped, as a line of its own could
 // pass for one of launch-film's. A film.json, a brand.json or a cues.json can
@@ -65,4 +110,4 @@ const said = (name, room = 100) => {
 // characters, so that a folder's own long path is said whole.
 const saidPath = (file) => said(file, 300);
 
-module.exports = { confined, outside, said, saidPath, oneLine, CONTROL };
+module.exports = { confined, outside, listOf, said, saidPath, oneLine, CONTROL };

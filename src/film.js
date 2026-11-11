@@ -48,6 +48,9 @@ const TRIES = 6;
 // The most the gain moves the sound, in dB, either way.
 const GAIN_MAX = 30;
 const KINDS = new Set(["scene", "screen", "phone", "scroll", "shots", "logo"]);
+// Why a file that is a list of others for ffmpeg to open is refused, with
+// LAUNCH_FILM_CONFINE set (confine.js listOf).
+const LISTED = "whose files ffmpeg would open wherever they are, and LAUNCH_FILM_CONFINE allows only files in film.json's folder";
 
 // Reads and checks a film.json; returns { film, dir, brand, clips, problems }.
 function loadFilm(file) {
@@ -95,7 +98,9 @@ function loadFilm(file) {
         return null;
       }
       const abs = rel ? path.resolve(dir, rel) : null;
+      const list = abs && fs.existsSync(abs) ? confine.listOf(abs) : null;
       if (!abs || !fs.existsSync(abs)) problems.push(`${at}.${what} "${confine.said(rel || "")}" is not a file`);
+      else if (list) problems.push(`${at}.${what} "${confine.said(rel)}" is ${list}, ${LISTED}: give the picture itself`);
       return abs;
     };
     const clip = { ...c, index: i, seconds };
@@ -286,6 +291,8 @@ async function checkMusic(loaded) {
   } catch (err) {
     return refuse(`${at} cannot be read: ${reason(err)}. Make it readable, or give a copy of it you can read`);
   }
+  const list = confine.listOf(music.track);
+  if (list) return refuse(`${at} is ${list}, ${LISTED}: give the track itself`);
   // A second past the film's end, so a track as long as the film shows it.
   const sound = readSound(music.track, { seconds: total + 1 });
   if (!sound) return refuse(`${at} has no sound ffmpeg can read: give an audio file, such as a WAV, MP3, M4A or FLAC file, or a video with sound`);

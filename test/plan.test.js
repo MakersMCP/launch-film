@@ -292,6 +292,47 @@ test("every refusal of a name film.json or brand.json gives shows it on one line
   }
 });
 
+// A file in film.json's folder can be a list of other files that ffmpeg
+// opens wherever they are: ffmpeg 4.4.2 read an HLS playlist given as the
+// track, whose one part was a sound outside the folder, into the film.
+test("with LAUNCH_FILM_CONFINE set, a track or a picture that is a list of other files for ffmpeg to open is refused", async () => {
+  const { dir } = filmWithMusic();
+  const outside = path.join(tmp(), "other-job.wav");
+  fs.writeFileSync(outside, "");
+  fs.mkdirSync(path.join(dir, "music"));
+  fs.writeFileSync(path.join(dir, "music", "track.m3u8"), `#EXTM3U\n#EXT-X-TARGETDURATION:12\n#EXTINF:12,\n${outside}\n#EXT-X-ENDLIST\n`);
+  // A DASH manifest saved as a picture, found past its first 200 KB, an
+  // ffconcat list with a byte order mark, and an IMF composition.
+  fs.writeFileSync(path.join(dir, "brand", "screen.png"), `<?xml version="1.0"?>\n<!--${" ".repeat(200_000)}-->\n<MPD><BaseURL>${outside}</BaseURL></MPD>\n`);
+  fs.writeFileSync(path.join(dir, "brand", "mark.png"), `\ufeffffconcat version 1.0\nfile ${outside}\n`);
+  fs.writeFileSync(path.join(dir, "brand", "cpl.png"), `<?xml version="1.0"?>\n<CompositionPlaylist xmlns="http://www.smpte-ra.org/schemas/2067-3/2016"></CompositionPlaylist>\n`);
+  // A picture whose bytes hold such a mark only past a NUL byte is a picture.
+  fs.writeFileSync(path.join(dir, "brand", "past.png"), Buffer.concat([fs.readFileSync(path.join(fixture, "logo-header.png")), Buffer.from("\0#EXTM3U <MPD")]));
+  const file = path.join(dir, "film.json");
+  fs.writeFileSync(file, JSON.stringify({ brand: "brand/brand.json", look: "launch", music: "music/track.m3u8", clips: [
+    { kind: "screen", seconds: 2.5, image: "brand/screen.png" }, { kind: "shots", seconds: 2.5, images: ["brand/past.png"] },
+    { kind: "logo", seconds: 2.5, logo: "brand/mark.png" }] }));
+  const kit = path.join(dir, "brand", "brand.json");
+  const raw = JSON.parse(fs.readFileSync(kit, "utf8"));
+  raw.screenshots[0].file = "cpl.png";
+  fs.writeFileSync(kit, JSON.stringify(raw));
+  const saved = process.env.LAUNCH_FILM_CONFINE;
+  try {
+    delete process.env.LAUNCH_FILM_CONFINE;
+    assert.deepEqual(loadFilm(file).problems, []);
+    process.env.LAUNCH_FILM_CONFINE = "1";
+    const rule = "whose files ffmpeg would open wherever they are, and LAUNCH_FILM_CONFINE allows only files in film.json's folder";
+    const loaded = loadFilm(file);
+    assert.deepEqual(loaded.problems, ["the brand could not be read from brand/brand.json: brand.json names lists of other files where pictures go, whose files ffmpeg would open wherever they are, " +
+      'which LAUNCH_FILM_CONFINE does not allow: screenshots[0].file "cpl.png" is an IMF composition playlist',
+      `clips[0].image "brand/screen.png" is a DASH manifest, ${rule}: give the picture itself`, `clips[2].logo "brand/mark.png" is an ffconcat list, ${rule}: give the picture itself`]);
+    assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "music/track.m3u8" is an HLS playlist, ${rule}: give the track itself`]);
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+    else process.env.LAUNCH_FILM_CONFINE = saved;
+  }
+});
+
 test("a path goes into a command line as one word the shell takes as it is", () => {
   assert.equal(shellWord("/films/acme-notes/music", "linux"), "/films/acme-notes/music");
   assert.equal(shellWord("/films/Emin's films `touch PWNED` $HOME/music", "darwin"), "'/films/Emin'\\''s films `touch PWNED` $HOME/music'");

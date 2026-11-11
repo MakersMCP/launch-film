@@ -207,6 +207,7 @@ function readBrand(file) {
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
   const notes = [];
   const outside = [];
+  const lists = [];
   const fileOf = (rel, where) => {
     if (!rel || typeof rel !== "string") return null;
     const out = confine.outside(dir, rel, path.basename(file));
@@ -219,6 +220,8 @@ function readBrand(file) {
       notes.push(`${confine.said(rel)} is listed in brand.json but missing`);
       return null;
     }
+    const list = confine.listOf(abs);
+    if (list) lists.push(`${where} "${confine.said(rel)}" is ${list}`);
     return abs;
   };
   let host = "";
@@ -255,6 +258,7 @@ function readBrand(file) {
     assets: (Array.isArray(s.assets) ? s.assets : []).map((a, k) => ({ file: fileOf(a && a.file, `stores[${i}].assets[${k}].file`), kind: String((a && a.kind) || ""), width: Number(a && a.width) || 0, height: Number(a && a.height) || 0 })).filter((a) => a.file),
   }));
   if (outside.length) throw new Error(`${path.basename(file)} names files outside its folder, which LAUNCH_FILM_CONFINE does not allow: ${outside.join(", ")}`);
+  if (lists.length) throw new Error(`${path.basename(file)} names lists of other files where pictures go, whose files ffmpeg would open wherever they are, which LAUNCH_FILM_CONFINE does not allow: ${lists.join(", ")}`);
   const appStores = stores.filter((s) => /appstore|googleplay|play/i.test(s.type));
   const phoneScreens = appStores.flatMap((s) => s.assets.filter((a) => /screen/i.test(a.kind) && a.height > a.width));
   const appIcon = appStores.flatMap((s) => s.assets.filter((a) => /icon/i.test(a.kind)))[0] || null;
