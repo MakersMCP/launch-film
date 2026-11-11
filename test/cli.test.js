@@ -682,6 +682,32 @@ test("a track or a picture that ffmpeg or ffprobe will not open is refused in th
   assert.ok(!chrome.started(), "no Chrome was started");
 });
 
+// A film ffprobe would not read for a reason of its own was said to be no
+// video, as a picture and a track were: a good film read as a broken one.
+test("check and frames say why ffprobe would not read a film, as a guard that opens no name with a % in it, or a film the user may not read", { skip: (process.platform === "win32" && "the stand-ins are shell scripts") || (!available() && "ffmpeg not found") }, () => {
+  const { FFPROBE } = require("../src/ffmpeg");
+  const dir = tmp();
+  const film = path.join(dir, "50% promo.mp4");
+  const made = spawnSync(FFMPEG, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=25:d=1", "-pix_fmt", "yuv420p", film], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const guard = guarded("ffprobe", FFPROBE);
+  for (const command of ["check", "frames"]) {
+    const r = cliWith({ LAUNCH_FILM_FFPROBE: guard }, command, film, "--out", path.join(dir, command));
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${film} could not be read as a video (ffprobe failed: kits ffprobe: ${film}: an input named with % or ending in .y is not opened)\n`, command);
+    assert.ok(!fs.existsSync(path.join(dir, command)), command);
+  }
+  if (process.getuid && process.getuid() !== 0) {
+    const locked = path.join(dir, "locked.mp4");
+    fs.copyFileSync(film, locked);
+    fs.chmodSync(locked, 0o000);
+    for (const command of ["check", "frames"]) {
+      const r = cliWith({}, command, locked, "--out", path.join(dir, command));
+      assert.equal(r.stderr, `launch-film: ${locked} could not be read as a video (ffprobe failed: ${locked}: Permission denied)\n`, command);
+    }
+  }
+});
+
 // A Chrome that notes it was started and fails, in place of the real one.
 function noteChrome() {
   const started = path.join(tmp(), "chrome-started");

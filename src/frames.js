@@ -232,7 +232,7 @@ async function contactSheet(stills, file, { title = "", cols = 4 } = {}) {
 async function saveFrames(file, { out = null } = {}) {
   const film = path.resolve(file);
   const info = probe(film);
-  if (!info.duration) throw new Error(`${file} could not be read as a video`);
+  if (!info.duration) throw new Error(`${file} could not be read as a video${info.failed ? ` (${info.failed})` : ""}`);
   const dir = path.resolve(out || path.join(path.dirname(film), "frames"));
   return within(dir, async (run) => {
     const { cuts } = await findCuts(film, { info, work: run.part });

@@ -197,7 +197,9 @@ async function checkFilm(file, opts = {}) {
   const film = path.resolve(file);
   if (!fs.existsSync(film)) throw new Error(`${file} is not a file`);
   const info = probe(film);
-  if (!info.duration || !info.width) throw new Error(`${file} could not be read as a video`);
+  // ffprobe's own words when it would not read the film, as a guard that
+  // opens no name with a % in it, or a film the user may not read.
+  if (!info.duration || !info.width) throw new Error(`${file} could not be read as a video${info.failed ? ` (${info.failed})` : ""}`);
   const cues = opts.cues ? readCues(path.resolve(opts.cues)) : null;
   const dir = path.resolve(opts.out || path.join(path.dirname(film), "check"));
   // The report and its pictures take the place of an earlier check's once
