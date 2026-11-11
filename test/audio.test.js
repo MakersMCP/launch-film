@@ -41,6 +41,32 @@ test("the music bed lasts the film and lands a hit on the last cut", () => {
   }
 });
 
+// A film's level is set with one gain, which keeps the bed as it is drawn,
+// and drawn alone the bars before the groove sat 8 to 16 dB under it, the
+// journal look's keys 15: such a film opened as one with no music.
+test("the bed opens a few dB under its groove in every look, and no further", () => {
+  for (const look of Object.keys(audio.MOODS)) {
+    for (const bars of [[2, 2, 2, 2], [1, 3, 2, 2], [3, 2, 2]]) {
+      const bar = 240 / audio.MOODS[look].bpm;
+      let at = 0;
+      const cuts = bars.map((b) => (at += b * bar) - b * bar);
+      const seconds = at + 2 * bar;
+      const { bus } = audio.music({ look, seconds, cuts, seed: 3 });
+      const power = (from, to) => {
+        let s = 0;
+        for (let i = Math.round(from * audio.SR); i < Math.round(to * audio.SR); i++) s += bus.L[i] ** 2 + bus.R[i] ** 2;
+        return s / ((to - from) * audio.SR);
+      };
+      // From the end of the fade in to the groove, against the groove up
+      // to the close. The journal look's keys in an opening of one bar come
+      // up as far as the lift goes, and short of it by less than a dB.
+      const under = 10 * Math.log10(power(cuts[1], cuts[cuts.length - 1]) / power(bar / 4, cuts[1]));
+      assert.ok(under > audio.OPENING_UNDER - 0.5 && under < audio.OPENING_UNDER + 1, `${look} ${bars.join(",")}: the opening sits ${under.toFixed(1)} dB under the groove`);
+      assert.ok(finite(bus) && peak(bus) < 1.5, `${look}: peak ${peak(bus)}`);
+    }
+  }
+});
+
 test("the mix is limited and written as a float WAV", () => {
   const seconds = 3;
   const mix = audio.mixFilm({ seconds, music: null, cues: [{ sfx: "impact-bass-1", at: 0.2, volume: 2 }, { sfx: "impact-bass-2", at: 0.2, volume: 2 }, { sfx: "nope", at: 1, volume: 1 }] });

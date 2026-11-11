@@ -298,6 +298,24 @@ test("a film's level is set with one gain from what loudnorm measured, so a trac
   assert.ok(drop > 8, `the drop is ${drop.toFixed(1)} dB over the build`);
 });
 
+// A journal film's bed has only its keys before the groove, and a film's
+// level set with one gain keeps the bed as it is drawn: the bed sets them a
+// few dB under the groove, where they sat 15 dB under it.
+test("a journal film opens a few dB under its body", { skip: !available() && "ffmpeg not found", timeout: 180_000 }, async () => {
+  const { addSound } = require("../src/film");
+  const dir = tmp();
+  const bar = 240 / audio.MOODS.journal.bpm;
+  const cuts = [0, 2 * bar, 4 * bar, 6 * bar];
+  const seconds = 8 * bar;
+  const { video, wav } = await soundAndPicture(dir, audio.mixFilm({ seconds, music: audio.music({ look: "journal", seconds, cuts, seed: 4 }).bus, cues: JOURNAL_CUES }));
+  const out = path.join(dir, "film.mp4");
+  await addSound({ video, wav, out, seconds, tries: (n) => path.join(dir, `sound-${n}.mp4`) });
+  const sound = soundOf(out);
+  const power = (from, to) => sound.subarray(Math.round(from * audio.SR), Math.round(to * audio.SR)).reduce((sum, v) => sum + v * v, 0) / ((to - from) * audio.SR);
+  const under = 10 * Math.log10(power(cuts[1], cuts[3]) / power(bar / 4, cuts[1]));
+  assert.ok(under < audio.OPENING_UNDER + 2, `the film opens ${under.toFixed(1)} dB under its body`);
+});
+
 // The encoder's lift varies from one encode to the next, so the film kept is
 // the encode nearest -14 LUFS at -1.5 dBTP or under, not the last. This
 // stand-in sets the first encode 1 dB low, and every later one 24 dB louder

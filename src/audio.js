@@ -9,7 +9,8 @@
 // The music follows the film: the first clip gets only pads, the groove
 // starts on the second clip's downbeat, and the logo clip lands on a hit with
 // the last chord ringing out. Clip lengths are whole bars, so every cut
-// falls on a downbeat.
+// falls on a downbeat. What plays before the groove is set a few dB under
+// it (OPENING_UNDER), so a film opens quieter than its body, but with music.
 
 const { save } = require("./out");
 
@@ -446,6 +447,15 @@ function keysChord(bus, at, seconds, notes, { gain = 0.07 } = {}) {
   });
 }
 
+// How far under the groove the bars before it are set, in dB of their power
+// over both channels. As they are drawn, the pads, keys and arp there sit 8
+// to 16 dB under it, the journal look's keys alone the furthest, and no film
+// played them so: loudnorm's dynamic mode, which set a film's level up to
+// 0.2, lifted a quiet opening. A film's level is now set with one gain
+// (film.js), which keeps the bed as it is drawn, so they are lifted here,
+// by 15.6 dB at most (openingGain).
+const OPENING_UNDER = 4;
+
 // The bed for a film: cuts (clip starts, seconds) after the first start the
 // groove, the last clip lands on a hit. Returns a Bus.
 function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
@@ -458,6 +468,10 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
   const has = (p) => mood.parts.includes(p);
   const grooveFrom = cuts.length > 1 ? cuts[1] : bar * 2;
   const closeAt = cuts.length > 2 ? cuts[cuts.length - 1] : seconds - bar;
+  // The pads, keys and arp of the bars before the groove, on a bus of their
+  // own, so that they can be lifted (below): as long as their last chord
+  // and its reverb ring past the groove's start.
+  const opening = new Bus(Math.min(seconds + 2, grooveFrom + bar + 4));
   const bars = Math.ceil(seconds / bar) + 1;
   for (let b = 0; b < bars; b++) {
     const t0 = b * bar;
@@ -468,8 +482,9 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
     const chord = chordOf(mood, degree, 0);
     // Pads and keys hold the harmony throughout; the last chord rings out.
     const hold = closing ? Math.max(bar, seconds - t0) : bar;
-    if (has("pad") || has("pad-thin")) padChord(wet, t0, hold, has("pad-thin") ? chord.slice(0, 3) : chord, { gain: has("pad-thin") ? 0.05 : 0.075, cutoff: mood.bright * (groove ? 1 : 0.7) });
-    if (has("keys")) keysChord(wet, t0, Math.min(hold, bar * 0.95), chord.map((n) => n + 12).slice(0, 3), { gain: 0.06 });
+    const harmony = groove || closing ? wet : opening;
+    if (has("pad") || has("pad-thin")) padChord(harmony, t0, hold, has("pad-thin") ? chord.slice(0, 3) : chord, { gain: has("pad-thin") ? 0.05 : 0.075, cutoff: mood.bright * (groove ? 1 : 0.7) });
+    if (has("keys")) keysChord(harmony, t0, Math.min(hold, bar * 0.95), chord.map((n) => n + 12).slice(0, 3), { gain: 0.06 });
     if (closing && b === Math.round(closeAt / bar)) {
       // The hit under the logo.
       kick(dry, t0, 1.1);
@@ -479,7 +494,7 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
     if (!groove) {
       // Before the groove: a filtered pulse and the arp, quiet.
       if (!closing && (has("arp") || has("arp-soft"))) {
-        for (let s = 0; s < 8; s++) pluck(wet, t0 + s * (beat / 2), chord[s % 4] + 12, { gain: 0.035, decay: 0.16, pan: s % 2 ? 0.3 : -0.3 });
+        for (let s = 0; s < 8; s++) pluck(opening, t0 + s * (beat / 2), chord[s % 4] + 12, { gain: 0.035, decay: 0.16, pan: s % 2 ? 0.3 : -0.3 });
       }
       continue;
     }
@@ -512,6 +527,14 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
   if (grooveFrom > 1.2) dry.mix(riser(Math.min(2, grooveFrom)), grooveFrom - Math.min(2, grooveFrom), 0.25);
   const out = reverb(wet, { wet: 0.32, size: 0.84 });
   out.mix(dry, 0, 1);
+  // The reverb is linear, so the opening's parts take theirs on their own
+  // and are mixed in at the gain that sets them OPENING_UNDER dB under the
+  // groove, the riser and the rest of what plays then counted in: from the
+  // end of the fade in to the groove, against the groove up to the close
+  // (or the film's last second, when the close comes within a beat of it).
+  const open = reverb(opening, { wet: 0.32, size: 0.84 });
+  const bodyTo = closeAt > grooveFrom + beat ? closeAt : seconds - 1;
+  out.mix(open, 0, openingGain(out, open, [Math.min(beat, grooveFrom), grooveFrom], [grooveFrom, bodyTo]));
   // The whole bed fades in over the first beat and out over the last second.
   const total = Math.round(seconds * SR);
   for (let i = 0; i < out.length; i++) {
@@ -521,6 +544,26 @@ function music({ look = "launch", seconds, cuts = [], seed = 1 }) {
     out.R[i] *= g;
   }
   return { bus: out, beat, bar, bpm: mood.bpm };
+}
+
+// The gain that sets `open`, mixed into `out`, OPENING_UNDER dB under the
+// groove over the stretch `[from, to]` of the opening, against `body`, the
+// stretch of the groove. 1 when it is no further under than that already,
+// or when either stretch is too short to say; 6 (15.6 dB) at most.
+function openingGain(out, open, [from, to], [bodyFrom, bodyTo]) {
+  if (to - from < 0.5 || bodyTo - bodyFrom < 0.5) return 1;
+  const power = (bus, a, b) => {
+    const i0 = Math.round(a * SR);
+    const i1 = Math.min(bus.length, Math.round(b * SR));
+    let sum = 0;
+    for (let i = i0; i < i1; i++) sum += bus.L[i] * bus.L[i] + bus.R[i] * bus.R[i];
+    return i1 > i0 ? sum / (i1 - i0) : 0;
+  };
+  const target = power(out, bodyFrom, bodyTo) * 10 ** (-OPENING_UNDER / 10);
+  const rest = power(out, from, to);
+  const parts = power(open, from, to);
+  if (!(parts > 0) || rest + parts >= target) return 1;
+  return Math.min(6, Math.sqrt((target - rest) / parts));
 }
 
 // ─── the user's own track ──────────────────────────────────────────────────
@@ -591,4 +634,4 @@ function writeWav(file, bus) {
   save(file, Buffer.concat([head, data]));
 }
 
-module.exports = { SR, Bus, MOODS, EFFECTS, TRACK_LUFS, effect, music, trackGain, trackBus, mixFilm, writeWav };
+module.exports = { SR, Bus, MOODS, EFFECTS, TRACK_LUFS, OPENING_UNDER, effect, music, trackGain, trackBus, mixFilm, writeWav };

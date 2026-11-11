@@ -27,18 +27,19 @@ const FADE = 0.4;
 // dBTP or under (TRUE_PEAK), as LOUDNORM gives them to loudnorm. loudnorm
 // measures the sound (ffmpeg.js loudnormPass), and one gain sets it to -14
 // (addSound), so the sound keeps the rise and fall it was made with: a
-// track's build and drop, the bed's quiet opening. loudnorm's own second
-// pass did not: when the peaks a gain raises pass its limit, as they do with
-// nearly every sound, it works in its dynamic mode, which turns quiet
-// stretches up and loud ones down, and it flattened a track's drop from 9.5
-// dB over its build to 2.8. The gain raises the peaks too, and the AAC
-// encoder lifts a sharp hit by as much as two and a half dB in the films
-// measured, so a limiter on the sound at four times its rate holds the
-// peaks at CEILING, and the film is measured once encoded, as check
-// measures it, and encoded again with the gain moved toward -14, up or
-// down, and the limiter set lower by what the encoded film's true peak
-// passed -1.7 dBTP, a fifth of a dB under TRUE_PEAK. Of these encodes,
-// TRIES at most, the one nearest -14 LUFS at TRUE_PEAK or under is kept.
+// track's build and drop, the bed's opening a few dB under its groove
+// (audio.js). loudnorm's own second pass did not: when the peaks a gain
+// raises pass its limit, as they do with nearly every sound, it works in its
+// dynamic mode, which turns quiet stretches up and loud ones down, and it
+// flattened a track's drop from 9.5 dB over its build to 2.8. The gain
+// raises the peaks too, and the AAC encoder lifts a sharp hit by as much as
+// two and a half dB in the films measured, so a limiter on the sound at four
+// times its rate holds the peaks at CEILING, and the film is measured once
+// encoded, as check measures it, and encoded again with the gain moved
+// toward -14, up or down, and the limiter set lower by what the encoded
+// film's true peak passed -1.7 dBTP, a fifth of a dB under TRUE_PEAK. Of
+// these encodes, TRIES at most, the one nearest -14 LUFS at TRUE_PEAK or
+// under is kept.
 const LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11";
 const LUFS = -14;
 const TRUE_PEAK = -1.5;
