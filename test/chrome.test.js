@@ -7,10 +7,13 @@ const fs = require("fs");
 const http = require("http");
 const dgram = require("dgram");
 const path = require("path");
+const { spawn } = require("child_process");
 const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate } = require("../src/chrome");
 const { available, readPixels, writePng } = require("../src/ffmpeg");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-const { tmp } = require("./tmp");
+const { tmp, SAVES_PID, pidIn, alive } = require("./tmp");
+
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const root = typeof process.getuid === "function" && process.getuid() === 0;
 
@@ -221,6 +224,69 @@ setTimeout(() => process.exit(0), 60000);
 `, { mode: 0o755 });
   return file;
 }
+
+// A Chrome that is started and never answers on the DevTools pipe. It saves
+// its pid in MUTE_PID and ends by itself only long after launch-film's wait
+// for an answer, which the stub cuts from 60 s to 3.
+function muteChrome() {
+  const dir = tmp();
+  const file = path.join(dir, "chrome");
+  fs.writeFileSync(file, `#!${process.execPath}\n${SAVES_PID}\nsavePid(process.env.MUTE_PID, process.pid);\nsetTimeout(() => process.exit(0), 40000);\n`, { mode: 0o755 });
+  const stub = path.join(dir, "stub.js");
+  fs.writeFileSync(stub, `if (/launch-film\\.js$/.test(process.argv[1] || "")) {
+  const real = global.setTimeout;
+  global.setTimeout = (fn, ms, ...rest) => real(fn, ms === 60000 ? 3000 : ms, ...rest);
+}`);
+  return { chrome: file, stub };
+}
+
+// A Chrome that did not answer launch's first call was left running: its
+// pipes kept doctor, and a plan that went on with the page's HTML, from
+// ending until that Chrome did, for good with a Chrome that hangs.
+test("a Chrome that never answers is ended with its profile, so doctor and a plan that reads the page's HTML instead end", { skip: process.platform === "win32" && "the stand-in Chrome is a script", timeout: 120_000 }, async () => {
+  const { chrome, stub } = muteChrome();
+  const kit = path.join(tmp(), "kit");
+  fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
+  // A page whose HTML has too few headings, so the plan reads it in Chrome.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><html lang=\"en\"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const brandFile = path.join(kit, "brand.json");
+  fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url: `http://127.0.0.1:${server.address().port}/` }));
+  const run = (pidFile, ...args) => new Promise((resolve) => {
+    const temp = tmp();
+    const started = Date.now();
+    const child = spawn(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), ...args], {
+      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LAUNCH_FILM_CHROME: chrome, MUTE_PID: pidFile, TMPDIR: temp, NODE_OPTIONS: `--require ${stub}` } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    child.on("close", (code) => resolve({ code, out, seconds: (Date.now() - started) / 1000, temp }));
+  });
+  const [doctorPid, planPid] = [path.join(tmp(), "doctor.pid"), path.join(tmp(), "plan.pid")];
+  try {
+    const out = tmp();
+    const [doctor, plan] = await Promise.all([run(doctorPid, "doctor"), run(planPid, "plan", "https://acme-notes.example", "--brand", kit, "--out", out)]);
+    const late = "Chrome did not answer Browser.getVersion within 60 s, most often because the machine is too busy: run again once it is less busy";
+    assert.equal(doctor.code, 1, doctor.out);
+    assert.match(doctor.out, new RegExp(`^chrome {2}${escape(chrome)}: ${escape(late)}$`, "m"));
+    assert.equal(plan.code, 0, plan.out);
+    assert.match(plan.out, new RegExp(`Chrome could not read the page \\(${escape(late)}\\)\\.\\n`));
+    assert.match(plan.out, /Planned \d+ clips in the \w+ look: /);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(out, "words.json"), "utf8")).headings[0].text, "Notes that think with you");
+    // Each ended soon after the wait, its Chrome gone with it, and left its
+    // temp folder as it found it.
+    for (const [r, pidFile] of [[doctor, doctorPid], [plan, planPid]]) {
+      assert.ok(r.seconds < 30, `it took ${r.seconds} s`);
+      assert.ok(!alive(await pidIn(pidFile)), "the stand-in Chrome still runs");
+      assert.deepEqual(fs.readdirSync(r.temp), []);
+    }
+  } finally {
+    server.close();
+  }
+});
 
 test("a page file Chrome refuses fails the page at once, with Chrome's words", { skip: process.platform === "win32" && "the stand-in Chrome is a script" }, async () => {
   const dir = tmp();

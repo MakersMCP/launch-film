@@ -173,7 +173,18 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     pending.set(n, { resolve: (v) => (clearTimeout(timer), resolve(v)), reject: (e) => (clearTimeout(timer), reject(e)) });
     child.stdio[3].write(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }) + "\0");
   });
-  await send("Browser.getVersion");
+  // A Chrome that does not answer its first call, in time or at all, is
+  // ended here with its profile, since the caller never gets it to close:
+  // left running, its pipes kept the process up after doctor or a plan that
+  // went on with the page's HTML had ended.
+  try {
+    await send("Browser.getVersion");
+  } catch (err) {
+    if (!exited) child.kill("SIGKILL");
+    release(profile);
+    for (const stream of [child.stderr, child.stdio[3], child.stdio[4]]) if (stream) stream.destroy();
+    throw err;
+  }
   socket = socketFolder(profile);
   return {
     send,
