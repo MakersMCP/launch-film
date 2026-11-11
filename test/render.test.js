@@ -175,21 +175,39 @@ test("a film plays the track film.json names, in place of the bed", { skip, time
 });
 
 // The skill checks a film at -14 LUFS, give or take 1 LU, and the render
-// brings its sound there. In one pass, aimed at -16, the bed came out at
-// -15.0 and a mastered track at -15.8, so the check failed.
-test("a film's sound is brought to -14 LUFS, with the bed and with a mastered track of the user's", { skip, timeout: 240_000 }, async () => {
+// brings its sound there, with its true peak at -1.5 dBTP or under. In one
+// pass, aimed at -16, the bed came out at -15.0 and a mastered track at
+// -15.8, so the check failed.
+test("a film's sound is brought to -14 LUFS, its true peak at -1.5 dBTP or under, with the bed and with a mastered track of the user's", { skip, timeout: 240_000 }, async () => {
   const { checkFilm } = require("../src/check");
-  const loudness = async (film) => (await checkFilm(film, { lufs: -14, out: path.join(tmp(), "check") })).audio.integrated;
+  const measure = async (film) => (await checkFilm(film, { lufs: -14, out: path.join(tmp(), "check") })).audio;
   const bed = await renderedFolder();
-  const withBed = await loudness(path.join(bed, "film.mp4"));
-  assert.ok(Math.abs(withBed + 14) <= 0.5, `the film with the bed measures ${withBed} LUFS`);
+  const withBed = await measure(path.join(bed, "film.mp4"));
+  assert.ok(Math.abs(withBed.integrated + 14) <= 0.5, `the film with the bed measures ${withBed.integrated} LUFS`);
+  assert.ok(withBed.truePeak <= -1.5, `the film with the bed peaks at ${withBed.truePeak} dBTP`);
   // A track mastered as musicfit writes one: -14 LUFS, its true peak at -1.
   const dir = filmFolder({ music: "music/track.wav" });
   fs.mkdirSync(path.join(dir, "music"));
   await mustRun(["-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.3:duration=7:sample_rate=48000", "-af", "lowpass=f=6000,loudnorm=I=-14:TP=-1:LRA=11", "-ar", "48000", "-ac", "2", path.join(dir, "music", "track.wav")], "a track");
   const result = await renderFilm(path.join(dir, "film.json"), { jobs: 2 });
-  const withTrack = await loudness(result.output);
-  assert.ok(Math.abs(withTrack + 14) <= 0.5, `the film with the track measures ${withTrack} LUFS`);
+  const withTrack = await measure(result.output);
+  assert.ok(Math.abs(withTrack.integrated + 14) <= 0.5, `the film with the track measures ${withTrack.integrated} LUFS`);
+  assert.ok(withTrack.truePeak <= -1.5, `the film with the track peaks at ${withTrack.truePeak} dBTP`);
+});
+
+// The AAC encoder lifts a sharp hit that loudnorm held, by up to two dB on
+// the looks' beds, so a film is measured once encoded and encoded again
+// nearer -14 LUFS and under -1.5 dBTP. This stand-in lifts the sound of the
+// film by 2 dB as it is encoded, as such an encoder would.
+test("a film whose sound peaks above -1.5 dBTP once encoded is encoded again lower, at -14 LUFS", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const ffmpeg = standIn(`case " $* " in *" -map 1:a "*) for a do shift; case $a in loudnorm=*) a="$a,volume=2dB";; esac; set -- "$@" "$a"; done;; esac`);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 0, r.stderr);
+  const { checkFilm } = require("../src/check");
+  const { integrated, truePeak } = (await checkFilm(path.join(dir, "film.mp4"), { out: path.join(tmp(), "check") })).audio;
+  assert.ok(truePeak <= -1.5, `the film peaks at ${truePeak} dBTP`);
+  assert.ok(Math.abs(integrated + 14) <= 0.5, `the film measures ${integrated} LUFS`);
 });
 
 // Every file in a folder, hidden ones too, with its bytes.

@@ -284,6 +284,19 @@ async function loudnessOf(file, { seconds }) {
   return { integrated: num(/Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+|-inf) LUFS/), peak: num(/Sample peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/) };
 }
 
+// A film's sound as check measures it, at 48 kHz by ebur128: { integrated
+// (LUFS), truePeak (dBTP) }. Silence measures -70 LUFS and a peak of -inf.
+async function levelOf(file) {
+  const r = await run([...input(file), "-vn", "-af", "aresample=48000,ebur128=peak=true:framelog=verbose", "-f", "null", "-"], { loglevel: "info" });
+  if (r.short) throw Object.assign(new Error(r.short), { short: true });
+  if (r.code !== 0) throw new Error(`measuring the film's sound: ${why(r, { lines: 2 })}`);
+  const num = (re) => {
+    const m = re.exec(r.stderr);
+    return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : null;
+  };
+  return { integrated: num(/Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+|-inf) LUFS/), truePeak: num(/True peak:\s*\n\s*Peak:\s*(-?[\d.]+|-inf) dBFS/) };
+}
+
 // loudnorm's first pass over a sound file, given its `filter` (loudnorm=I=
 // and the rest): what it measured, as the options its second pass takes to
 // set the sound to that level (":measured_I=...:offset=..."), or "" for a
@@ -386,4 +399,4 @@ function encoder({ output, fps = 25, crf = 15 }) {
   };
 }
 
-module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, pictureSize, readSound, loudnessOf, loudnormPass, coverPng, readPixels, writePng, encoder };
+module.exports = { FFMPEG, FFPROBE, available, input, picture, whole, writePicture, why, stoppedSync, run, mustRun, probe, pictureSize, readSound, loudnessOf, loudnormPass, levelOf, coverPng, readPixels, writePng, encoder };

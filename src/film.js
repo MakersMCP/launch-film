@@ -12,7 +12,7 @@ const path = require("path");
 const motion = require("./motion");
 const { parseScene, resolveFonts, iconSvg } = require("./scene");
 const { renderPage, PAGE_FILE_MAX } = require("./chrome");
-const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf, loudnormPass } = require("./ffmpeg");
+const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixels, readSound, loudnessOf, loudnormPass, levelOf } = require("./ffmpeg");
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
@@ -22,12 +22,20 @@ const confine = require("./confine");
 const FPS = 25;
 // A crossfade between clips, starting on the cut.
 const FADE = 0.4;
-// The film's sound: -14 LUFS, the loudness YouTube, X and most social apps
-// play at and the skill checks a film at, its true peak at -1.5 dBTP or
-// under. loudnorm measures the sound first and sets it to that in a second
-// pass (ffmpeg.js loudnormPass): in one pass, aimed at -16, films came out
-// from -14.2 to -15.8 LUFS, a mastered track's at the far end.
-const LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11";
+// The film's sound: -14 LUFS (LUFS), the loudness YouTube, X and most
+// social apps play at and the skill checks a film at, its true peak at -1.5
+// dBTP or under (TRUE_PEAK). loudnorm measures the sound first and sets it to
+// that in a second pass (ffmpeg.js loudnormPass): in one pass, aimed at -16,
+// films came out anywhere from -13.7 to -15.8 LUFS. It holds the peaks at
+// -3 dBTP, as the AAC encoder lifts a sharp hit loudnorm held by up to two
+// dB: held at -1.5, a film's true peak came out as high as +0.2 dBTP. What
+// loudnorm makes of a short film or a dense one can still lie a few tenths
+// from -14 once encoded, so the film is measured then, as check measures it,
+// and encoded again with the gain that brings it nearest -14 LUFS without
+// passing TRUE_PEAK.
+const LOUDNORM = "loudnorm=I=-14:TP=-3:LRA=11";
+const LUFS = -14;
+const TRUE_PEAK = -1.5;
 const KINDS = new Set(["scene", "screen", "phone", "scroll", "shots", "logo"]);
 
 // Reads and checks a film.json; returns { film, dir, brand, clips, problems }.
@@ -548,8 +556,22 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       clips: clips.map((c) => ({ index: c.index + 1, kind: c.kind, type: c.parsed ? c.parsed.type : undefined, start: +c.start.toFixed(3), seconds: +c.seconds.toFixed(3) })) };
     // Measured, then set to the film's loudness as it goes in.
     const measured = await loudnormPass(wav, LOUDNORM);
-    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}`, "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-      "-t", total.toFixed(3), "-movflags", "+faststart", job.out(path.basename(out))], "adding the sound");
+    // Encoded and measured (above): the first measure gives the gain to
+    // -14 LUFS, as far as the true peak allows with a fifth of a dB to
+    // spare, and a film whose true peak still passes TRUE_PEAK is encoded
+    // lower again, four encodes at most.
+    const made = job.out(path.basename(out));
+    let gain = 0;
+    for (let tries = 0; tries < 4; tries++) {
+      await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `${LOUDNORM}${measured}${gain ? `,volume=${gain.toFixed(2)}dB` : ""}`, "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-t", total.toFixed(3), "-movflags", "+faststart", made], "adding the sound");
+      const level = await levelOf(made);
+      if (!(level.integrated > -70) || !(level.truePeak > -Infinity)) break;
+      const room = TRUE_PEAK - 0.2 - level.truePeak;
+      const step = tries === 0 ? Math.min(LUFS - level.integrated, room) : Math.min(0, room);
+      if (Math.abs(step) < 0.1 && level.truePeak <= TRUE_PEAK) break;
+      gain += step;
+    }
     save(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
