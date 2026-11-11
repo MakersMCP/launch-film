@@ -422,23 +422,43 @@ test("a failure that names a picture the run made calls it the new one", { skip:
 // from the film's length, which the picture does not reach. ffmpeg 8 then
 // failed in its own words, and 4.4, which writes nothing and ends well, was
 // said to have cut the picture short on a full disk.
-async function longSound(dir) {
-  const file = path.join(dir, "long-sound.mp4");
-  await mustRun(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=4", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", file], "making a test film");
+// A film of 4 s of picture and 6 s of sound. Matroska and WebM give the
+// picture's length only as a DURATION tag, and FLV not at all: its last
+// packet says where it ends. Each kind is made with the codecs it takes, or
+// is null when this ffmpeg has none of them.
+const KINDS = { mp4: ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"], mkv: ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"],
+  webm: ["-c:v", "libvpx", "-deadline", "realtime", "-b:v", "300k", "-c:a", "libvorbis"], flv: ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"] };
+async function longSound(dir, kind = "mp4") {
+  const file = path.join(dir, `long-sound.${kind}`);
+  const made = spawnSync(process.env.LAUNCH_FILM_FFMPEG || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=4", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=6",
+    ...KINDS[kind], file], { encoding: "utf8", timeout: 120_000 });
+  if (made.status !== 0 && kind !== "mp4") return null;
+  assert.equal(made.status, 0, made.stderr);
   const info = probe(file);
-  assert.ok(Math.abs(info.picture - 4) < 0.05 && info.duration > 5.9, `picture ${info.picture} s of ${info.duration} s`);
+  assert.ok(Math.abs(info.picture - 4) < 0.05 && info.duration > 5.9, `${kind}: picture ${info.picture} s of ${info.duration} s`);
   return file;
 }
 
-test("frames and check of a film whose sound runs on past its picture take their stills from the picture", { skip }, async () => {
+test("frames and check of a film whose sound runs on past its picture take their stills from the picture", { skip }, async (t) => {
+  for (const kind of Object.keys(KINDS)) {
+    const dir = tmp();
+    const file = await longSound(dir, kind);
+    if (!file) {
+      t.diagnostic(`this ffmpeg makes no ${kind}`);
+      continue;
+    }
+    const frames = cli(["frames", file]);
+    assert.equal(frames.status, 0, `${kind}: ${frames.stderr}`);
+    assert.equal(fs.readdirSync(path.join(dir, "frames")).filter((n) => /^still-\d+\.jpg$/.test(n)).length, 12, kind);
+    const check = cli(["check", file]);
+    assert.equal(check.status, 0, `${kind}: ${check.stderr}`);
+    // And with a cut given in the sound's tail, past the picture.
+    const cut = cli(["check", file, "--cuts", "1,2,5", "--out", path.join(dir, "check-cuts")]);
+    assert.equal(cut.status, 0, `${kind}: ${cut.stderr}`);
+  }
+  // So does a film whose timeline has its cuts past its picture.
   const dir = tmp();
   const file = await longSound(dir);
-  const frames = cli(["frames", file]);
-  assert.equal(frames.status, 0, frames.stderr);
-  assert.equal(fs.readdirSync(path.join(dir, "frames")).filter((n) => /^still-\d+\.jpg$/.test(n)).length, 12);
-  const check = cli(["check", file]);
-  assert.equal(check.status, 0, check.stderr);
-  // So does a film whose timeline has its cuts past its picture.
   fs.writeFileSync(path.join(dir, "long-sound.timeline.json"), JSON.stringify({ clips: [{ start: 0 }, { start: 2 }, { start: 3.98 }, { start: 5 }] }));
   for (const command of ["frames", "check"]) {
     const r = cli([command, file, "--out", path.join(dir, `${command}-cut`)]);

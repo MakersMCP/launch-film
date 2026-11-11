@@ -162,45 +162,78 @@ const rate = (r) => {
   return a && b ? a / b : Number(a) || 0;
 };
 
+// "00:00:06.000000000", as Matroska and WebM give a stream's length, in
+// seconds, or 0.
+function clock(text) {
+  const m = /^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/.exec(String(text || "").trim());
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
+}
+
+// Where the picture of a file ends by its packets: the end of the latest, in
+// the stream's own time, or 0 when its packets have no times.
+function lastPacket(file) {
+  const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", ...input(file)],
+    { encoding: "utf8", timeout: 60_000, maxBuffer: 64 << 20 });
+  const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
+  if (stopped) throw stopped;
+  if (short(r.error, "ffprobe")) throw new Error(short(r.error, "ffprobe"));
+  let end = 0;
+  for (const line of String(r.stdout || "").split("\n")) {
+    const [at, length] = line.split(",").map(Number);
+    if (Number.isFinite(at)) end = Math.max(end, at + (Number.isFinite(length) ? length : 0));
+  }
+  return end;
+}
+
 // What ffprobe says of a file: its size, length, frame rate and sound, and
 // `picture`, where its picture ends, from the film's start. A video whose
-// sound runs on past its picture ends its picture before the film ends; the
-// film's length when ffprobe does not say.
+// sound runs on past its picture ends its picture before the film ends. The
+// picture's own length is its stream's, which Matroska and WebM give only as
+// a DURATION tag, else where its last packet ends; the film's length when
+// none of them says.
 function probe(file) {
   const r = spawnSync(FFPROBE, ["-v", "error", "-show_entries",
-    "format=duration,start_time:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels,duration,start_time",
+    "format=duration,start_time:stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,avg_frame_rate,sample_rate,channels,duration,start_time:stream_tags=DURATION",
     "-of", "json", ...input(file)], { encoding: "utf8", timeout: 20_000 });
   const stopped = stoppedSync(r, "ffprobe", `reading ${file}`);
   if (stopped) throw stopped;
   if (short(r.error, "ffprobe")) throw new Error(short(r.error, "ffprobe"));
   // Why ffprobe could not read it, when that is not that it holds nothing.
   const failed = r.status !== 0 ? unread(r, "ffprobe") : null;
+  let info;
   try {
-    const info = JSON.parse(r.stdout);
-    const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
-    const sound = (info.streams || []).find((s) => s.codec_type === "audio") || null;
-    const format = info.format || {};
-    const duration = Number(format.duration) || 0;
-    const shown = Number(video.duration) > 0 ? Number(video.duration) + (Number(video.start_time) || 0) - (Number(format.start_time) || 0) : 0;
-    return {
-      width: Number(video.width) || 0,
-      height: Number(video.height) || 0,
-      duration,
-      picture: shown > 0 ? shown : duration,
-      audio: Boolean(sound),
-      fps: rate(video.avg_frame_rate) || rate(video.r_frame_rate),
-      baseFps: rate(video.r_frame_rate),
-      codec: video.codec_name || "",
-      pixFmt: video.pix_fmt || "",
-      sar: video.sample_aspect_ratio || "",
-      audioCodec: sound ? sound.codec_name || "" : "",
-      sampleRate: sound ? Number(sound.sample_rate) || 0 : 0,
-      channels: sound ? Number(sound.channels) || 0 : 0,
-      failed,
-    };
+    info = JSON.parse(r.stdout);
   } catch {
     return { width: 0, height: 0, duration: 0, picture: 0, audio: false, fps: 0, baseFps: 0, codec: "", pixFmt: "", sar: "", audioCodec: "", sampleRate: 0, channels: 0, failed };
   }
+  const video = (info.streams || []).find((s) => s.codec_type === "video") || {};
+  const sound = (info.streams || []).find((s) => s.codec_type === "audio") || null;
+  const format = info.format || {};
+  const duration = Number(format.duration) || 0;
+  const tag = Object.entries(video.tags || {}).find(([key]) => key.toUpperCase() === "DURATION");
+  const own = Number(video.duration) > 0 ? Number(video.duration) : tag ? clock(tag[1]) : 0;
+  let shown = own > 0 ? own + (Number(video.start_time) || 0) - (Number(format.start_time) || 0) : 0;
+  // A picture alone has no length to look for.
+  if (!(shown > 0) && video.codec_type && duration) {
+    const end = lastPacket(file);
+    if (end > 0) shown = end - (Number(format.start_time) || 0);
+  }
+  return {
+    width: Number(video.width) || 0,
+    height: Number(video.height) || 0,
+    duration,
+    picture: shown > 0 ? shown : duration,
+    audio: Boolean(sound),
+    fps: rate(video.avg_frame_rate) || rate(video.r_frame_rate),
+    baseFps: rate(video.r_frame_rate),
+    codec: video.codec_name || "",
+    pixFmt: video.pix_fmt || "",
+    sar: video.sample_aspect_ratio || "",
+    audioCodec: sound ? sound.codec_name || "" : "",
+    sampleRate: sound ? Number(sound.sample_rate) || 0 : 0,
+    channels: sound ? Number(sound.channels) || 0 : 0,
+    failed,
+  };
 }
 
 // A sound file's first `seconds`, decoded as 48 kHz stereo floats ({ left,
