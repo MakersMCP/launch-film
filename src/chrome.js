@@ -53,7 +53,11 @@ function onPath(name, passed = null) {
 // or Chromium.
 function findChrome() {
   const given = process.env.LAUNCH_FILM_CHROME || process.env.CHROME_PATH;
-  if (given) return fs.existsSync(given) ? given : null;
+  // On Windows a path without .exe is the .exe, as spawn starts it.
+  if (given) {
+    const file = require("./programs").thereOf(given);
+    return fs.existsSync(file) ? file : null;
+  }
   const mac = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",

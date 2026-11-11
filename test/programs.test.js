@@ -334,3 +334,16 @@ test("a plan looks at Chrome only as it is about to start it to read the page, a
     server.close();
   }
 });
+
+// Node's spawn starts a program named without an extension on Windows as
+// that name with .com, else .exe, added (libuv's search_path), so such a
+// name given in LAUNCH_FILM_FFMPEG, or found on PATH, is looked at so too,
+// where it was refused as not there.
+test("on Windows a program named without .exe is looked at as spawn starts it, with .com and then .exe", () => {
+  const { named } = require("../src/programs");
+  assert.deepEqual(named("C:\\ffmpeg\\bin\\ffmpeg", "win32"), ["C:\\ffmpeg\\bin\\ffmpeg.com", "C:\\ffmpeg\\bin\\ffmpeg.exe"]);
+  assert.deepEqual(named("C:\\ffmpeg\\bin\\ffmpeg.exe", "win32"), ["C:\\ffmpeg\\bin\\ffmpeg.exe", "C:\\ffmpeg\\bin\\ffmpeg.exe.com", "C:\\ffmpeg\\bin\\ffmpeg.exe.exe"]);
+  assert.deepEqual(named("C:\\tools\\my.ffmpeg", "win32"), ["C:\\tools\\my.ffmpeg", "C:\\tools\\my.ffmpeg.com", "C:\\tools\\my.ffmpeg.exe"]);
+  assert.deepEqual(named("/usr/bin/ffmpeg", "linux"), ["/usr/bin/ffmpeg"]);
+  assert.deepEqual(named("/opt/homebrew/bin/ffmpeg", "darwin"), ["/opt/homebrew/bin/ffmpeg"]);
+});

@@ -176,6 +176,20 @@ function runnable(file) {
   }
 }
 
+// The files the system tries for a program named `file`. On Windows, as
+// Node's spawn starts one there (libuv's search_path): a name with an
+// extension as it is and then with .com and .exe added to it, and one
+// without, with .com and with .exe only, so C:\ffmpeg\bin\ffmpeg is
+// C:\ffmpeg\bin\ffmpeg.exe. Elsewhere the name as it is.
+function named(file, platform = process.platform) {
+  if (platform !== "win32") return [file];
+  return [...(path.win32.extname(file) ? [file] : []), `${file}.com`, `${file}.exe`];
+}
+
+// The first of named(file) that is there, else `file` itself, to be told of
+// as not there.
+const thereOf = (file) => named(file).find(exists) || file;
+
 // The first program by `name` on PATH, as the system finds it, or "".
 function onPath(name) {
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
@@ -333,7 +347,7 @@ function check(name) {
   if (name === "chrome") {
     const { findChrome } = require("./chrome");
     if (variable) {
-      file = path.resolve(value);
+      file = thereOf(path.resolve(value));
       where = `${variable} points to ${file}, which`;
     } else {
       file = findChrome();
@@ -342,16 +356,17 @@ function check(name) {
       where = `${file}, the Chrome it found,`;
     }
   } else if (value.includes("/") || (WINDOWS && value.includes("\\"))) {
-    file = path.resolve(value);
+    file = thereOf(path.resolve(value));
     where = `${variable} points to ${file}, which`;
   } else {
     // A bare name is looked up on PATH as the system looks it up: past a
     // folder, a file it may not run and one whose interpreter or loader is
-    // not there, to the first that may run.
+    // not there, to the first that may run. On Windows the folder it runs in
+    // comes first, and each name is tried as named() gives it.
     const bare = value || p.bare;
     let first = null;
-    for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
-      const at = path.resolve(dir || ".", WINDOWS && !path.extname(bare) ? `${bare}.exe` : bare);
+    const dirs = [...(WINDOWS ? [process.cwd()] : []), ...String(process.env.PATH || "").split(path.delimiter)];
+    for (const at of dirs.flatMap((dir) => named(path.resolve(dir || ".", bare)))) {
       const seen = look(at);
       if (seen.missing) continue;
       if (!seen.skip) {
@@ -399,4 +414,4 @@ function unstartable(names) {
   return null;
 }
 
-module.exports = { check, unstartable, short, look, PROGRAMS };
+module.exports = { check, unstartable, short, look, named, thereOf, PROGRAMS };
