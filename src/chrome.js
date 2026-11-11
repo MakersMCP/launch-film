@@ -32,15 +32,19 @@ function late(what) {
   return Object.assign(new Error(`${what}, most often because the machine is too busy: run again once it is less busy`), { slow: true });
 }
 
-function onPath(name) {
+// The first program by `name` on PATH that the system would start: past a
+// folder, a file it may not run and a script or a program whose interpreter
+// or loader is not there, as programs.js looks. `passed`, when given, keeps
+// the first it passed over in its `file`. A folder passed the X_OK this
+// took, so a google-chrome folder first on PATH was taken for Chrome.
+function onPath(name, passed = null) {
+  const { look } = require("./programs");
   for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
-    const file = path.join(dir, name);
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // Not here.
-    }
+    const file = path.resolve(dir || ".", name);
+    const seen = look(file);
+    if (seen.missing) continue;
+    if (!seen.skip) return file;
+    if (passed && !passed.file) passed.file = file;
   }
   return null;
 }
@@ -63,11 +67,14 @@ function findChrome() {
   ];
   const listed = process.platform === "darwin" ? mac : process.platform === "win32" ? win : [];
   for (const file of listed) if (file && fs.existsSync(file)) return file;
+  // When every one on PATH is passed over, the first is given, so that the
+  // look at it says what is wrong with it (programs.js).
+  const passed = {};
   for (const name of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"]) {
-    const found = onPath(name);
+    const found = onPath(name, passed);
     if (found) return found;
   }
-  return null;
+  return passed.file || null;
 }
 
 // Why Chrome stopped. A sandbox it could not start ends Chrome at once,

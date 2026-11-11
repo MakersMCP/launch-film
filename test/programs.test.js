@@ -138,6 +138,24 @@ test("on PATH the program named is the one the system would start, past a folder
   }
 });
 
+// Chrome is found on PATH the same way: a google-chrome folder first on PATH
+// was taken for Chrome, while the system starts the next one.
+test("on PATH the Chrome found is the one the system would start, past a folder and a file it may not run", { skip: asUser }, () => {
+  const folder = tmp();
+  fs.mkdirSync(path.join(folder, "google-chrome"));
+  const plain = tmp();
+  fs.writeFileSync(path.join(plain, "google-chrome"), "#!/bin/sh\nexit 1\n", { mode: 0o644 });
+  const real = tmp();
+  fs.writeFileSync(path.join(real, "google-chrome"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const doctor = (PATH) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "doctor"], { encoding: "utf8", timeout: 60_000,
+    env: { ...process.env, PATH, LAUNCH_FILM_CHROME: "", CHROME_PATH: "", LAUNCH_FILM_FFMPEG: ffmpeg, LAUNCH_FILM_FFPROBE: ffprobe } });
+  const chromeLine = (r) => r.stdout.split("\n").find((l) => l.startsWith("chrome  "));
+  // The one that may run: doctor starts it, and it stops.
+  assert.match(chromeLine(doctor(`${folder}:${plain}:${real}`)), new RegExp(`^chrome {2}${escape(path.join(real, "google-chrome"))}: `));
+  // None that may: the first is named, with what is wrong with it.
+  assert.equal(chromeLine(doctor(`${folder}:${plain}`)), `chrome  ${path.join(folder, "google-chrome")}, the Chrome it found, is a folder, not a program. Install Google Chrome or Chromium again, or set LAUNCH_FILM_CHROME to the Chrome program itself.`);
+});
+
 test("a program on a disk mounted noexec is refused as that", { skip: asUser || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
   const { dir, film } = where();
   const mount = tmp();
