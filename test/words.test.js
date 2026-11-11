@@ -146,7 +146,7 @@ test("a page that goes to a mailto: address as it loads, or opens one in a windo
       assert.equal(words.headings[0].text, "Notes that think with you", page);
     }
     assert.equal(rec.said(), "", "a program on PATH was started");
-    assert.ok(opened().includes("mailto:hello@acme-notes.example?subject=Hi"));
+    assert.ok(opened().list.includes("mailto:hello@acme-notes.example?subject=Hi"));
     // A plan says so.
     const kit = path.join(tmp(), "kit");
     fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
@@ -214,6 +214,46 @@ test("a page that makes Chrome save a file saves none, by readWords or by a plan
     }
     assert.deepEqual(files(out).filter((name) => /planted/.test(name)), []);
   } finally {
+    server.close();
+  }
+});
+
+// A page can ask for as many such addresses as it likes, each as long as it
+// likes, and a plan noted every one, whole, in memory, in the stand-ins' note
+// and in its output: hundreds of lines and tens of MB.
+test("a plan notes the first five addresses a page asked for, each cut short, and how many more times it asked", { skip: (!findChrome() && "Chrome not found") || (process.platform !== "linux" && "the stand-ins are Linux's"), timeout: 180_000 }, async () => {
+  const rec = recorders();
+  const saved = process.env.PATH;
+  process.env.PATH = `${rec.dir}${path.delimiter}${saved}`;
+  const long = `mailto:${"x".repeat(20000)}@acme-notes.example`;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p><script>
+for (let i = 0; i < 40; i++) { const f = document.createElement("iframe"); f.src = "mailto:a" + i + "@acme-notes.example"; document.body.appendChild(f); }
+for (let i = 0; i < 10; i++) window.open(${JSON.stringify(long)} + i);
+</script>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const kit = path.join(tmp(), "kit");
+    fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
+    const brandFile = path.join(kit, "brand.json");
+    fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url: `http://127.0.0.1:${server.address().port}/` }));
+    const out = tmp();
+    const plan = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--brand", kit, "--out", out], { stdio: ["ignore", "pipe", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      child.on("close", (code) => resolve({ code, said }));
+    });
+    assert.equal(plan.code, 0, plan.said);
+    const notes = plan.said.split("\n").filter((line) => line.startsWith("note: The page tried to open"));
+    assert.ok(notes.length >= 2 && notes.length <= 6, notes.join("\n"));
+    assert.ok(notes.every((line) => line.length < 300), "a note is cut short");
+    assert.match(notes[notes.length - 1], /^note: The page tried to open such an address \d+ more times?: none was opened\.$/);
+    assert.equal(rec.said(), "", "a program on PATH was started");
+  } finally {
+    process.env.PATH = saved;
     server.close();
   }
 });

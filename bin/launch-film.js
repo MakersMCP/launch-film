@@ -355,9 +355,13 @@ async function makePlan(url, flags, run, inputs) {
   // An address no page shows that a page of the site asked for, which
   // Chrome would hand to a program of the machine: on Linux the stand-ins
   // kept it from that (chrome.js), here and in easybrandkit's Chrome.
+  // The first few, and how many more times one was asked for.
   const { opened } = require("../src/chrome");
-  const tried = opened().map((a) => `The page tried to open ${a.length > 120 ? `${a.slice(0, 120)}...` : a}, which is not a web address: ` +
-    `${process.platform === "linux" ? "it was not opened." : "Chrome hands such an address to the system, which may have opened a program for it."}`);
+  const { list, more } = opened();
+  const linux = process.platform === "linux";
+  const tried = list.map((a) => `The page tried to open ${a.length > 120 ? `${a.slice(0, 120)}...` : a}, which is not a web address: ` +
+    `${linux ? "it was not opened." : "Chrome hands such an address to the system, which may have opened a program for it."}`);
+  if (more) tried.push(`The page tried to open such an address ${more} more time${more > 1 ? "s" : ""}: ${linux ? "none was opened." : "Chrome hands each to the system, which may have opened a program for it."}`);
   for (const note of [...brand.notes, ...tried]) say(`note: ${note}\n`);
   say(`Planned ${film.clips.length} clips in the ${film.look} look: ${where(filmFile)}\n`);
   return { filmFile };

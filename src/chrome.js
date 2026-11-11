@@ -101,11 +101,30 @@ function stoppedWhy(code, signal, stderr) {
 // program, so no Chrome starts then. A plan says which addresses a page
 // asked for (opened): those a page of launch-film's Chrome went to or opened
 // a window for, and those that reached a stand-in, as from easybrandkit's.
+// A page can ask for as many as it likes, each as long as it likes: the
+// first NOTED of them are kept, each cut to NOTED_LENGTH characters, and the
+// rest are counted, in memory and in the stand-ins' note alike.
 const OPENERS = ["xdg-open", "xdg-email", "x-www-browser", "www-browser", "sensible-browser", "xdg-settings"];
-const STAND_IN = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${0%/*}/opened\"\nexit 0\n";
+const NOTED = 5;
+const NOTED_LENGTH = 200;
+const STAND_IN = `#!/bin/sh
+d=\${0%/*}
+a=$(printf '%s' "$*" | tr -d '\\r\\n' | head -c ${NOTED_LENGTH})
+grep -qxF -- "$a" "$d/opened" 2>/dev/null && exit 0
+if [ "$(wc -l < "$d/opened" 2>/dev/null || echo 0)" -lt ${NOTED} ]; then printf '%s\\n' "$a" >> "$d/opened"; else printf . >> "$d/more"; fi
+exit 0
+`;
 let openers = null;
-let seen = 0;
 const asked = new Set();
+let askedMore = 0;
+// An address a page of launch-film's Chrome asked for, kept as the
+// stand-ins keep one.
+function ask(url) {
+  const address = String(url).replace(/[\r\n]/g, "").slice(0, NOTED_LENGTH);
+  if (asked.has(address)) return;
+  if (asked.size < NOTED) asked.add(address);
+  else askedMore++;
+}
 // The kinds of address a page shows, or that Chrome keeps to itself: any
 // other it hands to the system.
 const SHOWN = new Set(["http:", "https:", "data:", "blob:", "about:", "javascript:", "file:", "filesystem:", "chrome:", "chrome-error:", "chrome-untrusted:", "devtools:", "view-source:", "ws:", "wss:"]);
@@ -134,8 +153,8 @@ function openerFolder() {
   }
   // The try is not an address a page asked for.
   save(path.join(dir, "opened"), "");
+  fs.rmSync(path.join(dir, "more"), { force: true });
   openers = dir;
-  seen = 0;
   return dir;
 }
 
@@ -146,21 +165,29 @@ function withoutOpeners(env = process.env) {
   return { ...env, PATH: env.PATH ? `${dir}${path.delimiter}${env.PATH}` : `${dir}${path.delimiter}/usr/bin${path.delimiter}/bin` };
 }
 
-// The addresses no page shows that pages asked for since the last call, each
-// once: those launch-film's Chrome saw a page go to or open a window for, and
-// those handed to a stand-in.
+// The addresses no page shows that pages asked for since the last call:
+// those launch-film's Chrome saw a page go to or open a window for, and
+// those handed to a stand-in. { list, more }: the first NOTED, each once,
+// and how many more times one was asked for.
 function opened() {
   let text = "";
-  try {
-    if (openers) text = fs.readFileSync(path.join(openers, "opened"), "utf8");
-  } catch {
-    // None handed on.
+  let more = 0;
+  if (openers) {
+    try {
+      text = fs.readFileSync(path.join(openers, "opened"), "utf8");
+      more = fs.statSync(path.join(openers, "more")).size;
+    } catch {
+      // None handed on, or none past the first.
+    }
+    save(path.join(openers, "opened"), "");
+    fs.rmSync(path.join(openers, "more"), { force: true });
   }
-  const lines = text.slice(seen).split("\n").filter(handedOn);
-  seen = text.length;
-  const all = [...new Set([...asked, ...lines])];
+  const all = [...new Set([...asked, ...text.split("\n").filter(handedOn)])];
+  const list = all.slice(0, NOTED);
+  more += askedMore + all.length - list.length;
   asked.clear();
-  return all;
+  askedMore = 0;
+  return { list, more };
 }
 
 // What Chrome is started with: the browser that renders the clips' pages
@@ -258,7 +285,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
       buf = buf.subarray(i + 1);
       // An address no page shows, that a page went to or opened a window
       // for: Chrome would hand it to the system (above).
-      if ((msg.method === "Page.frameRequestedNavigation" || msg.method === "Page.windowOpen") && msg.params && handedOn(msg.params.url)) asked.add(String(msg.params.url));
+      if ((msg.method === "Page.frameRequestedNavigation" || msg.method === "Page.windowOpen") && msg.params && handedOn(msg.params.url)) ask(msg.params.url);
       if (msg.id && pending.has(msg.id)) {
         const w = pending.get(msg.id);
         pending.delete(msg.id);
