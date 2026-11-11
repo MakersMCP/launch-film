@@ -119,9 +119,16 @@ function webPage(address) {
 // one whose address failed, and one that went on to an address that failed.
 // A page that went on to an address that is no web page's (about:blank) is
 // not read either: its words are not the page's.
+//
+// The Chrome is looked at first, as a command looks at the programs it runs
+// before any work (programs.js): one that cannot be started is told of in
+// those words, and the plan goes on with the words of the page's HTML, as it
+// does when no Chrome is found.
 async function fromChrome(url) {
   const unread = (why) => Object.assign(new Error(why), { unread: true });
   if (!webPage(url)) throw unread("it is not an http or https address");
+  const chrome = require("./programs").check("chrome");
+  if (chrome.problem) throw new Error(chrome.problem);
   const browser = await launch({ W: 1440, H: 900, network: true });
   try {
     const page = await browser.page();
@@ -185,7 +192,7 @@ async function readWords(url, { log = () => {} } = {}) {
       if (seen && (!words || seen.headings.length > words.headings.length)) words = { ...(words || {}), ...seen, jsonld: (words && words.jsonld) || [] };
     } catch (err) {
       if (err.unread) why = err.message;
-      log(`Chrome could not read the page (${err.message}).\n`);
+      log(`Chrome could not read the page (${err.message.replace(/\.$/, "")}).\n`);
     }
   }
   if (!words) throw new Error(`the page ${url} could not be read (${why}): check the address and the network, or give a words.json with --words`);

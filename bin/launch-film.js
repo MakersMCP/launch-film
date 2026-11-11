@@ -165,16 +165,17 @@ function unusable(flags, command) {
 
 // The programs a command runs, looked at before any work (programs.js): one
 // that cannot be started stops it there, named with what is wrong with it. A
-// plan reads the page in Chrome only when its HTML lacks the words, and a
-// store listing's pictures with ffmpeg only when easybrandkit could not read
-// them: it looks at the Chrome a variable names, and at ffmpeg and ffprobe
-// for a store's address.
+// plan alone starts launch-film's Chrome only to read the page's words when
+// its HTML lacks them, and goes on with the HTML's words when that Chrome
+// cannot start (words.js), so it looks at that Chrome only then; easybrandkit
+// looks at its own. It runs ffmpeg and ffprobe only for a store's address,
+// when easybrandkit could not read the listing's pictures.
 function programsOf(takes, address) {
   if (["<url>", "render", "stills", "stills <film.json>"].includes(takes)) return ["ffmpeg", "ffprobe", "chrome"];
   if (takes === "check" || takes === "frames") return ["ffmpeg", "ffprobe"];
   if (takes !== "plan") return [];
   const { isStoreUrl } = require("../src/store");
-  return [...(address && isStoreUrl(address) ? ["ffmpeg", "ffprobe"] : []), ...(process.env.LAUNCH_FILM_CHROME || process.env.CHROME_PATH ? ["chrome"] : [])];
+  return address && isStoreUrl(address) ? ["ffmpeg", "ffprobe"] : [];
 }
 
 // Why an argument past the ones a command reads is refused, or null. A first
@@ -238,24 +239,35 @@ function folderFor(url, flags) {
   return path.resolve(flags.out || `launch-film-${host.replace(/[^a-z0-9.-]/gi, "-")}`);
 }
 
-// Reads the brand and the page and plans the film, in the run's part
-// folder: brand/, words.json and film.json take the place of the folder's
-// own when the run ends well.
-async function makePlan(url, flags, run) {
-  const { runEasybrandkit, readBrand } = require("../src/brand");
-  const { readWords, webPage } = require("../src/words");
-  const { planFilm } = require("../src/plan");
-  const { isStoreUrl, appStoreId, storeBrand } = require("../src/store");
-  // A words.json given is read first, so a wrong one stops the run before
-  // anything is fetched.
-  let given = null;
+// What a plan is given, read before anything else, the programs it runs
+// too: the words.json of --words, and the brand.json of the kit --brand
+// names. A wrong one refuses the plan before anything is fetched or started.
+function planArgs(flags) {
+  let words = null;
   if (flags.words) {
     try {
-      given = JSON.parse(fs.readFileSync(path.resolve(flags.words), "utf8"));
+      words = JSON.parse(fs.readFileSync(path.resolve(flags.words), "utf8"));
     } catch (err) {
       throw new Error(`--words ${flags.words}: ${err.code === "ENOENT" ? "no such file" : err.message}`);
     }
   }
+  let brandFile = null;
+  if (flags.brand) {
+    brandFile = path.resolve(flags.brand);
+    if (isDir(brandFile)) brandFile = path.join(brandFile, "brand.json");
+    if (!fs.existsSync(brandFile)) throw new Error(`no brand.json at ${brandFile}`);
+  }
+  return { words, brandFile };
+}
+
+// Reads the brand and the page and plans the film, in the run's part
+// folder: brand/, words.json and film.json take the place of the folder's
+// own when the run ends well. `inputs` is what planArgs read.
+async function makePlan(url, flags, run, inputs) {
+  const { runEasybrandkit, readBrand } = require("../src/brand");
+  const { readWords, webPage } = require("../src/words");
+  const { planFilm } = require("../src/plan");
+  const { isStoreUrl, appStoreId, storeBrand } = require("../src/store");
   // The film refers to the brand by a path from its own folder. A kit is
   // copied as plain files, every link in it followed, so nothing this run
   // does to the copy reaches where a link leads (a brand/ that links to a
@@ -276,12 +288,9 @@ async function makePlan(url, flags, run) {
   };
   let brandFile;
   let storeWords = null;
-  if (flags.brand) {
-    brandFile = path.resolve(flags.brand);
-    if (isDir(brandFile)) brandFile = path.join(brandFile, "brand.json");
-    if (!fs.existsSync(brandFile)) throw new Error(`no brand.json at ${brandFile}`);
-    copy(path.dirname(brandFile));
-    brandFile = path.join(local, path.basename(brandFile));
+  if (inputs.brandFile) {
+    copy(path.dirname(inputs.brandFile));
+    brandFile = path.join(local, path.basename(inputs.brandFile));
   } else {
     // easybrandkit makes its kit again where an earlier one is, keeping the
     // files that are not a kit's: it works on a copy of the folder's own,
@@ -321,7 +330,7 @@ async function makePlan(url, flags, run) {
   // A kit made from an App Store page carries the listing's description.
   if (!storeWords && brand.app && brand.stores[0]) storeWords = require("../src/store").wordsFromListing({ name: brand.name, description: brand.stores[0].description });
   let words;
-  if (flags.words) words = given;
+  if (flags.words) words = inputs.words;
   else if (storeWords) words = storeWords;
   else {
     // The page is the kit's own address, else the one given. A kit whose
@@ -456,10 +465,14 @@ async function main() {
   // The programs the command runs can be started (programs.js), looked at
   // once what the command was given has been: a command given wrong is told
   // so first. A Ctrl-C that ended one as it was asked its version is told of
-  // as the stop (failed).
+  // as the stop (failed). A plan that may start a Chrome, easybrandkit's or
+  // its own for the page's words, as it may unless it is given both --brand
+  // and --words, tries the stand-ins that Chrome gets first (chrome.js): on
+  // a temp folder where they cannot run, it stops here, not as it starts one.
   const ready = (address = null) => {
     const program = require("../src/programs").unstartable(programsOf(takes, address));
     if (program) throw new Error(program);
+    if (address && !(flags.brand && flags.words)) require("../src/chrome").standIns();
   };
   if (command === "render") {
     if (!rest[0]) return fail("give the film.json to render");
@@ -496,10 +509,11 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      ready();
+      const inputs = planArgs(flags);
+      ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
-        const { filmFile } = await makePlan(url, flags, run);
+        const { filmFile } = await makePlan(url, flags, run, inputs);
         return makeStills(filmFile, { targets: flags.for, log: say });
       });
     }
@@ -510,10 +524,11 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
+  const inputs = planArgs(flags);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {
-    const { filmFile } = await makePlan(url, flags, run);
+    const { filmFile } = await makePlan(url, flags, run, inputs);
     if (isPlan) return;
     const result = await render(filmFile, flags);
     await frames(result.output, { out: path.join(run.part, "frames") });

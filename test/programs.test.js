@@ -244,3 +244,75 @@ test("a render that runs out of file descriptors as it starts a clip's encoder s
   assert.deepEqual(fs.readdirSync(folder), ["film.json"]);
   assert.deepEqual(fs.readdirSync(temp), []);
 });
+
+// Each command looks at the programs it runs before any work: frames at
+// ffmpeg and ffprobe, stills and the one-go command at Chrome too, a plan of
+// a store's address at ffmpeg and ffprobe. render and check are held above.
+test("frames, stills, the one-go command and a plan of a store's address look at the programs they run before any work", { skip }, () => {
+  const { dir, film, folder } = where();
+  const fixture = path.join(__dirname, "fixtures", "acme");
+  const words = path.join(fixture, "words.json");
+  const nothing = path.join(tmp(), "nothing");
+  const cases = [
+    ["frames", [film, "--out", path.join(dir, "frames-none")], "ffprobe", path.join(dir, "frames-none")],
+    ["stills of a film.json", ["stills", path.join(folder, "film.json")], "chrome", path.join(folder, "stills")],
+    ["stills of an address", ["stills", "acme-notes.example", "--brand", fixture, "--words", words, "--out", path.join(dir, "stills-none")], "chrome", path.join(dir, "stills-none")],
+    ["the one-go command", ["acme-notes.example", "--brand", fixture, "--words", words, "--out", path.join(dir, "go-none")], "chrome", path.join(dir, "go-none")],
+    ["a plan of a store's address", ["plan", "https://apps.apple.com/us/app/acme/id1234567890", "--out", path.join(dir, "store-none")], "ffprobe", path.join(dir, "store-none")],
+  ];
+  for (const [name, args, program, out] of cases) {
+    const temp = tmp();
+    const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...(name === "frames" ? ["frames"] : []), ...args], { encoding: "utf8", timeout: 60_000,
+      env: { ...process.env, TMPDIR: temp, [VARIABLE[program]]: nothing } });
+    assert.equal(r.status, 1, `${name}: ${r.stderr}`);
+    assert.equal(r.stderr, `launch-film: ${LEAD[program]}${VARIABLE[program]} points to ${nothing}, which is not there. ${SET[program]}\n`, name);
+    assert.ok(!fs.existsSync(out), `${name}: ${out} was made`);
+    assert.deepEqual(fs.readdirSync(temp), [], `${name}: left in the temp folder`);
+  }
+  // A command given wrong is told so first, a plan's kit and words too.
+  const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://apps.apple.com/us/app/acme/id1234567890", "--brand", folder, "--out", path.join(dir, "store-none")],
+    { encoding: "utf8", timeout: 60_000, env: { ...process.env, LAUNCH_FILM_FFPROBE: nothing } });
+  assert.equal(r.stderr, `launch-film: no brand.json at ${path.join(folder, "brand.json")}\n`);
+});
+
+// A plan given its kit and the page's words starts no Chrome, so a Chrome
+// that cannot be started is nothing to it. One that reads the page in
+// Chrome, as one given a kit and no words does when the page's HTML has too
+// few headings, looks at that Chrome as it is about to start it, and goes on
+// with the words of the HTML.
+test("a plan looks at Chrome only as it is about to start it to read the page, and goes on without it", { skip: asUser }, async () => {
+  const http = require("http");
+  const { dir } = where();
+  const { cases } = where();
+  const noRun = cases.find((k) => k.name === "a file without the execute bit").file;
+  const fixture = path.join(__dirname, "fixtures", "acme");
+  const plan = (args, env) => spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", ...args], { encoding: "utf8", timeout: 120_000, env: { ...process.env, ...env } });
+  const given = plan(["--brand", fixture, "--words", path.join(fixture, "words.json"), "--out", path.join(dir, "given")], { LAUNCH_FILM_CHROME: noRun, CHROME_PATH: noRun });
+  assert.equal(given.status, 0, given.stderr);
+  assert.match(given.stderr, /^Planned \d+ clips in the \w+ look: /m);
+  // A page whose HTML holds one heading.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end('<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p>');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const kit = path.join(tmp(), "kit");
+    fs.cpSync(fixture, kit, { recursive: true });
+    const brandFile = path.join(kit, "brand.json");
+    fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url: `http://127.0.0.1:${server.address().port}/` }));
+    const read = await new Promise((resolve) => {
+      const child = require("child_process").spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--brand", kit, "--out", path.join(dir, "read")],
+        { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LAUNCH_FILM_CHROME: noRun } });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      child.on("close", (code) => resolve({ code, said }));
+    });
+    assert.equal(read.code, 0, read.said);
+    assert.ok(read.said.includes(`Chrome could not read the page (${LEAD.chrome}LAUNCH_FILM_CHROME points to ${noRun}, which is a file without the permission to run it, which chmod +x gives. ${SET.chrome.replace(/\.$/, "")}).\n`), read.said);
+    assert.match(read.said, /^Planned \d+ clips in the \w+ look: /m);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "read", "words.json"), "utf8")).headings[0].text, "Notes that think with you");
+  } finally {
+    server.close();
+  }
+});

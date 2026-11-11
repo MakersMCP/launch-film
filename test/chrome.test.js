@@ -358,4 +358,16 @@ test("no Chrome starts where the stand-ins for xdg-open and the like cannot be r
   assert.equal(render.status, 1, render.stderr);
   assert.match(render.stderr.replace(/^launch-film: /, ""), said);
   assert.deepEqual(fs.readdirSync(dir), ["film.json"]);
+  // A plan that may start a Chrome, as one easybrandkit reads the site for
+  // does, says so before any work too, where it began and failed as it
+  // started easybrandkit. One given its kit and the page's words starts none.
+  const fixture = path.join(__dirname, "fixtures", "acme");
+  const out = path.join(tmp(), "film");
+  const plan = inside(path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", out, "--easybrandkit", path.join(tmp(), "easybrandkit.js"));
+  assert.equal(plan.status, 1, plan.stderr);
+  assert.match(plan.stderr.replace(/^launch-film: /, ""), said);
+  assert.ok(!fs.existsSync(out));
+  const given = inside(path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--out", out, "--brand", fixture, "--words", path.join(fixture, "words.json"));
+  assert.equal(given.status, 0, given.stderr);
+  assert.ok(fs.existsSync(path.join(out, "film.json")));
 });

@@ -112,8 +112,19 @@ function planFails(args, said) {
   assert.deepEqual(snap(dir), before);
 }
 
-test("a plan given another kit and a words.json that is not there leaves the folder as it was", () => {
-  planFails(["--brand", otherKit(), "--words", path.join(os.tmpdir(), "launch-film-no-such-words.json")], /--words .*no-such-words\.json: no such file/);
+// A plan reads what it is given before any work, so a words.json that is not
+// there, or a kit with no brand.json, refuses it before it begins: the
+// folder is as it was and the refusal says only why.
+test("a plan given another kit and a words.json that is not there, or a kit with no brand.json, is refused before it begins", () => {
+  for (const [args, said] of [[["--brand", otherKit(), "--words", path.join(os.tmpdir(), "launch-film-no-such-words.json")], `--words ${path.join(os.tmpdir(), "launch-film-no-such-words.json")}: no such file`],
+    [["--brand", tmp()], "no brand.json at "]]) {
+    const dir = filmFolder();
+    const before = snap(dir);
+    const r = cli("plan", "https://acme-notes.example", "--out", dir, ...args);
+    assert.equal(r.status, 1, r.stderr);
+    assert.ok(r.stderr.startsWith(`launch-film: ${said}`) && r.stderr.split("\n").length === 2, r.stderr);
+    assert.deepEqual(snap(dir), before);
+  }
 });
 
 test("a plan whose easybrandkit fails leaves the folder's kit as it was", () => {
