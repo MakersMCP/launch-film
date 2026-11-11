@@ -22,6 +22,20 @@ test("help, looks and types", () => {
   assert.match(cli("icons", "rocket").stdout, /rocket-launch/);
 });
 
+// A reader that closes early, as head does once it has its lines, left the
+// lists to end in Node's stack trace on the write that failed.
+test("looks, types, icons and help end without a word when their reader stops reading", async () => {
+  for (const args of [["types"], ["looks"], ["icons", "a"], ["--help"]]) {
+    const child = spawn(process.execPath, [path.join(root, "bin", "launch-film.js"), ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    // Closed before the command writes, so every write it makes fails.
+    child.stdout.destroy();
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    const [code, signal] = await new Promise((resolve) => child.on("close", (...ended) => resolve(ended)));
+    assert.deepEqual([code, signal, stderr], [0, null, ""], args.join(" "));
+  }
+});
+
 test("a bad address is refused plainly", () => {
   const r = cli("not a url");
   assert.equal(r.status, 1);

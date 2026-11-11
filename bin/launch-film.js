@@ -410,6 +410,13 @@ async function main() {
   const { _: args, flags, given, bare, valued } = parseArgs(process.argv.slice(2));
   // Ctrl-C or a signal stops the run and leaves its folder as it was.
   listen();
+  // A reader that stops reading, as head does once it has its lines, leaves
+  // nothing to write to: the command ends as it would have, without a word,
+  // where the write that failed ended it in Node's stack trace.
+  process.stdout.on("error", (err) => {
+    if (err.code !== "EPIPE") throw err;
+    exit(process.exitCode || 0);
+  });
   if (flags.version) {
     process.stdout.write(`${require("../package.json").version}\n`);
     return;
