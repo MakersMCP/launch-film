@@ -31,7 +31,7 @@ Then read, in this order:
 - `film/<name>/words.json`: the page's title, description, headings and the line under each heading.
 - `film/<name>/film.json`: the plan.
 
-If the brand looks wrong (a cookie wall, a login page, no logo), tell the user what you got and ask for the logo file or the right page. Do not go on with a wrong brand. If the site answered easybrandkit with a bot check, there is no kit: ask the user for the logo file and the main colors instead of guessing.
+If the brand looks wrong (a cookie wall, a login page, no logo), tell the user what you got and ask for the logo file or the right page. A note that the page tried to open an address that is not a web address, such as mailto:, means the site asked the browser to start a program, and none was started. Do not go on with a wrong brand. If the site answered easybrandkit with a bot check, there is no kit: ask the user for the logo file and the main colors instead of guessing.
 
 If launch-film says easybrandkit could not be fetched, npx could not download it (no network, or a registry without it): tell the user they can install it with `npm install -g easybrandkit`, and use `--easybrandkit <path to easybrandkit's skills/easybrandkit/scripts/easybrandkit.js>` when they have a copy.
 

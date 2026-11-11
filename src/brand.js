@@ -8,7 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { onPath } = require("./chrome");
+const { onPath, withoutOpeners } = require("./chrome");
 const { track, tempDir, tempEnv, release, stopping } = require("./out");
 const confine = require("./confine");
 
@@ -110,9 +110,18 @@ function runOnce([cmd, ...pre], url, dir, log) {
       done();
       reject(new Error(`easybrandkit could not be started (${e.message}). ${HOW}`));
     };
+    // The Chrome easybrandkit starts takes its environment, and with it the
+    // stand-ins that keep a page from starting a program (chrome.js).
+    let env;
+    try {
+      env = withoutOpeners(tempEnv(temp));
+    } catch (err) {
+      done();
+      return reject(err);
+    }
     let child;
     try {
-      child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"], env: tempEnv(temp) }), { watch: true });
+      child = track(spawn(cmd, [...pre, url, "--out", dir], { stdio: ["ignore", "pipe", "pipe"], env }), { watch: true });
     } catch (e) {
       // A .cmd file on Windows, given without a shell.
       return unstarted(e);

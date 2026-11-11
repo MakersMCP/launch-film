@@ -326,7 +326,13 @@ async function makePlan(url, flags, run) {
   if (flags.sfx === false) film.sfx = false;
   const filmFile = run.out("film.json");
   save(filmFile, JSON.stringify(film, null, 2) + "\n");
-  for (const note of brand.notes) say(`note: ${note}\n`);
+  // An address no page shows that a page of the site asked for, which
+  // Chrome would hand to a program of the machine: on Linux the stand-ins
+  // kept it from that (chrome.js), here and in easybrandkit's Chrome.
+  const { opened } = require("../src/chrome");
+  const tried = opened().map((a) => `The page tried to open ${a.length > 120 ? `${a.slice(0, 120)}...` : a}, which is not a web address: ` +
+    `${process.platform === "linux" ? "it was not opened." : "Chrome hands such an address to the system, which may have opened a program for it."}`);
+  for (const note of [...brand.notes, ...tried]) say(`note: ${note}\n`);
   say(`Planned ${film.clips.length} clips in the ${film.look} look: ${where(filmFile)}\n`);
   return { filmFile };
 }

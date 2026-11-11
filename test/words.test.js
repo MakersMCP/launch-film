@@ -4,9 +4,12 @@ const assert = require("node:assert/strict");
 const http = require("http");
 const net = require("net");
 const { fromHtml, decode, readWords, fromChrome, webPage } = require("../src/words");
-const { findChrome, chromeArgs } = require("../src/chrome");
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const { findChrome, chromeArgs, opened, OPENERS } = require("../src/chrome");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-require("./tmp");
+const { tmp } = require("./tmp");
 
 const PAGE = `<!doctype html><html lang="en-US"><head>
 <title>Acme Notes | Notes that think with you</title>
@@ -110,6 +113,57 @@ test("a page that goes on to an address that is not a web page's is not read in 
     assert.equal(words.title, "Acme Notes");
     assert.deepEqual(words.paragraphs, ["Write once and find it anywhere."]);
   } finally {
+    server.close();
+  }
+});
+
+// Chrome hands a mailto:, news: or snews: address to xdg-email or xdg-open,
+// found on PATH, without asking: a page that went to mailto: as it loaded
+// started the user's mail program. These stand-ins come first on PATH and
+// only note how they were started, so even without launch-film's own, no
+// real program starts here.
+function recorders() {
+  const dir = tmp();
+  const log = path.join(dir, "log");
+  for (const name of OPENERS) fs.writeFileSync(path.join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' "$0" "$*" >> '${log}'\n`, { mode: 0o755 });
+  return { dir, said: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "") };
+}
+
+test("a page that goes to a mailto: address as it loads, or opens one in a window, starts no program, and a plan says the page tried", { skip: (!findChrome() && "Chrome not found") || (process.platform !== "linux" && "the stand-ins are Linux's"), timeout: 180_000 }, async () => {
+  const rec = recorders();
+  const saved = process.env.PATH;
+  process.env.PATH = `${rec.dir}${path.delimiter}${saved}`;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    const go = req.url === "/open" ? 'window.open("mailto:open@acme-notes.example")' : 'location.href = "mailto:hello@acme-notes.example?subject=Hi"';
+    res.end(`<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p><script>${go};</script>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    for (const page of ["/load", "/open"]) {
+      const words = await readWords(`${base}${page}`);
+      assert.equal(words.headings[0].text, "Notes that think with you", page);
+    }
+    assert.equal(rec.said(), "", "a program on PATH was started");
+    assert.ok(opened().includes("mailto:hello@acme-notes.example?subject=Hi"));
+    // A plan says so.
+    const kit = path.join(tmp(), "kit");
+    fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
+    const brandFile = path.join(kit, "brand.json");
+    fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url: `${base}/load` }));
+    const out = tmp();
+    const plan = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--brand", kit, "--out", out], { stdio: ["ignore", "pipe", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      child.on("close", (code) => resolve({ code, said }));
+    });
+    assert.equal(plan.code, 0, plan.said);
+    assert.match(plan.said, /^note: The page tried to open mailto:hello@acme-notes\.example\?subject=Hi, which is not a web address: it was not opened\.$/m);
+    assert.equal(rec.said(), "", "a program on PATH was started");
+  } finally {
+    process.env.PATH = saved;
     server.close();
   }
 });

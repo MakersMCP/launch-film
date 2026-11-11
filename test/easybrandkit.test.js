@@ -136,7 +136,8 @@ fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(out + "/brand.json", "{}");`);
   const saw = path.join(dir, "saw");
   const brand = JSON.stringify(path.join(__dirname, "..", "src", "brand.js"));
-  const r = spawnSync(process.execPath, ["-e", `require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: process.argv[2] }).then(() => process.stdout.write(String(require("fs").readdirSync(require("os").tmpdir()).length)));`, path.join(dir, "out"), fake],
+  // The stand-ins easybrandkit's Chrome gets (chrome.js) stay for the run.
+  const r = spawnSync(process.execPath, ["-e", `require(${brand}).runEasybrandkit("https://example.com", process.argv[1], { command: process.argv[2] }).then(() => process.stdout.write(String(require("fs").readdirSync(require("os").tmpdir()).filter((n) => !n.startsWith("launch-film-bin-")).length)));`, path.join(dir, "out"), fake],
     { encoding: "utf8", env: { ...process.env, TMPDIR: temp, SAW: saw } });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, "0", "it goes as soon as easybrandkit has ended");
@@ -150,4 +151,27 @@ test("a temp folder too long for Chrome's socket is not given", { skip: process.
   assert.equal(tempEnv("/".padEnd(room, "x")).TMPDIR, "/".padEnd(room, "x"));
   assert.equal(tempEnv("/".padEnd(room + 1, "x")).TMPDIR, process.env.TMPDIR);
   assert.equal(tempEnv(null).TMPDIR, process.env.TMPDIR);
+});
+
+// easybrandkit 0.4.0 starts a Chrome of its own with its own environment, so
+// the stand-ins that keep a page from starting a program (chrome.js) reach
+// that Chrome through easybrandkit's PATH, the rest of PATH as it was.
+test("easybrandkit runs with the stand-ins for xdg-open and the like first on its PATH, on Linux", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, async () => {
+  const dir = tmp();
+  const fake = path.join(dir, "easybrandkit.js");
+  const saw = path.join(dir, "path");
+  fs.writeFileSync(fake, `const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(saw)}, process.env.PATH);
+const out = process.argv[process.argv.indexOf("--out") + 1];
+fs.mkdirSync(out, { recursive: true });
+fs.writeFileSync(out + "/brand.json", "{}");`);
+  await runEasybrandkit("https://example.com", path.join(dir, "out"), { command: fake });
+  const [first, ...rest] = fs.readFileSync(saw, "utf8").split(path.delimiter);
+  assert.match(path.basename(first), /^launch-film-bin-\d+-/);
+  assert.equal(rest.join(path.delimiter), process.env.PATH);
+  const { OPENERS } = require("../src/chrome");
+  for (const name of OPENERS) {
+    const r = spawnSync(path.join(first, name), ["mailto:hello@acme-notes.example"], { encoding: "utf8" });
+    assert.deepEqual([r.status, r.stdout, r.stderr], [0, "", ""], name);
+  }
 });

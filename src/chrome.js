@@ -16,6 +16,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
+const { getSystemErrorMap } = require("util");
 const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save } = require("./out");
 
 // A wait on Chrome that ran out, said with what to do: a machine too busy for
@@ -76,6 +77,83 @@ function stoppedWhy(code, signal, stderr) {
   return `Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`;
 }
 
+// ─── addresses that are no web page's ──────────────────────────────────────
+// Chrome hands an address of a kind no page shows to the system, and a
+// mailto:, news: or snews: one without asking: on Linux to xdg-email or
+// xdg-open, which it finds on PATH. A page that went to mailto: as it loaded
+// started the user's mail program, and on a server ran xdg-open with the
+// site's address. So every Chrome launch-film starts, and the one
+// easybrandkit starts for it (brand.js), has a folder of stand-ins first on
+// its PATH, in a temp folder of the run's own, for each program Chrome or
+// xdg-open hands such an address to, and for xdg-settings, which Chrome asks
+// first which program takes its kind. A stand-in starts nothing and ends
+// well, and notes what it was given beside it. Linux only: macOS and Windows hand
+// the address to the system by no PATH, and no switch of Chrome's,
+// preference of its profile or call of the DevTools protocol stops these
+// three kinds there (README). A stand-in that cannot be run, from a temp
+// folder on a disk mounted noexec, would be passed over for the real
+// program, so no Chrome starts then. A plan says which addresses a page
+// asked for (opened): those a page of launch-film's Chrome went to or opened
+// a window for, and those that reached a stand-in, as from easybrandkit's.
+const OPENERS = ["xdg-open", "xdg-email", "x-www-browser", "www-browser", "sensible-browser", "xdg-settings"];
+const STAND_IN = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${0%/*}/opened\"\nexit 0\n";
+let openers = null;
+let seen = 0;
+const asked = new Set();
+// The kinds of address a page shows, or that Chrome keeps to itself: any
+// other it hands to the system.
+const SHOWN = new Set(["http:", "https:", "data:", "blob:", "about:", "javascript:", "file:", "filesystem:", "chrome:", "chrome-error:", "chrome-untrusted:", "devtools:", "view-source:", "ws:", "wss:"]);
+function handedOn(url) {
+  try {
+    return !SHOWN.has(new URL(String(url)).protocol);
+  } catch {
+    return false;
+  }
+}
+function openerFolder() {
+  if (process.platform !== "linux") return null;
+  if (openers && fs.existsSync(path.join(openers, "opened"))) return openers;
+  const dir = tempDir("launch-film-bin-");
+  for (const name of OPENERS) save(path.join(dir, name), name === "xdg-settings" ? "#!/bin/sh\nexit 0\n" : STAND_IN);
+  for (const name of OPENERS) fs.chmodSync(path.join(dir, name), 0o700);
+  const tried = require("child_process").spawnSync(path.join(dir, OPENERS[0]), [], { timeout: 10_000 });
+  if (tried.error || tried.status !== 0) {
+    release(dir);
+    const why = tried.error && `${(getSystemErrorMap().get(tried.error.errno) || [])[1] || tried.error.code} (${tried.error.code})`;
+    throw new Error(`launch-film could not run its stand-ins for xdg-open in ${dir}${why ? ` (${why})` : ""}, which keep a page from starting a program of the machine's: ` +
+      "set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none");
+  }
+  // The try is not an address a page asked for.
+  save(path.join(dir, "opened"), "");
+  openers = dir;
+  seen = 0;
+  return dir;
+}
+
+// The environment `env` with the stand-ins first on its PATH (Linux).
+function withoutOpeners(env = process.env) {
+  const dir = openerFolder();
+  if (!dir) return env;
+  return { ...env, PATH: env.PATH ? `${dir}${path.delimiter}${env.PATH}` : `${dir}${path.delimiter}/usr/bin${path.delimiter}/bin` };
+}
+
+// The addresses no page shows that pages asked for since the last call, each
+// once: those launch-film's Chrome saw a page go to or open a window for, and
+// those handed to a stand-in.
+function opened() {
+  let text = "";
+  try {
+    if (openers) text = fs.readFileSync(path.join(openers, "opened"), "utf8");
+  } catch {
+    // None handed on.
+  }
+  const lines = text.slice(seen).split("\n").filter(handedOn);
+  seen = text.length;
+  const all = [...new Set([...asked, ...lines])];
+  asked.clear();
+  return all;
+}
+
 // What Chrome is started with: the browser that renders the clips' pages
 // (offline), or the one that reads a site's words (network).
 function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
@@ -102,6 +180,8 @@ function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
 async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome was not found. Install Google Chrome or Chromium, or set LAUNCH_FILM_CHROME to its path.");
+  // The stand-ins first, so a temp folder they cannot run in starts no Chrome.
+  openerFolder();
   // Removed with the socket folder Chrome links from it, however the run
   // ends: Chrome killed by a stop leaves that folder in the temp folder.
   let socket = null;
@@ -110,7 +190,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // A Chrome with network access, stopped as it starts, leaves a
   // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
   // its profile as TMPDIR, that goes with the profile.
-  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: network ? tempEnv(profile) : process.env }));
+  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(network ? tempEnv(profile) : process.env) }));
   let stderr = "";
   child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
   const pending = new Map();
@@ -153,6 +233,9 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     while ((i = buf.indexOf(0)) >= 0) {
       const msg = JSON.parse(buf.subarray(0, i).toString("utf8"));
       buf = buf.subarray(i + 1);
+      // An address no page shows, that a page went to or opened a window
+      // for: Chrome would hand it to the system (above).
+      if ((msg.method === "Page.frameRequestedNavigation" || msg.method === "Page.windowOpen") && msg.params && handedOn(msg.params.url)) asked.add(String(msg.params.url));
       if (msg.id && pending.has(msg.id)) {
         const w = pending.get(msg.id);
         pending.delete(msg.id);
@@ -487,4 +570,4 @@ async function snapshots(pages) {
   return out;
 }
 
-module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, CLOCK, PAGE_FILE_MAX };
+module.exports = { findChrome, onPath, chromeArgs, launch, openPage, renderPage, stillOf, snapshots, evaluate, standIns: openerFolder, withoutOpeners, opened, CLOCK, PAGE_FILE_MAX, OPENERS };
