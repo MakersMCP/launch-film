@@ -344,7 +344,7 @@ test("a page file Chrome refuses fails the page at once, with Chrome's words", {
 // the system then starts the real xdg-open past them: no Chrome starts.
 test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
   const mount = tmp();
-  const said = new RegExp(`^launch-film could not run its stand-ins for xdg-open in ${escape(mount)}/launch-film-bin-\\d+-\\w+ \\(permission denied \\(EACCES\\)\\), which keep a page from starting a program of the machine's: set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none\\n$`);
+  const said = new RegExp(`^launch-film could not run its stand-ins for xdg-open in ${escape(mount)}/launch-film-bin-\\d+-\\w+ \\(permission denied, EACCES\\), which keep a page from starting a program of the machine's: set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none\\n$`);
   // A Chrome of the test's own, so the one this machine may not have is not needed.
   const chrome = path.join(tmp(), "chrome");
   fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });

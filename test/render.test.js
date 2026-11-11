@@ -394,7 +394,7 @@ test("a render whose ffmpeg cannot be started says so in a line of its own befor
   for (const output of [[], ["--output", path.join(dir, "film.avi")]]) {
     const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1", ...output], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: path.join(dir, "no-such-ffmpeg") } });
     assert.equal(r.status, 1, r.stderr);
-    assert.equal(r.stderr, `launch-film: launch-film needs ffmpeg, and LAUNCH_FILM_FFMPEG points to ${path.join(dir, "no-such-ffmpeg")}, which is not there. ` +
+    assert.equal(r.stderr, `launch-film needs ffmpeg, and LAUNCH_FILM_FFMPEG points to ${path.join(dir, "no-such-ffmpeg")}, which is not there. ` +
       "Set LAUNCH_FILM_FFMPEG to an ffmpeg 4.4 or newer, or unset it and install one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).\n", output.join(" "));
   }
   assert.deepEqual(snap(dir), before);
@@ -473,7 +473,7 @@ test("a Chrome too slow to answer, or one that cannot be started, ends the rende
   fs.chmodSync(chrome, 0o644);
   const none = render({});
   assert.equal(none.status, 1, none.stderr);
-  assert.equal(none.stderr, `launch-film: launch-film needs Chrome, and LAUNCH_FILM_CHROME points to ${chrome}, which is a file without the permission to run it, which chmod +x gives. ` +
+  assert.equal(none.stderr, `launch-film needs Chrome, and LAUNCH_FILM_CHROME points to ${chrome}, which is a file without the permission to run it, which chmod +x gives. ` +
     "Set LAUNCH_FILM_CHROME to the Chrome program itself, or unset it and install Google Chrome or Chromium.\n");
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(snap(two), beforeTwo);

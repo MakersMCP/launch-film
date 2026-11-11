@@ -691,7 +691,7 @@ test("a track or a picture that ffmpeg or ffprobe will not open is refused in th
   assert.equal(screen.stderr, `launch-film: ${path.join(dir, "50% off.png")} could not be read as a picture (ffprobe failed: kits ffprobe: ${path.join(dir, "50% off.png")}: an input named with % or ending in .y is not opened)\nlaunch-film: ${dir} is as it was.\n`);
   // With no ffprobe at all, it says so before any work.
   const none = cliWith({ LAUNCH_FILM_FFPROBE: path.join(dir, "no-such-ffprobe"), LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
-  assert.equal(none.stderr, `launch-film: launch-film needs ffprobe, and LAUNCH_FILM_FFPROBE points to ${path.join(dir, "no-such-ffprobe")}, which is not there. ` +
+  assert.equal(none.stderr, `launch-film needs ffprobe, and LAUNCH_FILM_FFPROBE points to ${path.join(dir, "no-such-ffprobe")}, which is not there. ` +
     "Set LAUNCH_FILM_FFPROBE to the ffprobe of an ffmpeg 4.4 or newer, or unset it and install ffmpeg, which comes with one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).\n");
   assert.deepEqual(snap(dir), before);
   assert.ok(!chrome.started(), "no Chrome was started");
@@ -905,7 +905,8 @@ test("an option a command does not take, or a value it cannot use, is refused by
   ]) {
     const r = cli(...args);
     assert.equal(r.status, 1, args.join(" "));
-    assert.equal(r.stderr, `launch-film: ${said}\n`, args.join(" "));
+    // A message that names launch-film first says it once.
+    assert.equal(r.stderr, `${said.startsWith("launch-film ") ? "" : "launch-film: "}${said}\n`, args.join(" "));
   }
   assert.deepEqual(fs.readdirSync(dir), []);
 });
@@ -965,7 +966,8 @@ test("a word that starts with a dash and an argument past the ones a command rea
   ]) {
     const r = cli(...args);
     assert.equal(r.status, 1, args.join(" "));
-    assert.equal(r.stderr, `launch-film: ${said}\n`, args.join(" "));
+    // A message that names launch-film first says it once.
+    assert.equal(r.stderr, `${said.startsWith("launch-film ") ? "" : "launch-film: "}${said}\n`, args.join(" "));
   }
   assert.deepEqual(fs.readdirSync(dir), []);
   // A first word that is neither a command nor an address is told of as that.

@@ -63,7 +63,7 @@ function run(program, env) {
 function refused(r, said, name) {
   assert.equal(r.status, 1, `${name}: ${r.stderr}`);
   if (said instanceof RegExp) assert.match(r.stderr, said, name);
-  else assert.equal(r.stderr, `launch-film: ${said}\n`, name);
+  else assert.equal(r.stderr, `${said.startsWith("launch-film ") ? "" : "launch-film: "}${said}\n`, name);
   assert.ok(!r.made, `${name}: a folder was made`);
   assert.deepEqual(r.left, [], `${name}: left in the temp folder`);
 }
@@ -83,7 +83,7 @@ for (const name of NAMES) {
     try {
       for (const program of ["ffmpeg", "ffprobe", "chrome"].filter((p) => !c.only || c.only === p)) {
         const r = run(program, { [VARIABLE[program]]: c.file });
-        const said = c.said instanceof RegExp ? new RegExp(`^launch-film: ${escape(`${LEAD[program]}${VARIABLE[program]} points to ${c.file}, `)}${c.said.source.replace(/^\^/, "")}.*\\. ${escape(SET[program])}\\n$`)
+        const said = c.said instanceof RegExp ? new RegExp(`^${escape(`${LEAD[program]}${VARIABLE[program]} points to ${c.file}, `)}${c.said.source.replace(/^\^/, "")}.*\\. ${escape(SET[program])}\\n$`)
           : `${LEAD[program]}${VARIABLE[program]} points to ${c.file}, ${c.said}. ${SET[program]}`;
         refused(r, said, `${program}: ${name}`);
       }
@@ -147,7 +147,7 @@ test("a program on a disk mounted noexec is refused as that", { skip: asUser || 
     const r = spawnSync("unshare", ["-rm", "sh", "-c", script, "sh", process.execPath, path.join(root, "bin", "launch-film.js"), "check", film, "--out", out],
       { encoding: "utf8", timeout: 60_000, env: { ...process.env, [VARIABLE[program]]: path.join(mount, program) } });
     assert.equal(r.status, 1, r.stderr);
-    assert.equal(r.stderr, `launch-film: ${LEAD[program]}${VARIABLE[program]} points to ${path.join(mount, program)}, which is on ${mount}, which is mounted noexec, so no program on it may run. ${SET[program]}\n`);
+    assert.equal(r.stderr, `${LEAD[program]}${VARIABLE[program]} points to ${path.join(mount, program)}, which is on ${mount}, which is mounted noexec, so no program on it may run. ${SET[program]}\n`);
     assert.ok(!fs.existsSync(out));
   }
 });
@@ -219,18 +219,18 @@ test("a run that runs out of file descriptors as it starts ffmpeg, Chrome or eas
   const out = path.join(dir, "check-emfile");
   const check = cli(["check", film, "--out", out], "scdet");
   assert.equal(check.status, 1, check.stderr);
-  assert.match(check.stderr, new RegExp(`^launch-film: launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(out)} was not made\\.\\n$`));
+  assert.match(check.stderr, new RegExp(`^launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(out)} was not made\\.\\n$`));
   assert.ok(!fs.existsSync(out));
   const render = cli(["render", path.join(folder, "film.json")], "--remote-debugging-pipe");
   assert.equal(render.status, 1, render.stderr);
-  assert.match(render.stderr, new RegExp(`launch-film: launch-film could not start Chrome: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
+  assert.match(render.stderr, new RegExp(`(?:^|\\n)launch-film could not start Chrome: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
   assert.deepEqual(fs.readdirSync(folder), ["film.json"]);
   // easybrandkit, as a plan starts it.
   const kit = path.join(tmp(), "easybrandkit.js");
   fs.writeFileSync(kit, "process.exit(1);\n");
   const plan = cli(["plan", "https://acme-notes.example", "--easybrandkit", kit, "--out", path.join(dir, "plan-emfile")], "--out");
   assert.equal(plan.status, 1, plan.stderr);
-  assert.match(plan.stderr, new RegExp(`launch-film: launch-film could not start easybrandkit: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(path.join(dir, "plan-emfile"))} was not made\\.\\n$`));
+  assert.match(plan.stderr, new RegExp(`(?:^|\\n)launch-film could not start easybrandkit: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(path.join(dir, "plan-emfile"))} was not made\\.\\n$`));
   for (const r of [check, render, plan]) assert.deepEqual(r.left, [], "left in the temp folder");
 });
 
@@ -240,7 +240,7 @@ test("a render that runs out of file descriptors as it starts a clip's encoder s
   const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "render", path.join(folder, "film.json")], { encoding: "utf8", timeout: 150_000,
     env: { ...process.env, TMPDIR: temp, NODE_OPTIONS: `--require ${spawnStub()}`, EMFILE_ON: "image2pipe" } });
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, new RegExp(`launch-film: launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
+  assert.match(r.stderr, new RegExp(`(?:^|\\n)launch-film could not start ffmpeg: ${escape(OUT_OF_FILES)}\\nlaunch-film: ${escape(folder)} is as it was\\.\\n$`));
   assert.deepEqual(fs.readdirSync(folder), ["film.json"]);
   assert.deepEqual(fs.readdirSync(temp), []);
 });
@@ -265,7 +265,7 @@ test("frames, stills, the one-go command and a plan of a store's address look at
     const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), ...(name === "frames" ? ["frames"] : []), ...args], { encoding: "utf8", timeout: 60_000,
       env: { ...process.env, TMPDIR: temp, [VARIABLE[program]]: nothing } });
     assert.equal(r.status, 1, `${name}: ${r.stderr}`);
-    assert.equal(r.stderr, `launch-film: ${LEAD[program]}${VARIABLE[program]} points to ${nothing}, which is not there. ${SET[program]}\n`, name);
+    assert.equal(r.stderr, `${LEAD[program]}${VARIABLE[program]} points to ${nothing}, which is not there. ${SET[program]}\n`, name);
     assert.ok(!fs.existsSync(out), `${name}: ${out} was made`);
     assert.deepEqual(fs.readdirSync(temp), [], `${name}: left in the temp folder`);
   }

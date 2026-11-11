@@ -128,7 +128,7 @@ function openerFolder() {
     // The system short of a file descriptor or a process is not the disk.
     const short = require("./programs").short(tried.error, "its stand-ins for xdg-open");
     if (short) throw Object.assign(new Error(short), { short: true });
-    const why = tried.error && `${(getSystemErrorMap().get(tried.error.errno) || [])[1] || tried.error.code} (${tried.error.code})`;
+    const why = tried.error && `${(getSystemErrorMap().get(tried.error.errno) || [])[1] || tried.error.code}, ${tried.error.code}`;
     throw new Error(`launch-film could not run its stand-ins for xdg-open in ${dir}${why ? ` (${why})` : ""}, which keep a page from starting a program of the machine's: ` +
       "set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none");
   }

@@ -187,11 +187,14 @@ function oneTooMany(command, takes, rest) {
 }
 
 const say = (text) => process.stderr.write(text);
+// A message as the line that says it: after "launch-film: ", unless it names
+// launch-film itself first, as "launch-film needs ffmpeg, and ..." does.
+const lineOf = (text) => `${/^launch-film /.test(text) ? "" : "launch-film: "}${text}\n`;
 // A command given wrong: said, and the process ends.
 function fail(message) {
   // A stop ends the process by its own signal once it has cleaned up.
   if (stopping()) return;
-  say(`launch-film: ${said(message)}\n`);
+  say(lineOf(said(message)));
   // At once, or once the Chrome and ffmpeg still running have stopped.
   exit(1);
 }
@@ -207,7 +210,7 @@ function failed(err) {
     // A failure that says itself what became of its folder is not told of
     // twice.
     const folders = aftermath().filter((f) => !message.includes(f));
-    say(`launch-film: ${err && err.ownWords ? shown(message) : said(message)}\n${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
+    say(`${lineOf(err && err.ownWords ? shown(message) : said(message))}${folders.length ? `launch-film: ${folders.join(" and ")}.\n` : ""}`);
     exit(1);
   }));
 }
