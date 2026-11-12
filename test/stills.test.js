@@ -181,6 +181,37 @@ fs.writeFileSync = (file, ...rest) => {
   assert.equal(r.stderr.split("\n").slice(-3, -1).join("\n"), `launch-film: making the new ${path.join(dir, "stills", "og.png")}: no space left on device (ENOSPC)\nlaunch-film: ${path.join(dir, "stills")} was not made.`);
 });
 
+// A name film.json gives can hold a line break, after which the rest of a
+// message read as a line of launch-film's own, and can run to thousands of
+// characters: the stills say a picture's name on one line and cut, and the
+// path made from it on one line. Here the copy of every picture fails, as
+// one too large for Chrome does, in the words it is given.
+test("a picture of the stills is named on one line and cut, as film.json gives it", { skip: !available() && "ffmpeg not found", timeout: 120_000 }, () => {
+  const { dir, filmFile } = plannedFolder();
+  const film = JSON.parse(fs.readFileSync(filmFile, "utf8"));
+  const index = film.clips.findIndex((c) => c.kind === "screen");
+  assert.ok(index >= 0, "the plan has a screen clip");
+  const name = `shots/a\nlaunch-film: Made 7 stills: ${"x".repeat(120)}.png`;
+  fs.mkdirSync(path.join(dir, "shots"));
+  fs.copyFileSync(path.join(fixture, "screenshot-1.png"), path.join(dir, name));
+  film.clips[index].image = name;
+  fs.writeFileSync(filmFile, JSON.stringify(film));
+  const stub = path.join(tmp(), "copy-fails.js");
+  fs.writeFileSync(stub, `const film = require(${JSON.stringify(path.join(__dirname, "..", "src", "film.js"))});
+film.pagePicture = async (file, { named, what }) => {
+  throw new Error(named + " | " + what);
+};
+`);
+  const script = `require(${JSON.stringify(path.join(__dirname, "..", "src", "stills.js"))}).makeStills(process.argv[1], { targets: "og" }).then(() => process.stdout.write("made"), (err) => process.stdout.write(err.message));`;
+  const r = spawnSync(process.execPath, ["--require", stub, "-e", script, filmFile], { encoding: "utf8", timeout: 100_000 });
+  // On one line, and cut in the middle past 100 characters, or a path past 300.
+  const said = (text, room) => {
+    const line = text.replace(/\n/g, "\\n");
+    return line.length > room ? `${line.slice(0, room / 2)}...${line.slice(-(room / 2 - 10))}` : line;
+  };
+  assert.equal(r.stdout, `clips[${index}].image "${said(name, 100)}" | making a copy of ${said(path.join(dir, name), 300)}`, r.stderr);
+});
+
 // The stills' pages are given their files as a clip's page is: a screenshot
 // of more than Chrome takes in one file goes as a copy, as large as a still
 // draws it. Given as it was, it failed the stills.

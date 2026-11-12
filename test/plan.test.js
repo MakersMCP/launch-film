@@ -174,9 +174,13 @@ test("a value of another kind than its field takes is refused by the field, befo
     assert.deepEqual(load({ look: "launch", brand: "kit.json", clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }),
       ["the brand could not be read from kit.json: kit.json must hold an object, as easybrandkit's brand.json does"], kit);
   }
-  // A long value is said on one line and cut, as a name is.
+  // A long value is said on one line and cut, as a name is, the music's
+  // volume too.
   const [music] = load({ look: "launch", music: Array(3000).fill("a"), clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
   assert.ok(music.length < 300, `${music.length} characters`);
+  const volume = load({ look: "launch", music: { volume: `a\n${"x".repeat(3000)}` }, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
+  assert.equal(volume.length, 1, volume.join(" | "));
+  assert.ok(volume[0].length < 300 && volume[0].startsWith('"music" "volume" must be a number from 0 to 2 (it is "a\\nxxx') && !volume[0].includes("\n"), volume[0]);
 });
 
 test("a track's path that leads to something other than a file is refused as what it is, not as one that is not there", { skip: process.platform === "win32" && "pipes, sockets and links" }, async () => {
