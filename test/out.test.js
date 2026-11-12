@@ -1189,6 +1189,48 @@ test("an earlier file the user made read-only is refused by name before anything
   assert.equal(fs.readFileSync(theirs, "utf8"), "the user's own");
 });
 
+// makersmcp's worker copies an earlier job's files into a new job's folder
+// as its own, and the job's user may read them and not write them, while
+// it may write in the folder. A render there was refused as if the user had
+// made its earlier film read-only, once every clip had rendered.
+test("an earlier file of another user's that this user may not write is replaced, as the folder allows", { skip: (process.platform === "win32" || process.getuid() === 0) && "a file its user may not write" }, () => {
+  const dir = tmp();
+  write(dir, { "film.mp4": "the earlier job's film", "film.timeline.json": "{}", "notes.txt": "mine" });
+  for (const name of ["film.mp4", "film.timeline.json"]) fs.chmodSync(path.join(dir, name), 0o444);
+  // In a process of its own, where lstat calls the earlier film and timeline
+  // another user's: before the run, and as its files are put in.
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const dir = process.argv[1];
+const theirs = new Set(["film.mp4", "film.timeline.json"].map((name) => path.join(dir, name)));
+const real = fs.lstatSync;
+fs.lstatSync = (at, ...rest) => {
+  const s = real(at, ...rest);
+  if (s && theirs.has(at)) s.uid += 1;
+  return s;
+};
+process.stdout.write(String(out.heldBackIn(dir, ["film.mp4", "film.timeline.json"])));
+out.within(dir, async (run) => {
+  fs.writeFileSync(run.out("film.mp4"), "the new film");
+  fs.writeFileSync(run.out("film.timeline.json"), "[]");
+}).then(() => process.stdout.write(" put in"), (err) => {
+  process.stdout.write(" " + err.message);
+  process.exitCode = 1;
+});
+`;
+  const r = spawnSync(process.execPath, ["-e", script, dir], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.stdout, "null put in");
+  assert.deepEqual(snap(dir), { "film.mp4": "the new film", "film.timeline.json": "[]", "notes.txt": "mine" });
+  // One of this user's own is still refused, before the run and as its
+  // files are put in.
+  fs.chmodSync(path.join(dir, "film.mp4"), 0o444);
+  assert.equal(out.heldBackIn(dir, ["film.timeline.json", "film.mp4"]),
+    `${path.join(dir, "film.mp4")} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again`);
+});
+
 test("a commit waits for a run that holds the folder, and takes over from one that is gone", async () => {
   const dir = tmp();
   write(dir, { "film.mp4": "old film" });

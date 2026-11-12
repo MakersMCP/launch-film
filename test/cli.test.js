@@ -803,6 +803,27 @@ function noteChrome() {
   return { chrome, started: () => fs.existsSync(started) };
 }
 
+// An earlier file the user made read-only is not replaced: the commit
+// refused it, after a render's clips or a plan's read of the site.
+test("an earlier film or plan the user made read-only refuses a render or a plan before any work", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not write, and ffmpeg" }, () => {
+  const dir = filmFolder();
+  fs.chmodSync(path.join(dir, "film.mp4"), 0o444);
+  const before = snap(dir);
+  const chrome = noteChrome();
+  const render = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+  assert.equal(render.status, 1, render.stderr);
+  assert.equal(render.stderr, `launch-film: ${path.join(dir, "film.mp4")} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again\n`);
+  fs.chmodSync(path.join(dir, "words.json"), 0o444);
+  const plan = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "plan", "https://acme-notes.example", "--out", dir, "--brand", fixture, "--words", path.join(fixture, "words.json"));
+  assert.equal(plan.status, 1, plan.stderr);
+  assert.equal(plan.stderr, `launch-film: ${path.join(dir, "words.json")} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again\n`);
+  const film = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "https://acme-notes.example", "--out", dir, "--brand", fixture, "--words", path.join(fixture, "words.json"));
+  assert.equal(film.status, 1, film.stderr);
+  assert.equal(film.stderr, plan.stderr);
+  assert.deepEqual(snap(dir), before);
+  assert.ok(!chrome.started(), "a Chrome was started");
+});
+
 test("a render refuses an --output it could not write the film to before any Chrome is started", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
   const dir = filmFolder();
   fs.rmSync(path.join(dir, "film.mp4"));

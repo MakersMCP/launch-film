@@ -517,10 +517,29 @@ async function lock(dir, base = dir) {
   }
 }
 
+// Why the earlier file `to`, whose lstat is `there`, is not replaced: it is
+// this user's own and this user may not write it, as a file the user made
+// read-only, which a rename would replace without a word where writing it
+// would fail. `would` says what became of it. A file of another user's that
+// this one may not write is replaced as the folder allows, when the folder
+// lets this user write in it: makersmcp's worker copies an earlier job's
+// files into a new job's folder as its own, which the job's user may read
+// and not write, and a render there failed once its clips had rendered.
+// null when it is replaced.
+function heldBack(to, there, would = "so it was not replaced") {
+  if (!there.isFile() || (uid() !== null && there.uid !== uid())) return null;
+  try {
+    fs.accessSync(to, fs.constants.W_OK);
+    return null;
+  } catch (err) {
+    return Object.assign(new Error(`${shown(to)} may not be written (${err.code}), ${would}: make it writable or remove it, and run again`), { at: null });
+  }
+}
+
 // What the outputs find where they go, read before anything moves (found):
 // the folders already there that take their files one by one, which a run
-// takes turns for, and the first earlier file this user may not write, which
-// a rename would replace without a word where writing it would fail.
+// takes turns for, and the first earlier file the run does not replace
+// (heldBack).
 function survey(from, to, whole, found) {
   const there = lstat(to);
   if (!there) return found;
@@ -528,14 +547,21 @@ function survey(from, to, whole, found) {
   if (isFolder && !whole && isDir(to)) {
     found.folders.push(to);
     for (const name of fs.readdirSync(from)) if (!name.startsWith(".")) survey(path.join(from, name), path.join(to, name), false, found);
-  } else if (!isFolder && there.isFile() && !found.readOnly) {
-    try {
-      fs.accessSync(to, fs.constants.W_OK);
-    } catch (err) {
-      found.readOnly = Object.assign(new Error(`${shown(to)} may not be written (${err.code}), so it was not replaced: make it writable or remove it, and run again`), { at: null });
-    }
-  }
+  } else if (!isFolder && !found.readOnly) found.readOnly = heldBack(to, there);
   return found;
+}
+
+// The refusal the commit would give for an earlier file of `names` in the
+// folder `dir` (heldBack), or null: asked before a run's long work, as a
+// render's clips or a plan's read of the site, so that it comes first.
+function heldBackIn(dir, names) {
+  for (const name of names) {
+    const to = path.join(path.resolve(dir), name);
+    const there = lstat(to);
+    const held = there && heldBack(to, there, "so the run would not replace it");
+    if (held) return held.message;
+  }
+  return null;
 }
 
 // Puts the run's outputs in place. Only the wait for its turn gives way: the
@@ -1235,5 +1261,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
+module.exports = { begin, within, heldBackIn, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
   socketFolder, closeProfile, socketFits, STALE, LOCK, SOCKET_ROOM };

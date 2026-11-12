@@ -506,6 +506,38 @@ test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240
   assert.deepEqual(leftBy(m.pid), []);
 });
 
+// makersmcp's worker copies an earlier job's folder into a new job's as its
+// own files, which the job's user may read and not write, in a folder it may
+// write in. A render there failed once every clip had rendered, refused as
+// if the user had made the earlier film read-only. Here lstat calls the
+// earlier film and timeline another user's, and this user may not write them.
+test("a render replaces an earlier film of another user's that it may not write, in a folder it may write in", { skip: (process.platform === "win32" || process.getuid() === 0) ? "a file its user may not write" : skip, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  for (const name of ["film.mp4", "film.timeline.json"]) fs.chmodSync(path.join(dir, name), 0o444);
+  const earlier = ["film.mp4", "film.timeline.json"].map((name) => fs.statSync(path.join(dir, name)).ino);
+  const theirs = path.join(tmp(), "theirs.js");
+  fs.writeFileSync(theirs, `const fs = require("fs");
+const theirs = new Set(${JSON.stringify(["film.mp4", "film.timeline.json"].map((name) => path.join(dir, name)))});
+const real = fs.lstatSync;
+fs.lstatSync = (at, ...rest) => {
+  const s = real(at, ...rest);
+  if (s && theirs.has(at)) s.uid += 1;
+  return s;
+};
+`);
+  const r = spawnSync(process.execPath, ["--require", theirs, cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000 });
+  assert.equal(r.status, 0, r.stderr);
+  // New files, made by this user as a new file is made.
+  for (const [k, name] of ["film.mp4", "film.timeline.json"].entries()) {
+    const now = fs.statSync(path.join(dir, name));
+    assert.notEqual(now.ino, earlier[k], `${name} is the earlier one`);
+    assert.ok(now.mode & 0o200, `${name} is the earlier one`);
+  }
+  assert.equal(probe(path.join(dir, "film.mp4")).width, 1920);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith(".launch-film-")), []);
+  assert.deepEqual(leftBy(r.pid), []);
+});
+
 test("a render whose clip encoder stops ends with its words and keeps the earlier film", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);

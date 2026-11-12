@@ -16,7 +16,7 @@ const { input, picture, whole, writePicture, run, mustRun, pictureSize, readPixe
 const { prepareLogo, prepareIcon } = require("./logo");
 const { readBrand } = require("./brand");
 const audio = require("./audio");
-const { within, tempDir, release, save, reason } = require("./out");
+const { within, heldBackIn, tempDir, release, save, reason } = require("./out");
 const confine = require("./confine");
 
 const FPS = 25;
@@ -581,6 +581,9 @@ async function addSound({ video, wav, out, seconds, tries }) {
   return best.level;
 }
 
+// The name of the timeline written next to the film `out`.
+const timelineOf = (out) => path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json";
+
 // Renders film.json to an MP4. Returns { output, seconds, clips, notes }.
 async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep = false, offline = false } = {}) {
   const out = path.resolve(output || path.join(path.dirname(path.resolve(file)), "film.mp4"));
@@ -590,6 +593,10 @@ async function renderFilm(file, { output = null, jobs = 2, log = () => {}, keep 
   if (loaded.problems.length) throw new Error(`film.json has problems:\n  - ${loaded.problems.join("\n  - ")}`);
   const { track, problems } = await checkMusic(loaded);
   if (problems.length) throw new Error(`film.json has problems:\n  - ${problems.join("\n  - ")}`);
+  // An earlier film or timeline the commit would not replace is refused
+  // now, not once every clip has rendered (out.js heldBack).
+  const held = heldBackIn(path.dirname(out), [path.basename(out), timelineOf(out)]);
+  if (held) throw new Error(held);
   // The clips are made in a work folder outside the film's folder; the film
   // and its timeline go in next to film.json only once both are whole. The
   // run is begun here, so a stop while the clips render says which folder
@@ -658,7 +665,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
     // Each encode is made in the part folder, under a name no output can
     // have (out.js), so what is not kept goes with it.
     await addSound({ video, wav, out: job.out(path.basename(out)), seconds: total, tries: (n) => path.join(job.part, `.launch-film-sound-${n}${path.extname(out)}`) });
-    save(job.out(path.basename(out).replace(/\.mp4$/i, "") + ".timeline.json"), JSON.stringify(timeline, null, 2) + "\n");
+    save(job.out(timelineOf(out)), JSON.stringify(timeline, null, 2) + "\n");
     return { output: out, seconds: total, clips: timeline.clips, notes };
   } finally {
     if (!keep) release(work);

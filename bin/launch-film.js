@@ -4,7 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { listen, within, shown, said, aftermath, noticed, stopping, exit, reason, save, copyPlain } = require("../src/out");
+const { listen, within, heldBackIn, shown, said, aftermath, noticed, stopping, exit, reason, save, copyPlain } = require("../src/out");
 
 const HELP = `launch-film: a 20-40 second launch film made from a product's own site.
 
@@ -252,8 +252,10 @@ function folderFor(url, flags) {
 // copy of brand/ (makePlan), makes none in a folder of files that are not a
 // kit's, and every release of it refuses one. A brand/ that is a link is
 // left to makePlan, and so is a plan of an App Store page, which is read
-// from the store when easybrandkit cannot read it.
-function planArgs(flags, url) {
+// from the store when easybrandkit cannot read it. An earlier file of the
+// folder's that the run would not replace, among `outputs`, refuses it too,
+// before the site is read (out.js heldBack).
+function planArgs(flags, url, outputs) {
   if (!flags.brand && !require("../src/store").appStoreId(url)) {
     const own = path.join(folderFor(url, flags), "brand");
     let names = [];
@@ -266,6 +268,8 @@ function planArgs(flags, url) {
       throw new Error(`${own} is not empty and holds no earlier brand kit, which a plan has easybrandkit make there: give a kit with --brand, move the files in it elsewhere, or pick another folder with --out`);
     }
   }
+  const held = heldBackIn(folderFor(url, flags), outputs);
+  if (held) throw new Error(held);
   let words = null;
   if (flags.words) {
     try {
@@ -543,7 +547,7 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      const inputs = planArgs(flags, url);
+      const inputs = planArgs(flags, url, ["words.json", "film.json"]);
       ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
@@ -558,7 +562,7 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
-  const inputs = planArgs(flags, url);
+  const inputs = planArgs(flags, url, ["words.json", "film.json", ...(isPlan ? [] : ["film.mp4", "film.timeline.json"])]);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {
