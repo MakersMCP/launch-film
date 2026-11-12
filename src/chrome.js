@@ -635,9 +635,10 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
 }
 
 // Renders a page to a silent MP4: `seconds` at `fps`, each frame drawn for
-// its time and captured as a JPEG into ffmpeg. files: { name: Buffer } served
-// next to the page.
-async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 1080, scale = 1, fps = 25, onFrame = null }) {
+// its time and captured as a JPEG into ffmpeg, whose libx264 is given
+// `threads` when it is given. files: { name: Buffer } served next to the
+// page.
+async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 1080, scale = 1, fps = 25, threads = 0, onFrame = null }) {
   const dir = tempDir("launch-film-page-");
   save(path.join(dir, "index.html"), html);
   for (const [name, data] of Object.entries(files)) {
@@ -646,7 +647,7 @@ async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 108
     save(file, data);
   }
   const browser = await launch({ W, H });
-  const enc = encoder({ output, fps });
+  const enc = encoder({ output, fps, threads });
   try {
     const { page, exceptions, failedFonts } = await openPage(browser, dir, { W, H, scale });
     const frames = Math.round(seconds * fps);

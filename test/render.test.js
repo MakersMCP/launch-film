@@ -513,6 +513,30 @@ test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240
   assert.deepEqual(leftBy(m.pid), []);
 });
 
+// libx264 takes one and a half threads for every processor it sees, and its
+// memory grows with them: a clip's encoder held about 1 GB on a machine of
+// 24, and two clips at once ran a container of 2 GB out of memory there.
+// Here the machine says it has 24 processors, then 3.
+test("libx264 and the join's decoders are given threads of their own, shared by the clips that render at once", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const cpus = path.join(tmp(), "cpus.js");
+  fs.writeFileSync(cpus, 'require("os").availableParallelism = () => Number(process.env.LAUNCH_FILM_TEST_CPUS);\n');
+  for (const [n, clip, join] of [[24, 6, 6], [3, 2, 4]]) {
+    const calls = path.join(tmp(), "calls");
+    const r = spawnSync(process.execPath, ["--require", cpus, cli, "render", path.join(dir, "film.json"), "--jobs", "2"], { encoding: "utf8", timeout: 200_000,
+      env: { ...process.env, LAUNCH_FILM_FFMPEG: standIn(`printf '%s\\n' "$*" >> '${calls}'`), LAUNCH_FILM_TEST_CPUS: String(n) } });
+    assert.equal(r.status, 0, r.stderr);
+    const said = fs.readFileSync(calls, "utf8").trim().split("\n");
+    const encoders = said.filter((c) => c.includes(" image2pipe "));
+    assert.equal(encoders.length, 2, `${n} processors: ${encoders.length} clip encoders`);
+    for (const c of encoders) assert.match(c, new RegExp(` -c:v libx264 -preset veryfast -crf 15 -threads ${clip} `), `${n} processors: ${c}`);
+    const joins = said.filter((c) => c.includes("xfade="));
+    assert.equal(joins.length, 1, `${n} processors: ${joins.length} joins`);
+    assert.equal(joins[0].split(` -threads ${join} -i `).length - 1, 2, `${n} processors, the clips decoded: ${joins[0]}`);
+    assert.match(joins[0], new RegExp(` -c:v libx264 -preset medium -crf 18 -threads ${join} `), `${n} processors, the join: ${joins[0]}`);
+  }
+});
+
 // ffmpeg 4.4.2 on a full disk, as it writes the film with its sound: what it
 // says, naming the file it writes.
 const FILLS_THE_DISK = `case "$*" in *"-map 1:a"*) for last; do :; done; : > "$last"; ` +

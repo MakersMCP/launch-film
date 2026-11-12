@@ -369,10 +369,11 @@ function writePng(file, { data, width, height }) {
   return writePicture(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${width}x${height}`, "-i", "-", "-frames:v", "1"], file, "writing a picture", { input: data });
 }
 
-// A frame encoder: JPEG frames in, an H.264 MP4 out.
-function encoder({ output, fps = 25, crf = 15 }) {
+// A frame encoder: JPEG frames in, an H.264 MP4 out, libx264 given `threads`
+// when it is given (film.js threadsFor).
+function encoder({ output, fps = 25, crf = 15, threads = 0 }) {
   const child = track(spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-",
-    "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf),
+    "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf), ...(threads ? ["-threads", String(threads)] : []),
     "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-an", "-r", String(fps), "-movflags", "+faststart", output],
   { stdio: ["pipe", "ignore", "pipe"] }));
   let err = "";

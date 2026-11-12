@@ -494,6 +494,17 @@ async function markFor({ logoFile = null, iconFile = null, brand = null, out, po
   return { file: null, refused };
 }
 
+// The threads libx264 is given, in a clip's encoder and in the join, and
+// the join's decoders: one and a half for each processor, as libx264 takes
+// by itself, shared by the clips that render at once, and from 2 to 6, the
+// 6 it takes on a machine of four. Left to choose, it takes them for every
+// processor it sees, and its memory grows with them: a clip's encoder held
+// about 1 GB on a machine of 24 and 410 MB with 6 threads, and two clips at
+// once ran a container of 2 GB out of memory there.
+function threadsFor(jobs) {
+  return Math.max(2, Math.min(6, Math.floor((1.5 * os.availableParallelism()) / jobs)));
+}
+
 // Runs tasks with at most `jobs` at once.
 async function pool(items, jobs, fn) {
   const results = new Array(items.length);
@@ -650,6 +661,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
     });
     const total = at;
     const ctx = { look, port, fonts, colours, work, lang: film.lang || "", brand, notes };
+    const threads = threadsFor(Math.min(jobs, clips.length));
     let done = 0;
     const rendered = await pool(clips, jobs, async (clip) => {
       const page = await buildClip(clip, ctx);
@@ -660,7 +672,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       // when more than one clip renders at once (pool), that one at a time
       // eases the machine. A system short of file descriptors or processes
       // is no clip's.
-      const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS })
+      const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS, threads })
         .catch((err) => Promise.reject(err.short ? err : new Error(`rendering clip ${clip.index + 1}: ${err.message}${(err.slow || err.memory) && Math.min(jobs, clips.length) > 1 ? ", or with --jobs 1 to render one clip at a time" : ""}`)));
       done++;
       log(`clip ${clip.index + 1}/${clips.length} (${clip.kind}${clip.parsed ? ` ${clip.parsed.type}` : ""}, ${clip.seconds.toFixed(1)} s) rendered in ${((Date.now() - started) / 1000).toFixed(1)} s [${done}/${clips.length}]\n`);
@@ -668,9 +680,12 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       if (r.failedFonts.length) notes.push(`clip ${clip.index + 1}: fonts failed to load: ${r.failedFonts.join(", ")}`);
       return { mp4, cues: page.cues.map((cue) => ({ ...cue, at: clip.start + cue.at })) };
     });
-    // The clips joined: each crossfade starts on its clip's first frame.
+    // The clips joined: each crossfade starts on its clip's first frame. The
+    // join runs alone, and each clip it reads is decoded with as many
+    // threads as it is encoded with.
     const video = path.join(work, "video.mp4");
-    const inputs = rendered.flatMap((r) => ["-i", r.mp4]);
+    const alone = String(threadsFor(1));
+    const inputs = rendered.flatMap((r) => ["-threads", alone, "-i", r.mp4]);
     let graph = "";
     let last = "[0:v]";
     for (let i = 1; i < clips.length; i++) {
@@ -679,7 +694,7 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       last = label;
     }
     const map = clips.length > 1 ? ["-filter_complex", graph.replace(/;$/, ""), "-map", "[v]"] : ["-map", "0:v"];
-    await mustRun([...inputs, ...map, "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(FPS),
+    await mustRun([...inputs, ...map, "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-threads", alone, "-pix_fmt", "yuv420p", "-r", String(FPS),
       "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-t", total.toFixed(3), "-movflags", "+faststart", video], "joining the clips");
     // The sound: the bed for these cuts, or the user's own track in its
     // place, and every clip's effects.
@@ -702,4 +717,4 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
   }
 }
 
-module.exports = { loadFilm, checkMusic, shellWord, musicfitCommand, trackNote, renderFilm, addSound, buildClip, markFor, brandColours, pagePicture, FPS, FADE };
+module.exports = { loadFilm, checkMusic, shellWord, musicfitCommand, trackNote, renderFilm, addSound, buildClip, markFor, brandColours, pagePicture, threadsFor, FPS, FADE };
