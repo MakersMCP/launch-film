@@ -45,7 +45,7 @@ test("the easybrandkit to run: a script path, a command, one on PATH, else npm a
   assert.deepEqual(easybrandkitCommands("my-easybrandkit --flag"), [["my-easybrandkit", "--flag"]]);
   await withPath(dir, () => {
     const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-    assert.deepEqual(easybrandkitCommands(), [[npx, "-y", "easybrandkit@0.4.1"], [npx, "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
+    assert.deepEqual(easybrandkitCommands(), [[npx, "-y", "easybrandkit@0.4.1"], [npx, "-y", "github:MakersMCP/easybrandkit#v0.4.1"]]);
     const installed = path.join(dir, process.platform === "win32" ? "easybrandkit.cmd" : "easybrandkit");
     fs.writeFileSync(installed, "", { mode: 0o755 });
     assert.deepEqual(easybrandkitCommands(), [[installed]]);
@@ -53,17 +53,17 @@ test("the easybrandkit to run: a script path, a command, one on PATH, else npm a
 });
 
 test("when npx cannot fetch easybrandkit from npm, it is fetched from GitHub", { skip: noShell }, async () => {
-  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:MakersMCP/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
     assert.equal(await runEasybrandkit("https://example.com", path.join(dir, "out")), path.join(dir, "out", "brand.json"));
-    assert.deepEqual(asked(), ["easybrandkit@0.4.1", "github:EminBudak/easybrandkit#v0.4.1"]);
+    assert.deepEqual(asked(), ["easybrandkit@0.4.1", "github:MakersMCP/easybrandkit#v0.4.1"]);
   });
-  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.1": NOT_ON_NPM }, async (dir) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:MakersMCP/easybrandkit#v0.4.1": NOT_ON_NPM }, async (dir) => {
     await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")), /could not be fetched \(npm error code E404\)\. Install easybrandkit \(npm install -g easybrandkit\)/);
   });
 });
 
 test("an easybrandkit that ran and failed is not run again", { skip: noShell }, async () => {
-  await withFakeNpx({ "easybrandkit@0.4.1": CANNOT_OPEN, "github:EminBudak/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": CANNOT_OPEN, "github:MakersMCP/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
     await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")), /easybrandkit failed \(exit 1\).*Could not open https:\/\/example\.com/);
     assert.deepEqual(asked(), ["easybrandkit@0.4.1"]);
   });
@@ -116,10 +116,10 @@ test("on Windows the script behind npx.cmd and easybrandkit.cmd is run with Node
     fs.writeFileSync(file, text, { mode: 0o755 });
     return file;
   };
-  assert.deepEqual(commandsOnWindows(dir), [["npx.cmd", "-y", "easybrandkit@0.4.1"], ["npx.cmd", "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
+  assert.deepEqual(commandsOnWindows(dir), [["npx.cmd", "-y", "easybrandkit@0.4.1"], ["npx.cmd", "-y", "github:MakersMCP/easybrandkit#v0.4.1"]]);
   put("npx.cmd");
   const cli = put(path.join("node_modules", "npm", "bin", "npx-cli.js"));
-  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, cli, "-y", "easybrandkit@0.4.1"], [process.execPath, cli, "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
+  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, cli, "-y", "easybrandkit@0.4.1"], [process.execPath, cli, "-y", "github:MakersMCP/easybrandkit#v0.4.1"]]);
   const installed = put("easybrandkit.cmd");
   assert.deepEqual(commandsOnWindows(dir), [[installed]]);
   put(path.join("node_modules", "easybrandkit", "package.json"), JSON.stringify({ bin: { easybrandkit: "skills/easybrandkit/scripts/easybrandkit.js" } }));

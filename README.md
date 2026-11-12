@@ -10,7 +10,7 @@ npx launch-film@latest linear.app
 
 [Watch the film](.github/assets/linear-film.mp4) (28 seconds). It was made with the command above and nothing else: no brief, no edits.
 
-Tools that make videos with code usually start from a brief: you describe the product, its colors and the style you want. launch-film starts from the site. [easybrandkit](https://github.com/EminBudak/easybrandkit) reads the logo, colors, fonts and first screen in a headless browser, the page's own headline and section titles become the film's words, and a look is picked to suit the brand. You get an MP4 at 1920x1080, rendered on your machine with Chrome and ffmpeg. There is no account, no API key and nothing is uploaded.
+Tools that make videos with code usually start from a brief: you describe the product, its colors and the style you want. launch-film starts from the site. [easybrandkit](https://github.com/MakersMCP/easybrandkit) reads the logo, colors, fonts and first screen in a headless browser, the page's own headline and section titles become the film's words, and a look is picked to suit the brand. You get an MP4 at 1920x1080, rendered on your machine with Chrome and ffmpeg. There is no account, no API key and nothing is uploaded.
 
 Read the story behind it on my blog: [launch-film: A Launch Film From Your Website](https://eminbudak.com/blog/launch-film-from-your-website/).
 
@@ -20,7 +20,7 @@ Read the story behind it on my blog: [launch-film: A Launch Film From Your Websi
 - ffmpeg and ffprobe 4.4 or newer, Ubuntu 22.04's 4.4.2 included. To render a film ffmpeg needs libx264, the only H.264 encoder launch-film uses, which Ubuntu's ffmpeg has; `plan`, `check`, `frames` and `stills` need none. The filters it uses are ffmpeg's own, and so is the AAC encoder. `brew install ffmpeg` and `winget install ffmpeg` give a new enough one, and so does `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer. Set `LAUNCH_FILM_FFMPEG` and `LAUNCH_FILM_FFPROBE` to use another build, each as a path or a name on your PATH, and set both: launch-film does not look for ffprobe next to the ffmpeg you name.
 - Google Chrome or Chromium, which draws the film frame by frame and the stills, and reads the site's words for a plan when the page's HTML does not hold them; `check` and `frames` start none. Chrome runs in its sandbox unless launch-film runs as root, where the sandbox does not start: on Linux, Google Chrome's own package sets the sandbox up, and a container has to let it start, as Docker does with `--security-opt seccomp=unconfined`. It has been tested with Google Chrome only: 155 on Ubuntu 26.04, 157 on Ubuntu 22.04 and the one GitHub's ubuntu-latest runner comes with. No test has run with Chromium. launch-film looks for both on your PATH and where macOS installs them; on Windows it looks only where Chrome installs itself. Set `LAUNCH_FILM_CHROME` or `CHROME_PATH` to use another build, as a path. easybrandkit, which reads the brand, takes only `CHROME_PATH`.
 - A font on the machine for letters outside the Latin alphabet and for most Vietnamese letters with tone marks, as launch-film fetches only the faces Google Fonts makes for the other Latin letters. A letter no font has is drawn as a box, as Japanese is on a server with no Japanese font; `fonts-noto-cjk` gives Debian and Ubuntu one.
-- [easybrandkit](https://github.com/EminBudak/easybrandkit), which reads the brand when you plan from a site's address: install it with `npm install -g easybrandkit`, or launch-film runs it with `npx -y easybrandkit@0.4.1`. This release was tested with easybrandkit 0.4.1, and runs one on your PATH before it tries npx, whatever its release. Set `LAUNCH_FILM_EASYBRANDKIT` to use a copy of your own.
+- [easybrandkit](https://github.com/MakersMCP/easybrandkit), which reads the brand when you plan from a site's address: install it with `npm install -g easybrandkit`, or launch-film runs it with `npx -y easybrandkit@0.4.1`. This release was tested with easybrandkit 0.4.1, and runs one on your PATH before it tries npx, whatever its release. Set `LAUNCH_FILM_EASYBRANDKIT` to use a copy of your own.
 - Linux, where it is tested: on GitHub's ubuntu-latest runner (Ubuntu 24.04 with ffmpeg 6.1 at this release), on every push and before every release. This release's tests have also passed on Ubuntu 22.04 with its ffmpeg 4.4.2, in a container as root and without Chrome, so the tests that need Chrome or a user other than root were skipped there, and it has run on Ubuntu 26.04 with ffmpeg 8.0 and on Ubuntu 22.04 with Chrome. It is written for macOS and Windows as well, but this release has not been run on either.
 - Room on the disk for the files of a run and those of the run before it, as the earlier files stay until the new ones are in place, and, while a render sets the film's sound, for one more copy of the new film, as the best of its encodes is kept beside the next until that one is measured. A 30 second film takes 8 to 25 MB, by its look, and its frames, stills and check 3 to 10 MB more; until the render ends, its work files take 30 to 90 MB in the temp folder. Each Chrome that renders the film or draws the stills keeps a profile of about 3 MB there. The ones that read the site for a plan, easybrandkit's and the one that reads the words, also keep what the site loads, and easybrandkit's keeps what Chrome downloads for its own features as well: up to 50 MB on a small test site.
 - Network access for a plan, which reads the site unless you give it both `--brand` and `--words`, and for npx to fetch easybrandkit when it is not installed. A render and stills fetch the film's typefaces from Google Fonts and keep them in `~/.cache/launch-film/fonts`; offline they use the ones kept there, and the system's own for the rest. `check` and `frames` need no network. Installing it needs the network, and `npx launch-film@latest` asks npm for the newest version each time it runs. No account and no API key.
@@ -34,7 +34,7 @@ A command looks at the ffmpeg, ffprobe and Chrome it runs before any work. One t
 launch-film ships as an [Agent Skill](https://agentskills.io). Your agent gets the brand, picks a look, writes the scenes from the page's words, renders the film, checks it and hands you the MP4, with the launch pictures if you ask for them.
 
 ```bash
-npx skills add EminBudak/launch-film
+npx skills add MakersMCP/launch-film
 ```
 
 That covers Claude Code, Codex, Cursor and the other agents the [`skills`](https://github.com/vercel-labs/skills) CLI supports. To install it by hand instead:
@@ -42,14 +42,14 @@ That covers Claude Code, Codex, Cursor and the other agents the [`skills`](https
 In Claude Code, as a plugin:
 
 ```
-/plugin marketplace add EminBudak/launch-film
+/plugin marketplace add MakersMCP/launch-film
 /plugin install launch-film@launch-film
 ```
 
 or as a skill folder:
 
 ```bash
-git clone https://github.com/EminBudak/launch-film
+git clone https://github.com/MakersMCP/launch-film
 cp -r launch-film/skills/launch-film ~/.claude/skills/
 ```
 
@@ -68,7 +68,7 @@ cp -r launch-film/skills/launch-film ~/.cursor/skills/
 In GitHub Copilot CLI, install it from the repo:
 
 ```bash
-copilot plugin install EminBudak/launch-film
+copilot plugin install MakersMCP/launch-film
 ```
 
 Then ask as usual:
@@ -221,7 +221,7 @@ The cuts come from the timeline launch-film writes next to its film. For a film 
 
 Words between asterisks are set in the brand's accent color. A bar is one bar of the look's music, about two seconds; give `seconds` instead if you prefer.
 
-`music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track of your own, from film.json's folder or absolute. A track plays from the first frame in place of the bed: it is brought to about the bed's level (lower when its peaks would clip), cut at the end of the film and faded out over its last second, and the sound effects play over it as they do over the bed. A track that is missing, is not a file (a folder, a pipe, or a link to something no longer there), cannot be read, has no sound, is silent or is shorter than the film is refused before anything renders, with a message that says what to give instead and, for a relative path that is not there, where it was looked for. When ffmpeg will not open a track, or ffprobe a picture or a film to check, for a reason of its own, as a build that refuses some names does, the message gives its words. [musicfit](https://github.com/EminBudak/musicfit) makes a track exactly the film's length with its hit on the beat you choose, such as the logo close. Run in the film's folder, `npx musicfit@latest track.mp3 --length 29.333 --hit 24 --fps 25 --out music` writes `music/fitted.wav`, with the film's length and the last clip's start from film.timeline.json, and `"music": "music/fitted.wav"` plays it. The message that refuses a short track gives that command with the track it refused, both numbers and the folder, each quoted for the shell where its name needs it, so that a shell runs it as it is from any folder. When the track it refused is an earlier fit, as `music/fitted.wav` is once the film has grown, the command fits the track that fit was made from again, as musicfit's cues.json beside the fit names it: by its path when it is beside the fit or beside film.json, and otherwise as a word in angle brackets, quoted as a path is so that a shell reads nothing in it, for you to put that path in place of. With `LAUNCH_FILM_CONFINE` set, only a track in film.json's folder is named by its path.
+`music` is `true` for the look's own bed, `false` for none, `{ "volume": 0.55 }` for the bed at another level (0 to 2), or the path of a track of your own, from film.json's folder or absolute. A track plays from the first frame in place of the bed: it is brought to about the bed's level (lower when its peaks would clip), cut at the end of the film and faded out over its last second, and the sound effects play over it as they do over the bed. A track that is missing, is not a file (a folder, a pipe, or a link to something no longer there), cannot be read, has no sound, is silent or is shorter than the film is refused before anything renders, with a message that says what to give instead and, for a relative path that is not there, where it was looked for. When ffmpeg will not open a track, or ffprobe a picture or a film to check, for a reason of its own, as a build that refuses some names does, the message gives its words. [musicfit](https://github.com/MakersMCP/musicfit) makes a track exactly the film's length with its hit on the beat you choose, such as the logo close. Run in the film's folder, `npx musicfit@latest track.mp3 --length 29.333 --hit 24 --fps 25 --out music` writes `music/fitted.wav`, with the film's length and the last clip's start from film.timeline.json, and `"music": "music/fitted.wav"` plays it. The message that refuses a short track gives that command with the track it refused, both numbers and the folder, each quoted for the shell where its name needs it, so that a shell runs it as it is from any folder. When the track it refused is an earlier fit, as `music/fitted.wav` is once the film has grown, the command fits the track that fit was made from again, as musicfit's cues.json beside the fit names it: by its path when it is beside the fit or beside film.json, and otherwise as a word in angle brackets, quoted as a path is so that a shell reads nothing in it, for you to put that path in place of. With `LAUNCH_FILM_CONFINE` set, only a track in film.json's folder is named by its path.
 
 ## Looks
 

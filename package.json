@@ -33,10 +33,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/EminBudak/launch-film.git"
+    "url": "git+https://github.com/MakersMCP/launch-film.git"
   },
-  "homepage": "https://github.com/EminBudak/launch-film#readme",
+  "homepage": "https://github.com/MakersMCP/launch-film#readme",
   "bugs": {
-    "url": "https://github.com/EminBudak/launch-film/issues"
+    "url": "https://github.com/MakersMCP/launch-film/issues"
   }
 }

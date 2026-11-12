@@ -25,3 +25,13 @@ test("the plugin manifests and the lockfile carry the same version", () => {
   assert.equal(lock.version, version, "package-lock.json");
   assert.equal(lock.packages[""].version, version, "package-lock.json, its root package");
 });
+
+// The repository moved to github.com/MakersMCP with the kits it links to,
+// and npm checks the repository package.json names against the one a
+// release is published from. The addresses of the person stay.
+test("every address of the repository and of the kits it links to names github.com/MakersMCP", () => {
+  assert.equal(JSON.parse(read("package.json")).repository.url, "git+https://github.com/MakersMCP/launch-film.git");
+  for (const file of ["package.json", ".claude-plugin/marketplace.json", ".codex-plugin/plugin.json", "plugin.json", "README.md", "THIRD_PARTY.md", "skills/launch-film/SKILL.md", "src/brand.js"]) {
+    assert.deepEqual(read(file).match(/\bEminBudak\/[\w.-]+/g) || [], [], file);
+  }
+});

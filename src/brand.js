@@ -53,7 +53,7 @@ function easybrandkitCommands(given = "") {
   const installed = onPath(windows ? "easybrandkit.cmd" : "easybrandkit");
   if (installed) return [windows ? scriptOfInstalled(installed) : [installed]];
   const npx = windows ? scriptOfNpx() : ["npx"];
-  return [[...npx, "-y", "easybrandkit@0.4.1"], [...npx, "-y", "github:EminBudak/easybrandkit#v0.4.1"]];
+  return [[...npx, "-y", "easybrandkit@0.4.1"], [...npx, "-y", "github:MakersMCP/easybrandkit#v0.4.1"]];
 }
 
 // On Windows npx and an installed easybrandkit are .cmd files. Node starts

@@ -43,7 +43,7 @@ They are embedded in the pages that are rendered, and reach the film only as pix
 
 ### easybrandkit
 
-`launch-film <url>` and `launch-film plan <url>` run [easybrandkit](https://github.com/EminBudak/easybrandkit) (MIT, by the same author) to read the site: an easybrandkit installed on PATH (`npm install -g easybrandkit`), or else `npx -y easybrandkit@0.4.1`, and `npx -y github:EminBudak/easybrandkit#v0.4.1` when npm cannot give it. `LAUNCH_FILM_EASYBRANDKIT` names another command.
+`launch-film <url>` and `launch-film plan <url>` run [easybrandkit](https://github.com/MakersMCP/easybrandkit) (MIT, by the same author) to read the site: an easybrandkit installed on PATH (`npm install -g easybrandkit`), or else `npx -y easybrandkit@0.4.1`, and `npx -y github:MakersMCP/easybrandkit#v0.4.1` when npm cannot give it. `LAUNCH_FILM_EASYBRANDKIT` names another command.
 
 ## Used from your machine, not shipped
 
