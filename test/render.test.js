@@ -269,12 +269,18 @@ test("a film's level is set with one gain from what loudnorm measured, so a trac
   const { loudnormPass } = require("../src/ffmpeg");
   const { checkFilm } = require("../src/check");
   const dir = tmp();
-  // A track that builds for 5 s and drops 10 dB louder for the next 5.
+  // A track of chords that rise 10 dB at 5 s, with a sharp click every
+  // second, whose peaks stand far over its loudness, as a real track's hits
+  // do. Brought to -14 LUFS they pass loudnorm's limit, so its second pass
+  // worked in its dynamic mode and left a drop of 4.6 dB; chords alone it
+  // raised in its linear mode, the drop kept, as one gain keeps it.
   const seconds = 10;
   const track = new audio.Bus(seconds + 1);
   for (let i = 0; i < track.length; i++) {
     const t = i / audio.SR;
-    const v = (t < 5 ? 0.05 : 0.158) * [110, 165, 220, 330, 495].reduce((sum, f, k) => sum + Math.sin(2 * Math.PI * f * t + k), 0) / 2;
+    const chords = [110, 165, 220, 330, 495].reduce((sum, f, k) => sum + Math.sin(2 * Math.PI * f * t + k), 0) / 2;
+    const click = 0.7 * Math.sin(2 * Math.PI * 1760 * t + 1) * Math.exp(-4000 * (t % 1));
+    const v = (t < 5 ? 0.012 : 0.04) * chords + click;
     track.L[i] = v;
     track.R[i] = v * 0.9;
   }
@@ -291,7 +297,8 @@ test("a film's level is set with one gain from what loudnorm measured, so a trac
   const { integrated, truePeak } = (await checkFilm(out, { lufs: -14, out: path.join(dir, "check") })).audio;
   assert.ok(Math.abs(integrated + 14) <= 0.5, `the film measures ${integrated} LUFS`);
   assert.ok(truePeak <= -1.5, `the film peaks at ${truePeak} dBTP`);
-  // The drop stays 10 dB over the build, but for what the limiter takes.
+  // The drop stays about 10 dB over the build, the clicks held by the
+  // limiter.
   const sound = soundOf(out);
   const rms = (from, to) => Math.sqrt(sound.subarray(Math.round(from * audio.SR), Math.round(to * audio.SR)).reduce((sum, v) => sum + v * v, 0) / ((to - from) * audio.SR));
   const drop = 20 * Math.log10(rms(5.5, 8.5) / rms(1, 4.5));
