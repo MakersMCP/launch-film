@@ -401,7 +401,10 @@ exit 3
       const profile = /^unix:path=(.+)\/no-bus$/.exec(address);
       assert.ok(profile, `network ${network}: ${address}`);
       assert.equal(path.dirname(profile[1]), temp);
-      assert.match(path.basename(profile[1]), /^launch-film-chrome-/);
+      // The Chrome that reads a site has a profile named lf- where the temp
+      // folder leaves no room for its socket under the usual name and does
+      // under that one (chrome.js, launch), as a test's folder in /tmp does.
+      assert.match(path.basename(profile[1]), network ? /^(launch-film-chrome|lf)-\d+-[A-Za-z0-9]{6}$/ : /^launch-film-chrome-/, `network ${network}`);
       assert.equal(there, "nothing", `network ${network}: the bus Chrome was given leads somewhere`);
       assert.equal(display, "display unset unset", `network ${network}`);
       assert.equal(wayland, path.join(profile[1], "no-display"), `network ${network}`);
