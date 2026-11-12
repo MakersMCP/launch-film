@@ -166,6 +166,24 @@ test("an app icon or a square logo that cannot be written, as on a full disk, fa
   assert.ok(!fs.existsSync(path.join(dir, "stills")));
 });
 
+// ffmpeg 4.4.2 on a full disk as it writes a picture, in its own words. The
+// stills of an address are a run inside the plan's, and the folder whose
+// disk is full was named as the new one, as the picture is.
+test("stills of an address that fill the disk name the stills folder whose disk is full as it will be, with what to do", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "notes.txt"), "the user's");
+  const ffmpeg = path.join(tmp(), "ffmpeg");
+  const real = (process.env.LAUNCH_FILM_FFMPEG || "ffmpeg").replace(/'/g, "'\\''");
+  fs.writeFileSync(ffmpeg, `#!/bin/sh\nfor last; do :; done\ncase "$*" in *force_original_aspect_ratio=increase*) case "$last" in */og.png) ` +
+    `printf 'av_interleaved_write_frame(): No space left on device\\n    Last message repeated 1 times\\nError writing trailer of %s: No space left on device\\n' "$last" >&2; exit 1;; esac;; esac\nexec '${real}' "$@"\n`, { mode: 0o755 });
+  const r = stills(["https://acme-notes.example", "--out", dir, "--brand", fixture, "--words", path.join(fixture, "words.json"), "--for", "og"], { LAUNCH_FILM_FFMPEG: ffmpeg });
+  assert.equal(r.status, 1, r.stderr);
+  const og = path.join(dir, "stills", "og.png");
+  assert.ok(r.stderr.endsWith(`\nlaunch-film: making the new ${og}: ffmpeg failed: av_interleaved_write_frame(): No space left on device | Error writing trailer of the new ${og}: No space left on device. ` +
+    `The disk of ${path.join(dir, "stills")} is full: free some room and run again\nlaunch-film: ${dir} is as it was.\n`), r.stderr);
+  assert.deepEqual(fs.readdirSync(dir), ["notes.txt"]);
+});
+
 test("a picture that cannot be saved is named as the new one, with the reason", { skip, timeout: 240_000 }, async () => {
   const { dir, filmFile } = plannedFolder();
   const stub = path.join(tmp(), "stub.js");

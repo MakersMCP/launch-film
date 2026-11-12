@@ -660,7 +660,7 @@ test("a write that fails names the file it was writing, as the new one, and a qu
   const before = snap(dir);
   const real = fs.writeFileSync;
   fs.writeFileSync = (file, ...rest) => {
-    if (path.basename(String(file)) === "film.json") throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    if (["film.json", "STILLS.md"].includes(path.basename(String(file)))) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
     return real(file, ...rest);
   };
   let part = null;
@@ -671,6 +671,10 @@ test("a write that fails names the file it was writing, as the new one, and a qu
     }).catch((e) => e);
     // A full disk is named, with what to do.
     assert.equal(out.said(err.message), `writing the new ${path.join(dir, "film.json")}: no space left on device (ENOSPC). The disk of ${dir} is full: free some room and run again`);
+    // A run inside another's part folder, as the stills of an address are,
+    // names its folder as it will be: it was "the new" one.
+    const inner = await out.within(dir, (run) => out.within(path.join(run.part, "stills"), async (stills) => out.save(stills.out("STILLS.md"), "stills"))).catch((e) => e);
+    assert.equal(out.said(inner.message), `writing the new ${path.join(dir, "stills", "STILLS.md")}: no space left on device (ENOSPC). The disk of ${path.join(dir, "stills")} is full: free some room and run again`);
   } finally {
     fs.writeFileSync = real;
   }

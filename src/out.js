@@ -128,11 +128,13 @@ function reason(err) {
 // What to do when the disk a file goes to is full, said after the reason:
 // the disk of the folder it is in, or of the temp folder for one in a temp
 // folder of the run's own (tempDir), as a render's clips are, which goes
-// with the run.
+// with the run. The folder is named as it is once the runs have ended well
+// (shown), not as the new one: a run inside another's part folder, as the
+// stills of an address are, has its folder in that part folder.
 function full(file) {
   const dir = path.dirname(path.resolve(file));
   const temp = [...temps.keys()].some((folder) => inside(dir, folder));
-  return `The disk of ${temp ? os.tmpdir() : dir} is full: free some room and run again`;
+  return `The disk of ${shown(temp ? os.tmpdir() : dir)} is full: free some room and run again`;
 }
 
 // Writes a file, and fails with the file and the reason.
