@@ -207,6 +207,9 @@ function wordsOf(text) {
 function readBrand(file) {
   const dir = path.dirname(path.resolve(file));
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  // One that holds null ended the plan in Node's own words, and one that
+  // holds a list was planned as a brand with nothing in it.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${path.basename(file)} must hold an object, as easybrandkit's brand.json does`);
   const notes = [];
   const outside = [];
   const lists = [];

@@ -262,6 +262,9 @@ test("a kit that cannot be copied is named, with the new folder and the reason",
 
 test("a plan given a kit that cannot be read leaves the folder's kit as it was", () => {
   planFails(["--brand", otherKit("{ this is not JSON")], /JSON/);
+  // A brand.json that holds no object ended the plan in Node's own words, or
+  // was planned as a brand with nothing in it.
+  for (const text of ["null", "[1, 2]", "3"]) planFails(["--brand", otherKit(text)], /^launch-film: brand\.json must hold an object, as easybrandkit's brand\.json does\n/);
 });
 
 // A plan given a kit and no words reads the words on the page. Offline it

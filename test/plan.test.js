@@ -167,6 +167,13 @@ test("a value of another kind than its field takes is refused by the field, befo
   for (const sfx of [undefined, null, true, false]) assert.deepEqual(load({ look: "launch", sfx, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(sfx));
   for (const brand of [undefined, null, "", false]) assert.deepEqual(load({ look: "launch", brand, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(brand));
   for (const film of ["null", "[]", "3", '"film"']) assert.deepEqual(load(film), [`${file} must hold an object, such as { "look": "launch", "clips": [] }`], film);
+  // So must the brand.json it names.
+  for (const kit of ["null", "[1, 2]", "3"]) {
+    fs.writeFileSync(path.join(dir, "kit.json"), kit);
+    assert.throws(() => readBrand(path.join(dir, "kit.json")), { message: "kit.json must hold an object, as easybrandkit's brand.json does" }, kit);
+    assert.deepEqual(load({ look: "launch", brand: "kit.json", clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }),
+      ["the brand could not be read from kit.json: kit.json must hold an object, as easybrandkit's brand.json does"], kit);
+  }
   // A long value is said on one line and cut, as a name is.
   const [music] = load({ look: "launch", music: Array(3000).fill("a"), clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
   assert.ok(music.length < 300, `${music.length} characters`);
