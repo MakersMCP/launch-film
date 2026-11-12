@@ -1785,6 +1785,56 @@ ${WAITS}
   }
 });
 
+// lf- is a name other programs may give their folders too. Of the folders
+// of that name whose process is gone, a run whose Chrome with network access
+// has a profile so named removes only the profiles launch-film left, which
+// hold the Preferences it writes before Chrome starts, naming the folder's
+// own Downloads. Another program's folder stays as it is, and so does
+// another Chrome's profile, whose Chrome still runs. A TMPDIR of 40 bytes
+// gives the profile that name, whatever the digits of the pid.
+test("a run whose Chrome has a profile named lf- removes, of the folders so named, only the profiles launch-film left", { skip: process.platform !== "linux" && "the shorter name is Linux's" }, async () => {
+  const file = standInChrome(tmp());
+  const base = shortTmp();
+  const temp = path.join(base, "x".repeat(40 - base.length - 1));
+  const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout;
+  const prefs = (downloads) => JSON.stringify({ download: { default_directory: downloads, prompt_for_download: false } });
+  const chrome = path.join(temp, `lf-${gone}-ChRoMe`);
+  write(temp, { [`lf-${gone}-NoTeS1/notes/keep.txt`]: "another program's", [`lf-${gone}-ChRoMe/Default/Preferences`]: prefs("/home/someone/Downloads") });
+  const kept = snap(temp);
+  write(temp, { [`lf-${gone}-LeFtBy/Default/Preferences`]: prefs(path.join(temp, `lf-${gone}-LeFtBy`, "Downloads")) });
+  const user = spawn(process.execPath, ["-e", WAITS, "--", `--user-data-dir=${chrome}`], { stdio: "ignore" });
+  const uses = () => {
+    try {
+      return fs.readFileSync(`/proc/${user.pid}/cmdline`, "utf8").includes(`--user-data-dir=${chrome}`);
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 500 && !uses(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const saw = path.join(tmp(), "saw");
+  const script = `
+const fs = require("fs");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
+out.listen();
+launch({ W: 100, H: 100, network: true }).then((browser) => {
+  browser.close();
+  setInterval(() => fs.readdirSync(process.env.TMPDIR).some((name) => name.startsWith("lf-" + process.pid + "-")) || process.exit(0), 20);
+});
+${WAITS}
+`;
+  try {
+    assert.ok(uses(), "the other Chrome did not start");
+    const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 30_000, env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: file, STAND_IN: "fetching", STAND_IN_SAW: saw } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(path.basename(fs.readFileSync(saw, "utf8")), /^lf-\d+-/, "the profile has the shorter name");
+    assert.deepEqual(snap(temp), kept);
+    assert.ok(alive(user.pid), "the Chrome of another program's profile was ended");
+  } finally {
+    end(user.pid);
+  }
+});
+
 test("a run removes the temp folders of runs that are gone", () => {
   // Of their kind: one of a process that has ended, one whose pid is now
   // this process's, one of a process that runs, and one without a pid, as

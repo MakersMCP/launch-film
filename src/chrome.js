@@ -287,6 +287,21 @@ function chromeArgs({ W = 1920, H = 1080, network = false, profile }) {
   ];
 }
 
+// Whether the folder `dir` is a profile launch made: it holds the
+// Preferences launch writes there before Chrome starts, which Chrome keeps,
+// naming the folder's own Downloads. Other programs may name their folders
+// lf- too, so of the folders so named that killed runs may have left, only
+// such a profile goes (out.js, tempDir). Only a plain file is read: a pipe
+// of that name would keep the read waiting.
+function ownProfile(dir) {
+  const file = path.join(dir, "Default", "Preferences");
+  try {
+    return fs.lstatSync(file).isFile() && JSON.parse(fs.readFileSync(file, "utf8")).download.default_directory === path.join(dir, "Downloads");
+  } catch {
+    return false;
+  }
+}
+
 // A browser with its own temp profile, answering protocol calls by promise.
 async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const chrome = findChrome();
@@ -312,7 +327,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   const linux = network && process.platform === "linux";
   const short = linux && !socketFits(named("launch-film-chrome-")) && Buffer.byteLength(named("lf-")) + 4 <= SOCKET_ROOM;
   let fetched = null;
-  const profile = tempDir(short ? "lf-" : "launch-film-chrome-", (dir) => closeProfile(dir, socket, fetched));
+  const profile = tempDir(short ? "lf-" : "launch-film-chrome-", (dir) => closeProfile(dir, socket, fetched), short ? ownProfile : null);
   // Downloads, should Chrome save one in spite of the refusal below, go in
   // the profile, which goes with the run.
   fs.mkdirSync(path.join(profile, "Default"));

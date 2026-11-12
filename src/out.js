@@ -863,12 +863,14 @@ function aftermath() {
 // still uses it and takes the socket folder Chrome links from it along
 // (chrome.js). The first time a process makes one of a kind, it removes the
 // ones of that kind whose process is gone, or whose pid is its own now,
-// the same way: a run killed outright leaves them.
+// the same way: a run killed outright leaves them. For a kind whose name
+// other programs may give their folders too, ours(dir) tells launch-film's
+// from theirs, and only those go.
 const swept = new Set();
-function tempDir(prefix, before = null) {
+function tempDir(prefix, before = null, ours = null) {
   if (!swept.has(prefix)) {
     swept.add(prefix);
-    sweepTemps(prefix, before);
+    sweepTemps(prefix, before, ours);
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}${process.pid}-`));
   temps.set(dir, before);
@@ -895,10 +897,11 @@ function tempEnv(folder) {
 }
 
 // The temp folders of a kind that runs killed outright left: this user's
-// own, whose process is gone or has this process's pid now. A folder
-// another user put in a shared temp folder under such a name is left alone,
-// and before() never runs on it: a profile's link there can lead anywhere.
-function sweepTemps(prefix, before) {
+// own, whose process is gone or has this process's pid now, and that
+// ours(), where given, takes for launch-film's. A folder another user put
+// in a shared temp folder under such a name is left alone, and before()
+// never runs on it: a profile's link there can lead anywhere.
+function sweepTemps(prefix, before, ours) {
   const named = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d+)-[A-Za-z0-9]{6}$`);
   let entries = [];
   try {
@@ -912,6 +915,7 @@ function sweepTemps(prefix, before) {
     if (!m || !entry.isDirectory() || temps.has(at) || !mine(at)) continue;
     const pid = Number(m[1]);
     if (pid !== process.pid && running(pid)) continue;
+    if (ours && !ours(at)) continue;
     if (before) {
       try {
         before(at);
