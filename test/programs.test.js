@@ -93,6 +93,37 @@ for (const name of NAMES) {
   });
 }
 
+// GitHub's ubuntu-22.04 runner hands a file that starts with MZ to
+// binfmt-support's run-detectors, which says it found no interpreter for it
+// and exits with 2, where this machine refuses to start it, and reframekit's
+// test of a Windows ffmpeg failed there. launch-film tells a Windows program
+// by its first bytes before it runs one, so it says the same on either
+// system. Here a spawn that answers as run-detectors does stands in for such
+// a system.
+test("a Windows program is told of by its first bytes, also where the system hands such a file to a program of its own, as binfmt-support does", { skip }, () => {
+  const c = where().cases.find((k) => k.name === "a Windows program");
+  const stub = path.join(tmp(), "binfmt.js");
+  fs.writeFileSync(stub, `const fs = require("fs");
+const cp = require("child_process");
+const windows = (file) => {
+  try {
+    return fs.readFileSync(file).subarray(0, 2).toString("latin1") === "MZ";
+  } catch {
+    return false;
+  }
+};
+const detectors = 'echo "run-detectors: unable to find an interpreter for $0" >&2; exit 2';
+for (const name of ["spawnSync", "spawn"]) {
+  const real = cp[name];
+  cp[name] = (file, args, ...rest) => (windows(file) ? real("/bin/sh", ["-c", detectors, file], ...rest) : real(file, args, ...rest));
+}
+`);
+  for (const program of ["ffmpeg", "ffprobe", "chrome"]) {
+    const r = run(program, { [VARIABLE[program]]: c.file, NODE_OPTIONS: `--require ${stub}` });
+    refused(r, `${LEAD[program]}${VARIABLE[program]} points to ${c.file}, ${c.said}. ${SET[program]}`, `${program}: a Windows program`);
+  }
+});
+
 test("an ffmpeg or ffprobe named by a name that is not on PATH, and none on PATH at all, are refused", { skip }, () => {
   const empty = tmp();
   for (const program of ["ffmpeg", "ffprobe"]) {
