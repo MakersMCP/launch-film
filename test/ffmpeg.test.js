@@ -42,6 +42,25 @@ test("a failed run of ffmpeg says why: its words, the signal that ended it, or i
   assert.equal(why({ code: 1, signal: null, stderr: "" }), "ffmpeg failed with exit code 1");
 });
 
+// On a full disk ffmpeg 4.4.2 said a line again with its note that it had,
+// and the failure ended in its words and no word of what to do.
+test("a run of ffmpeg that fills the disk names the disk, with what to do, and leaves out its notes of lines said again", () => {
+  const stderr = "av_interleaved_write_frame(): No space left on device\n    Last message repeated 1 times\nError writing trailer of /films/acme/film.mp4: No space left on device\n";
+  assert.equal(why({ code: 1, signal: null, stderr }, { out: "/films/acme/film.mp4" }), "ffmpeg failed: av_interleaved_write_frame(): No space left on device | " +
+    "Error writing trailer of /films/acme/film.mp4: No space left on device. The disk of /films/acme is full: free some room and run again");
+  assert.equal(why({ code: 1, signal: null, stderr }), "ffmpeg failed: av_interleaved_write_frame(): No space left on device | Error writing trailer of /films/acme/film.mp4: No space left on device");
+  // A file in a temp folder of the run's own, as a clip is, goes with the
+  // run: the disk is named by the temp folder.
+  const { tempDir, release } = require("../src/out");
+  const work = tempDir("launch-film-work-");
+  try {
+    assert.equal(why({ code: 1, signal: null, stderr: "Could not write header for output file #0: No space left on device" }, { lines: 2, out: path.join(work, "clip-00.mp4") }),
+      `ffmpeg failed: Could not write header for output file #0: No space left on device. The disk of ${require("os").tmpdir()} is full: free some room and run again`);
+  } finally {
+    release(work);
+  }
+});
+
 test("a picture cut short is told from a whole one", { skip }, async () => {
   const dir = tmp();
   const png = path.join(dir, "a.png");

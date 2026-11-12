@@ -571,8 +571,15 @@ async function addSound({ video, wav, out, seconds, tries }) {
   for (let n = 0; n < TRIES; n++) {
     const file = tries(n);
     const limiter = `aformat=channel_layouts=stereo,aresample=192000,alimiter=limit=${(10 ** (ceiling / 20)).toFixed(4)}:attack=1:release=50:level=false,aresample=48000`;
-    await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `volume=${gain.toFixed(2)}dB,${limiter}`,
-      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", seconds.toFixed(3), "-movflags", "+faststart", file], "adding the sound");
+    try {
+      await mustRun(["-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", `volume=${gain.toFixed(2)}dB,${limiter}`,
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", seconds.toFixed(3), "-movflags", "+faststart", file], "adding the sound");
+    } catch (err) {
+      // An encode is named as the film it would become: its own name is a
+      // work file's, which goes with the part folder.
+      err.message = err.message.split(file).join(out);
+      throw err;
+    }
     const level = await levelOf(file);
     // Silence is kept as it is: no gain makes it louder.
     if (!(level.integrated > -70) || !(level.truePeak > -Infinity)) {

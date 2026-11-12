@@ -20,7 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { track } = require("./out");
+const { track, full } = require("./out");
 const { short } = require("./programs");
 // A file's name as a message says it: on one line, and cut when long, as a
 // film.json or brand.json can name anything (confine.js).
@@ -79,7 +79,7 @@ async function writePicture(args, file, what, { none = null, ...opts } = {}) {
   if (r.short) throw Object.assign(new Error(r.short), { short: true });
   const nothing = !fs.existsSync(file) && (r.code === 0 || /Nothing was written into output file|Output file is empty/.test(r.stderr));
   if (nothing && none) throw new Error(`${what}: ${none}`);
-  if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
+  if (r.code !== 0) throw new Error(`${what}: ${why(r, { out: file })}`);
   if (nothing) throw new Error(`${what}: ffmpeg wrote no picture`);
   if (!whole(file)) throw new Error(`${what}: the picture was cut short, most often because the disk is full`);
   return r;
@@ -88,12 +88,15 @@ async function writePicture(args, file, what, { none = null, ...opts } = {}) {
 // Why a run of ffmpeg or ffprobe ({ code, signal, stderr }) failed: the end
 // of its own words, else the signal that ended it, else its exit code. One
 // killed outright with no word was most often ended by the system running
-// out of memory.
-function why(r, { lines = 3, name = "ffmpeg" } = {}) {
+// out of memory. ffmpeg's note that it left out a line said again ("Last
+// message repeated 1 times") is no reason. When it says the disk is full as
+// it writes the file `out`, it is said which disk, and what to do.
+function why(r, { lines = 3, name = "ffmpeg", out = null } = {}) {
   // A name in them can hold a control character of its own, as a carriage
   // return that would write over the line: it is written escaped.
-  const said = confine.oneLine(String(r.stderr || "").trim().split("\n").slice(-lines).join(" | "));
-  if (said) return `${name} failed: ${said}`;
+  const own = String(r.stderr || "").trim().split("\n").filter((line) => line.trim() && !/^\s*Last message repeated \d+ times?\s*$/.test(line));
+  const said = confine.oneLine(own.slice(-lines).join(" | "));
+  if (said) return `${name} failed: ${said}${out && /No space left on device/i.test(said) ? `. ${full(out)}` : ""}`;
   if (r.signal) return `${name} was stopped by ${r.signal}${r.signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`;
   return `${name} failed with exit code ${r.code}`;
 }
@@ -161,10 +164,13 @@ function run(args, { input = null, timeout = 0, loglevel = "error" } = {}) {
   });
 }
 
+// Runs ffmpeg as run() does, and fails after `what` it was doing. Its last
+// argument is the file it writes, when it writes one.
 async function mustRun(args, what, opts) {
   const r = await run(args, opts);
   if (r.short) throw Object.assign(new Error(r.short), { short: true });
-  if (r.code !== 0) throw new Error(`${what}: ${why(r)}`);
+  const out = String(args[args.length - 1]);
+  if (r.code !== 0) throw new Error(`${what}: ${why(r, { out: path.isAbsolute(out) ? out : null })}`);
   return r;
 }
 
@@ -387,7 +393,7 @@ function encoder({ output, fps = 25, crf = 15 }) {
   const failed = () => {
     if (unstarted) return Object.assign(new Error(unstarted), { short: true });
     const killed = ended.signal === "SIGKILL" && !err.trim();
-    return Object.assign(new Error(`${why({ ...ended, stderr: err }, { lines: 2 })}${killed ? ": run again once more of it is free" : ""}`), { memory: killed });
+    return Object.assign(new Error(`${why({ ...ended, stderr: err }, { lines: 2, out: output })}${killed ? ": run again once more of it is free" : ""}`), { memory: killed });
   };
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)

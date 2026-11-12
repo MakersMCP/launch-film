@@ -125,12 +125,22 @@ function reason(err) {
   return m ? `${m[2].charAt(0).toLowerCase()}${m[2].slice(1)} (${m[1]})` : text;
 }
 
+// What to do when the disk a file goes to is full, said after the reason:
+// the disk of the folder it is in, or of the temp folder for one in a temp
+// folder of the run's own (tempDir), as a render's clips are, which goes
+// with the run.
+function full(file) {
+  const dir = path.dirname(path.resolve(file));
+  const temp = [...temps.keys()].some((folder) => inside(dir, folder));
+  return `The disk of ${temp ? os.tmpdir() : dir} is full: free some room and run again`;
+}
+
 // Writes a file, and fails with the file and the reason.
 function save(file, data) {
   try {
     fs.writeFileSync(file, data);
   } catch (err) {
-    throw new Error(`writing ${file}: ${reason(err)}`);
+    throw new Error(`writing ${file}: ${reason(err)}${err.code === "ENOSPC" ? `. ${full(file)}` : ""}`);
   }
 }
 
@@ -1317,5 +1327,5 @@ function noticed() {
   return said;
 }
 
-module.exports = { begin, within, heldBackIn, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, save, copyPlain,
+module.exports = { begin, within, heldBackIn, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, full, save, copyPlain,
   socketFolder, closeProfile, socketFits, STALE, LOCK, SOCKET_ROOM };

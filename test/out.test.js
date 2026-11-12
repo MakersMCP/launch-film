@@ -669,7 +669,8 @@ test("a write that fails names the file it was writing, as the new one, and a qu
       part = run.part;
       out.save(run.out("film.json"), "plan");
     }).catch((e) => e);
-    assert.equal(out.said(err.message), `writing the new ${path.join(dir, "film.json")}: no space left on device (ENOSPC)`);
+    // A full disk is named, with what to do.
+    assert.equal(out.said(err.message), `writing the new ${path.join(dir, "film.json")}: no space left on device (ENOSPC). The disk of ${dir} is full: free some room and run again`);
   } finally {
     fs.writeFileSync = real;
   }

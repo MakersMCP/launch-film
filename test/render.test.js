@@ -513,6 +513,36 @@ test("a render that fails keeps the earlier film", { skip: noShell, timeout: 240
   assert.deepEqual(leftBy(m.pid), []);
 });
 
+// ffmpeg 4.4.2 on a full disk, as it writes the film with its sound: what it
+// says, naming the file it writes.
+const FILLS_THE_DISK = `case "$*" in *"-map 1:a"*) for last; do :; done; : > "$last"; ` +
+  `printf 'av_interleaved_write_frame(): No space left on device\\n    Last message repeated 1 times\\nError writing trailer of %s: No space left on device\\n' "$last" >&2; exit 1;; esac`;
+
+// A disk filled as the sound went in was said in ffmpeg's words, which named
+// the hidden name of an encode as a file in the film's folder, and said a
+// line again, with no word of what to do.
+test("a render that fills the disk as it lays the sound names the film it would make and the disk, with what to do", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 200_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: standIn(FILLS_THE_DISK) } });
+  assert.equal(r.status, 1, r.stderr);
+  const film = path.join(dir, "film.mp4");
+  assert.ok(r.stderr.endsWith(`\nlaunch-film: adding the sound: ffmpeg failed: av_interleaved_write_frame(): No space left on device | Error writing trailer of the new ${film}: No space left on device. ` +
+    `The disk of ${dir} is full: free some room and run again\nlaunch-film: ${dir} is as it was.\n`), r.stderr);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(r.pid), []);
+});
+
+test("an encode that fills the disk is named as the film it would become", { skip: process.platform === "win32" ? "the stand-in ffmpeg is a shell script" : !available() && "ffmpeg not found", timeout: 120_000 }, async () => {
+  const dir = tmp();
+  const film = await soundAndPicture(dir, audio.mixFilm({ seconds: 2, music: null, cues: [{ sfx: "click", at: 0.5, volume: 0.5 }] }));
+  const out = path.join(dir, "film.mp4");
+  const r = addSoundWith(standIn(FILLS_THE_DISK), film, out);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, `adding the sound: ffmpeg failed: av_interleaved_write_frame(): No space left on device | Error writing trailer of ${out}: No space left on device. ` +
+    `The disk of ${dir} is full: free some room and run again\n`);
+});
+
 // makersmcp's worker copies an earlier job's folder into a new job's as its
 // own files, which the job's user may read and not write, in a folder it may
 // write in. A render there failed once every clip had rendered, refused as
@@ -553,8 +583,9 @@ test("a render whose clip encoder stops ends with its words and keeps the earlie
   const ffmpeg = standIn(`case "$*" in *image2pipe*) echo 'stand-in: No space left on device' >&2; exit 1;; esac`);
   const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
   assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
-  // It says which clip it stopped, as ffmpeg's own words do not.
-  assert.match(r.stderr, /^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\n/m);
+  // It says which clip it stopped, as ffmpeg's own words do not, and that
+  // the disk of the temp folder, where the clips are made, is full.
+  assert.match(r.stderr, new RegExp(`^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\\. The disk of ${escape(os.tmpdir())} is full: free some room and run again\n`, "m"));
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(leftBy(r.pid), []);
 });
@@ -581,7 +612,7 @@ test("a render whose ffmpeg stops reading its frames and then fails says so, and
   const ffmpeg = standIn(`case "$*" in *image2pipe*) sleep 4; echo 'stand-in: No space left on device' >&2; exit 1;; esac`);
   const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json"), "--jobs", "1"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
   assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
-  assert.match(r.stderr, /^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\n/m);
+  assert.match(r.stderr, new RegExp(`^launch-film: rendering clip 1: ffmpeg failed: stand-in: No space left on device\\. The disk of ${escape(os.tmpdir())} is full: free some room and run again\n`, "m"));
   assert.deepEqual(snap(dir), before);
 });
 
