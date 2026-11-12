@@ -10,7 +10,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const out = require("../src/out");
 
-const { tmp, shortTmp, stillRunning, WAITS, alive, end, SAVES_PID, pidIn } = require("./tmp");
+const { tmp, tooLongForChrome, shortTmp, stillRunning, WAITS, alive, end, SAVES_PID, pidIn } = require("./tmp");
 const noSignals = process.platform === "win32" && "POSIX signals";
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -1578,7 +1578,7 @@ out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film")
   assert.deepEqual(snap(base), { "film/": "folder", "film/film.mp4": "new film" });
 });
 
-test("a stop removes the socket folder Chrome links from its profile", { skip: noSignals }, async () => {
+test("a stop removes the socket folder Chrome links from its profile", { skip: noSignals || tooLongForChrome }, async () => {
   // A stand-in Chrome that makes its socket folder in the temp folder, as
   // Chrome does, and lets SIGTERM go, so the stop has to kill it.
   const temp = tmp();
@@ -1661,7 +1661,7 @@ launch({ W: 100, H: 100 }).then(() => {
 ${WAITS}
 `;
 
-test("a failed run ends the Chrome helpers that still write in its profile before the profile goes", { skip: process.platform !== "linux" && "/proc tells which processes use a profile" }, async () => {
+test("a failed run ends the Chrome helpers that still write in its profile before the profile goes", { skip: (process.platform !== "linux" && "/proc tells which processes use a profile") || tooLongForChrome }, async () => {
   const temp = tmp();
   const pidFile = path.join(tmp(), "helper.pid");
   const env = { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: standInChrome(tmp()), STAND_IN: "helper", STAND_IN_PID: pidFile };
@@ -1679,7 +1679,7 @@ test("a failed run ends the Chrome helpers that still write in its profile befor
   }
 });
 
-test("a stop as Chrome starts to close removes the socket folder Chrome made", { skip: noSignals }, async () => {
+test("a stop as Chrome starts to close removes the socket folder Chrome made", { skip: noSignals || tooLongForChrome }, async () => {
   // Ctrl-C reaches Chrome too, as it closes after a clip: it unlinks its
   // socket from the profile, and is killed before it removes the folder.
   const temp = tmp();

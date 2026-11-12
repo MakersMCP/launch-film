@@ -6,7 +6,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { easybrandkitCommands, runEasybrandkit } = require("../src/brand");
 
-const { tmp, shortTmp } = require("./tmp");
+const { tmp, tooLongForChrome, shortTmp } = require("./tmp");
 
 // Runs fn with PATH set to dir alone and LAUNCH_FILM_EASYBRANDKIT unset.
 async function withPath(dir, fn) {
@@ -257,7 +257,7 @@ const wait = setInterval(() => {
 // the stand-ins and no display (as its Wayland display, a path there that
 // is never made), all of which the Chrome it starts takes from it. This
 // stand-in writes down what it was given.
-test("easybrandkit gets a session bus that leads nowhere, the stand-ins first on its PATH and no display, on Linux", { skip: process.platform !== "linux" && "the session bus and the stand-ins are Linux's" }, async () => {
+test("easybrandkit gets a session bus that leads nowhere, the stand-ins first on its PATH and no display, on Linux", { skip: (process.platform !== "linux" && "the session bus and the stand-ins are Linux's") || tooLongForChrome }, async () => {
   const dir = tmp();
   // A desktop's bus, a socket that is there.
   const desktop = path.join(dir, "desktop-bus");

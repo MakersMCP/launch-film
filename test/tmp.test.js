@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { tmp } = require("./tmp");
+const { tmp, shortTmp } = require("./tmp");
 
 const needsProc = process.platform !== "linux" && "/proc tells which processes the tests started";
 const HELPER = 'const helper = spawn(process.execPath, ["-e", WAITS], { stdio: "ignore" }); helper.unref(); made.helper = helper.pid;';
@@ -113,4 +113,48 @@ test("a test may signal only a pid that is a whole number above 0", async () => 
   assert.equal(await pidIn(file), Number(r.stdout));
   assert.deepEqual(fs.readdirSync(dir), ["child.pid"]);
   assert.ok(!alive(Number(r.stdout)), "it has ended");
+});
+
+// A folder of tmp() is 34 bytes longer than TMPDIR, and launch-film starts
+// no Chrome from a temp folder whose path takes more than 66 bytes: where
+// TMPDIR took more than 32, a test that has it start Chrome from a folder of
+// tmp() failed. It is skipped there, with launch-film's own reason, and runs
+// where TMPDIR takes 32.
+test("a test that has launch-film start Chrome from a folder of tmp() runs where TMPDIR leaves room for Chrome's socket, and is skipped with launch-film's reason where it does not", { skip: process.platform !== "linux" && "launch-film starts Chrome from any temp folder elsewhere" }, () => {
+  const dir = tmp();
+  const chrome = JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"));
+  fs.writeFileSync(path.join(dir, "file.test.js"), `"use strict";
+const test = require("node:test");
+const { spawnSync } = require("child_process");
+const { tmp, tooLongForChrome } = require(${JSON.stringify(path.join(__dirname, "tmp.js"))});
+test("a test", { skip: tooLongForChrome }, () => {
+  const r = spawnSync(process.execPath, ["-e", ${JSON.stringify(`require(${chrome}).standIns()`)}], { encoding: "utf8", env: { ...process.env, TMPDIR: tmp() } });
+  if (r.status !== 0) throw new Error(r.stderr);
+});
+`);
+  const base = shortTmp();
+  const folder = (bytes) => {
+    const made = path.join(base, "x".repeat(bytes - base.length - 1));
+    fs.mkdirSync(made);
+    return made;
+  };
+  const run = (temp) => {
+    const env = { ...process.env, TMPDIR: temp };
+    delete env.NODE_TEST_CONTEXT;
+    return spawnSync(process.execPath, ["--test", "--test-reporter=tap", "file.test.js"], { cwd: dir, env, encoding: "utf8", timeout: 120_000 });
+  };
+  const fits = run(folder(32));
+  assert.equal(fits.status, 0, fits.stdout);
+  assert.match(fits.stdout, /^ok 1 - a test$/m);
+  const over = folder(33);
+  const skipped = run(over);
+  assert.equal(skipped.status, 0, skipped.stdout);
+  const line = skipped.stdout.split("\n").find((l) => l.startsWith("ok 1 - a test # SKIP ")) || skipped.stdout;
+  assert.equal(line.replace(/\/launch-film-tests-\w{6},/, "/launch-film-tests-XXXXXX,"), `ok 1 - a test # SKIP launch-film cannot start Chrome from the tests' temp folders in ${over}/launch-film-tests-XXXXXX, ` +
+    "as the socket Chrome makes in a folder there would have a path longer than the 107 bytes a socket's path may have: run the tests with a TMPDIR whose path takes at most 32 bytes " +
+    "(this one takes 33, and a letter outside ASCII takes two or more)");
+  // Why, in the words launch-film refuses a temp folder of 67 bytes with.
+  const kit = spawnSync(process.execPath, ["-e", `try { require(${chrome}).standIns(); } catch (err) { console.log(err.message); }`], { encoding: "utf8", env: { ...process.env, TMPDIR: folder(67) } });
+  const why = /^launch-film cannot start Chrome from the temp folder .+?, (as the socket .+?): set TMPDIR /.exec(kit.stdout);
+  assert.ok(why && line.includes(`, ${why[1]}: run the tests with`), kit.stdout + kit.stderr);
 });

@@ -10,7 +10,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { tmp } = require("./tmp");
+const { tmp, tooLongForChrome } = require("./tmp");
 const { makeCases, onPath } = require("./programs-cases");
 
 const root = path.join(__dirname, "..");
@@ -83,6 +83,13 @@ for (const name of NAMES) {
     try {
       for (const program of ["ffmpeg", "ffprobe", "chrome"].filter((p) => !c.only || c.only === p)) {
         const r = run(program, { [VARIABLE[program]]: c.file });
+        // A Chrome that has to be run to tell what is wrong with it is run
+        // once launch-film has made its stand-ins, which it does not do
+        // from a temp folder too long for Chrome's socket.
+        if (program === "chrome" && tooLongForChrome && r.stderr.startsWith("launch-film cannot start Chrome from the temp folder ")) {
+          t.skip(tooLongForChrome);
+          continue;
+        }
         const said = c.said instanceof RegExp ? new RegExp(`^${escape(`${LEAD[program]}${VARIABLE[program]} points to ${c.file}, `)}${c.said.source.replace(/^\^/, "")}.*\\. ${escape(SET[program])}\\n$`)
           : `${LEAD[program]}${VARIABLE[program]} points to ${c.file}, ${c.said}. ${SET[program]}`;
         refused(r, said, `${program}: ${name}`);
@@ -272,7 +279,7 @@ cp.spawn = function (file, args, opts) {
 }
 const OUT_OF_FILES = "too many files are open (EMFILE). Raise the limit on open files, as ulimit -n does, and run it again.";
 
-test("a run that runs out of file descriptors as it starts ffmpeg, Chrome or easybrandkit says so, and leaves its folder as it was", { skip }, () => {
+test("a run that runs out of file descriptors as it starts ffmpeg, Chrome or easybrandkit says so, and leaves its folder as it was", { skip: skip || tooLongForChrome }, () => {
   const { dir, film, folder } = where();
   const stub = spawnStub();
   const chrome = path.join(tmp(), "chrome");
@@ -302,7 +309,7 @@ test("a run that runs out of file descriptors as it starts ffmpeg, Chrome or eas
   for (const r of [check, render, plan]) assert.deepEqual(r.left, [], "left in the temp folder");
 });
 
-test("a render that runs out of file descriptors as it starts a clip's encoder says so, and leaves its folder as it was", { skip: skip || (!require("../src/chrome").findChrome() && "Chrome not found"), timeout: 180_000 }, () => {
+test("a render that runs out of file descriptors as it starts a clip's encoder says so, and leaves its folder as it was", { skip: skip || (!require("../src/chrome").findChrome() && "Chrome not found") || tooLongForChrome, timeout: 180_000 }, () => {
   const { folder } = where();
   const temp = tmp();
   const r = spawnSync(process.execPath, [path.join(root, "bin", "launch-film.js"), "render", path.join(folder, "film.json")], { encoding: "utf8", timeout: 150_000,

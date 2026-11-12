@@ -11,7 +11,7 @@ const { spawn, spawnSync } = require("child_process");
 const { findChrome, chromeArgs, launch, openPage, stillOf, snapshots, evaluate, busPath } = require("../src/chrome");
 const { available, readPixels, writePng } = require("../src/ffmpeg");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-const { tmp, shortTmp, SAVES_PID, pidIn, alive } = require("./tmp");
+const { tmp, tooLongForChrome, shortTmp, SAVES_PID, pidIn, alive } = require("./tmp");
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -288,7 +288,7 @@ function muteChrome() {
 // A Chrome that did not answer launch's first call was left running: its
 // pipes kept doctor, and a plan that went on with the page's HTML, from
 // ending until that Chrome did, for good with a Chrome that hangs.
-test("a Chrome that never answers is ended with its profile, so doctor and a plan that reads the page's HTML instead end", { skip: process.platform === "win32" && "the stand-in Chrome is a script", timeout: 120_000 }, async () => {
+test("a Chrome that never answers is ended with its profile, so doctor and a plan that reads the page's HTML instead end", { skip: (process.platform === "win32" && "the stand-in Chrome is a script") || tooLongForChrome, timeout: 120_000 }, async () => {
   const { chrome, stub } = muteChrome();
   const kit = path.join(tmp(), "kit");
   fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
@@ -336,7 +336,7 @@ test("a Chrome that never answers is ended with its profile, so doctor and a pla
 // A Chrome that answers launch's first call and not its refusal of downloads
 // would open pages that may save a file: it is ended with its profile before
 // any page opens, as one that answers nothing is.
-test("a Chrome that does not take the refusal of downloads is ended before any page opens", { skip: process.platform === "win32" && "the stand-in Chrome is a script", timeout: 60_000 }, async () => {
+test("a Chrome that does not take the refusal of downloads is ended before any page opens", { skip: (process.platform === "win32" && "the stand-in Chrome is a script") || tooLongForChrome, timeout: 60_000 }, async () => {
   const dir = tmp();
   const chrome = path.join(dir, "chrome");
   fs.writeFileSync(chrome, `#!${process.execPath}
@@ -375,7 +375,7 @@ setTimeout(() => process.exit(0), 40000);
 // was given, and what a Wayland program it started would find, and ends.
 const WAYLAND_CLIENT = 'import ctypes; w = ctypes.CDLL("libwayland-client.so.0"); w.wl_display_connect.restype = ctypes.c_void_p; print("connected" if w.wl_display_connect(None) else "none")';
 const waylandClient = spawnSync("python3", ["-c", "import ctypes; ctypes.CDLL('libwayland-client.so.0')"]).status === 0;
-test("every Chrome launch-film starts on Linux gets a session bus that leads nowhere and no display", { skip: process.platform !== "linux" && "the session bus and the stand-ins are Linux's" }, async () => {
+test("every Chrome launch-film starts on Linux gets a session bus that leads nowhere and no display", { skip: (process.platform !== "linux" && "the session bus and the stand-ins are Linux's") || tooLongForChrome }, async () => {
   const dir = tmp();
   // A desktop's bus and its Wayland display, sockets that are there.
   const desktop = path.join(dir, "desktop-bus");
@@ -425,7 +425,7 @@ test("the path of the bus Chrome is given is written as a bus address holds it",
 
 // Chrome prints a line for each call to the bus it was kept from, at every
 // start: what is told of a Chrome that stops is what it said past them.
-test("Chrome's lines about the bus it was kept from are passed over when it stops", { skip: process.platform === "win32" && "the stand-in Chrome is a shell script" }, () => {
+test("Chrome's lines about the bus it was kept from are passed over when it stops", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || tooLongForChrome }, () => {
   const dir = tmp();
   const chrome = path.join(dir, "chrome");
   const bus = "[3576670:3576879:1111/085053.785861:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /tmp/p/no-bus: No such file or directory";
@@ -538,7 +538,7 @@ test("no Chrome starts where the temp folder's path is too long for Chrome's soc
 // The stand-ins are tried for as long as a program is given to say its
 // version. Given 10 s, a machine too busy to start one in that time was told
 // that its temp folder runs no programs.
-test("stand-ins that do not answer within two minutes are told of as a machine too busy, not as a temp folder that runs no programs", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, () => {
+test("stand-ins that do not answer within two minutes are told of as a machine too busy, not as a temp folder that runs no programs", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || tooLongForChrome }, () => {
   const asked = path.join(tmp(), "asked");
   const stub = path.join(tmp(), "late.js");
   fs.writeFileSync(stub, `const fs = require("fs");
@@ -566,7 +566,7 @@ cp.spawnSync = (file, args, opts = {}) => {
 
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and
 // the system then starts the real xdg-open past them: no Chrome starts.
-test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
+test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || tooLongForChrome || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
   const mount = tmp();
   const said = new RegExp(`^launch-film could not run its stand-ins for xdg-open in ${escape(mount)}/launch-film-bin-\\d+-\\w+ \\(permission denied, EACCES\\), which keep a page from starting a program of the machine's: set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none\\n$`);
   // A Chrome of the test's own, so the one this machine may not have is not needed.

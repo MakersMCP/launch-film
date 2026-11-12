@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { tmp, shortTmp, WAITS, pidOf, alive, end, SAVES_PID, pidIn } = require("./tmp");
+const { tmp, tooLongForChrome, shortTmp, WAITS, pidOf, alive, end, SAVES_PID, pidIn } = require("./tmp");
 const { available, FFMPEG } = require("../src/ffmpeg");
 
 const root = path.join(__dirname, "..");
@@ -487,7 +487,7 @@ ${WAITS}
   return kit;
 }
 
-test("a plan stopped while easybrandkit reads the brand ends the Chrome easybrandkit started and removes its profile", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+test("a plan stopped while easybrandkit reads the brand ends the Chrome easybrandkit started and removes its profile", { skip: (process.platform !== "linux" && "/proc tells what easybrandkit started") || tooLongForChrome }, async () => {
   // With a temp folder long enough that easybrandkit keeps to it, and one
   // short enough for easybrandkit to get a temp folder of the run's own.
   for (const [how, temp] of [["SIGTERM", tmp()], ["SIGINT", tmp()], ["SIGTERM", shortTmp()], ["SIGINT", shortTmp()]]) {
@@ -569,7 +569,7 @@ async function planStoppedAtChrome({ temp, env = {}, stub = "" }) {
   return { chrome, stillRuns: alive(chrome), end: () => end(chrome) };
 }
 
-test("a stop that comes before the first look at what easybrandkit started still ends its Chrome", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+test("a stop that comes before the first look at what easybrandkit started still ends its Chrome", { skip: (process.platform !== "linux" && "/proc tells what easybrandkit started") || tooLongForChrome }, async () => {
   // The looks four times a second never happen here, so the stop has to
   // look for itself as it begins, while easybrandkit's tree is whole.
   const temp = tmp();
@@ -582,7 +582,7 @@ test("a stop that comes before the first look at what easybrandkit started still
   }
 });
 
-test("a Chrome of easybrandkit's that uses a profile outside the temp folder is ended and its profile left", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+test("a Chrome of easybrandkit's that uses a profile outside the temp folder is ended and its profile left", { skip: (process.platform !== "linux" && "/proc tells what easybrandkit started") || tooLongForChrome }, async () => {
   const profile = path.join(tmp(), "a-chrome-profile-of-the-user's");
   fs.mkdirSync(profile);
   fs.writeFileSync(path.join(profile, "Preferences"), "{}");
@@ -595,7 +595,7 @@ test("a Chrome of easybrandkit's that uses a profile outside the temp folder is 
   }
 });
 
-test("a profile in the temp folder that is not this user's is left, whatever a process below easybrandkit names", { skip: process.platform !== "linux" && "/proc tells what easybrandkit started" }, async () => {
+test("a profile in the temp folder that is not this user's is left, whatever a process below easybrandkit names", { skip: (process.platform !== "linux" && "/proc tells what easybrandkit started") || tooLongForChrome }, async () => {
   const temp = tmp();
   const plan = await planStoppedAtChrome({ temp, stub: `const fs = require("fs"); const path = require("path"); const real = fs.lstatSync; fs.lstatSync = (at, ...rest) => { const s = real(at, ...rest); if (s && path.basename(String(at)).startsWith("easybrandkit-chrome-")) s.uid += 1; return s; };` });
   try {
@@ -1287,7 +1287,7 @@ test("doctor says when ffmpeg is older than 4.4, and passes a version it cannot 
 
 // Since Chrome keeps its sandbox, a Chrome that cannot start one fails every
 // render and stills, and doctor, which only looked for the file, passed.
-test("doctor starts Chrome, and fails with what to do when Chrome cannot start its sandbox", { skip: process.platform === "win32" && "the stand-ins are scripts" }, () => {
+test("doctor starts Chrome, and fails with what to do when Chrome cannot start its sandbox", { skip: (process.platform === "win32" && "the stand-ins are scripts") || tooLongForChrome }, () => {
   const ffmpeg = ffmpegOf("4.4.2-0ubuntu0.22.04.1");
   const sandbox = path.join(tmp(), "chrome");
   fs.writeFileSync(sandbox, "#!/bin/sh\necho '[14:14:1110/174151.699093:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:242] Zygote process exited prematurely with exit code 82 (setuid sandbox: failed to move to new namespaces)' >&2\nkill -ABRT $$\n", { mode: 0o755 });

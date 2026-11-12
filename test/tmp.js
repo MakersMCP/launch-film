@@ -6,14 +6,17 @@
 // run, whatever became of the test, so a run of the tests leaves no process
 // running.
 //
-// The tests need a TMPDIR whose path has at most 32 characters. Many give
-// the program they run a folder of tmp() as its temp folder, and the Chrome
-// it starts makes its socket in a folder there, whose whole path a socket's
-// 107 bytes must hold (out.js, socketFits).
+// Many tests give the program they run a folder of tmp() as its temp
+// folder, and the Chrome it starts makes its socket in a folder there,
+// whose whole path a socket's 107 bytes must hold (out.js, socketFits), as
+// they do where TMPDIR's path takes at most 32 bytes. Under a longer one
+// launch-film refuses to start Chrome from such a folder, as it should, and
+// the tests that need it to are skipped with its reason (tooLongForChrome).
 const { after } = require("node:test");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { socketFits, SOCKET_ROOM } = require("../src/out");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "launch-film-tests-"));
 
@@ -59,6 +62,17 @@ function stillRunning() {
 
 // A new folder for a test.
 const tmp = (prefix = "t-") => fs.mkdtempSync(path.join(root, prefix));
+
+// Why launch-film cannot start Chrome from a folder of tmp() as its temp
+// folder, in its own words, or false where it can. On Linux it starts no
+// Chrome from a temp folder too long for the socket Chrome makes in a
+// folder there (chrome.js), and every folder of tmp() is as long as this
+// one. A test that has a program start Chrome from one is skipped for it.
+const sample = path.join(root, "t-XXXXXX");
+const below = Buffer.byteLength(sample) - Buffer.byteLength(os.tmpdir());
+const tooLongForChrome = process.platform === "linux" && !socketFits(sample) &&
+  `launch-film cannot start Chrome from the tests' temp folders in ${root}, as the socket Chrome makes in a folder there would have a path longer than the 107 bytes ` +
+  `a socket's path may have: run the tests with a TMPDIR whose path takes at most ${SOCKET_ROOM - below} bytes (this one takes ${Buffer.byteLength(os.tmpdir())}, and a letter outside ASCII takes two or more)`;
 
 // A pid a test may signal: a whole number above 0. Given 0 or a negative
 // number, process.kill signals a whole process group, the one the tests run
@@ -215,4 +229,4 @@ function noisePicture(dir, name, W, H, { alpha = false } = {}) {
   return file;
 }
 
-module.exports = { tmp, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture, busPath };
+module.exports = { tmp, tooLongForChrome, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture, busPath };

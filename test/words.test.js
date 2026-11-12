@@ -10,7 +10,7 @@ const { spawn } = require("child_process");
 const { findChrome, chromeArgs, opened, OPENERS } = require("../src/chrome");
 const { runEasybrandkit } = require("../src/brand");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-const { tmp } = require("./tmp");
+const { tmp, tooLongForChrome } = require("./tmp");
 const { noBus, privateBus } = require("./bus");
 
 const PAGE = `<!doctype html><html lang="en-US"><head>
@@ -173,7 +173,7 @@ test("a page that goes to a mailto: address as it loads, or opens one in a windo
 // A page can make Chrome save a file of its choosing, of any size, into the
 // Downloads folder of the user it runs as: a site a plan read left one there,
 // where nothing removed it.
-test("a page that makes Chrome save a file saves none, by readWords or by a plan", { skip: !findChrome() && "Chrome not found", timeout: 180_000 }, async () => {
+test("a page that makes Chrome save a file saves none, by readWords or by a plan", { skip: (!findChrome() && "Chrome not found") || tooLongForChrome, timeout: 180_000 }, async () => {
   let asked = 0;
   const server = http.createServer((req, res) => {
     if (req.url === "/file.bin") {
