@@ -144,6 +144,27 @@ test("film.json's music is checked before anything renders", async () => {
   assert.deepEqual((await checkMusic(load(true))).problems, []);
 });
 
+// A number where a path goes ended the run in Node's own words, which name
+// no clip and no field, and "sfx": "false" played the effects without a word.
+test("a value of another kind than its field takes is refused by the field, before anything renders", () => {
+  const dir = tmp();
+  fs.cpSync(fixture, path.join(dir, "brand"), { recursive: true });
+  const file = path.join(dir, "film.json");
+  const load = (film) => {
+    fs.writeFileSync(file, typeof film === "string" ? film : JSON.stringify(film));
+    return loadFilm(file).problems;
+  };
+  const clips = [{ kind: "screen", seconds: 2.5, image: 3 }, { kind: "shots", seconds: 2.5, images: ["brand/appstore-1.png", true] },
+    { kind: "logo", seconds: 2.5, logo: 5 }, { kind: "logo", seconds: 2.5, icon: { file: "x.png" } }];
+  assert.deepEqual(load({ brand: 5, look: "launch", sfx: "false", clips }), ['"brand" must be the path of a brand.json (it is 5)',
+    "clips[0].image must be the path of a picture (it is 3)", "clips[1].images[1] must be the path of a picture (it is true)",
+    "clips[2].logo must be the path of a picture (it is 5)", 'clips[3].icon must be the path of a picture (it is {"file":"x.png"})',
+    '"sfx" must be true or false (it is "false")']);
+  for (const sfx of [undefined, null, true, false]) assert.deepEqual(load({ look: "launch", sfx, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(sfx));
+  for (const brand of [undefined, null, "", false]) assert.deepEqual(load({ look: "launch", brand, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(brand));
+  for (const film of ["null", "[]", "3", '"film"']) assert.deepEqual(load(film), [`${file} must hold an object, such as { "look": "launch", "clips": [] }`], film);
+});
+
 test("a track's path that leads to something other than a file is refused as what it is, not as one that is not there", { skip: process.platform === "win32" && "pipes, sockets and links" }, async () => {
   const { dir, load } = filmWithMusic();
   const instead = "give the path of a track (true plays the look's own music, false none)";

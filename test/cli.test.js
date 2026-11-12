@@ -697,6 +697,24 @@ test("a render stops on a track it refuses, before any Chrome is started", { ski
   assert.ok(!fs.existsSync(started), "no Chrome was started");
 });
 
+// A picture's name that is a number ended the render with Node's own
+// 'The "paths[1]" argument must be of type string', which names no clip.
+test("a render stops on a picture or a brand given as a number, and on an sfx given as text, by their fields, before any Chrome is started", { skip: process.platform === "win32" && "the stand-in Chrome is a shell script" }, () => {
+  const dir = filmFolder();
+  const before = snap(dir);
+  const chrome = noteChrome();
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ brand: 5, look: "launch", sfx: "false", clips: [{ kind: "screen", seconds: 2.5, image: 3 }, { kind: "logo", seconds: 2.5, logo: 5 }] }));
+  const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"));
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, 'launch-film: film.json has problems:\n  - "brand" must be the path of a brand.json (it is 5)\n  - clips[0].image must be the path of a picture (it is 3)\n' +
+    '  - clips[1].logo must be the path of a picture (it is 5)\n  - "sfx" must be true or false (it is "false")\n');
+  delete before["film.json"];
+  const after = snap(dir);
+  delete after["film.json"];
+  assert.deepEqual(after, before);
+  assert.ok(!chrome.started(), "a Chrome was started");
+});
+
 // An ffmpeg or ffprobe that will not open a file whose name holds a %, as
 // the guards of makersmcp's hosted service do, and runs the real one for
 // the rest. A hosted user's good track named so was told to give an audio

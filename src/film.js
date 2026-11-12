@@ -61,7 +61,12 @@ function loadFilm(file) {
   } catch (err) {
     return { problems: [`${file} is not valid JSON: ${err.message}`] };
   }
+  if (!film || typeof film !== "object" || Array.isArray(film)) return { problems: [`${file} must hold an object, such as { "look": "launch", "clips": [] }`] };
   const problems = [];
+  // A value of another kind than a field takes is named with the field: a
+  // number where a path goes ended the run in Node's own words, which name
+  // neither, and "false" for sfx played the effects without a word.
+  const shown = (value) => confine.said(JSON.stringify(value));
   const knownLook = Object.hasOwn(motion.LOOKS, String(film.look));
   if (!knownLook) problems.push(`"look" must be one of ${Object.keys(motion.LOOKS).join(", ")}`);
   if (film.aspect && !["16:9", "9:16"].includes(film.aspect)) problems.push('"aspect" must be "16:9" or "9:16"');
@@ -70,7 +75,8 @@ function loadFilm(file) {
   const outside = (name) => confine.outside(dir, name, "film.json");
   const unconfined = (name, what) => `${what} "${confine.said(name)}" ${outside(name)}, and LAUNCH_FILM_CONFINE allows only files in it`;
   let brand = null;
-  if (film.brand && outside(film.brand)) problems.push(unconfined(film.brand, '"brand"'));
+  if (film.brand && typeof film.brand !== "string") problems.push(`"brand" must be the path of a brand.json (it is ${shown(film.brand)})`);
+  else if (film.brand && outside(film.brand)) problems.push(unconfined(film.brand, '"brand"'));
   else if (film.brand) {
     try {
       brand = readBrand(path.resolve(dir, film.brand));
@@ -93,6 +99,10 @@ function loadFilm(file) {
     const seconds = c.seconds !== undefined ? Number(c.seconds) : Number(c.bars || 2) * bar;
     if (!(seconds >= 2 && seconds <= 12)) problems.push(`${at} must last 2-12 seconds (it is ${seconds.toFixed(2)})`);
     const fileOf = (rel, what) => {
+      if (rel && typeof rel !== "string") {
+        problems.push(`${at}.${what} must be the path of a picture (it is ${shown(rel)})`);
+        return null;
+      }
       if (rel && outside(rel)) {
         problems.push(unconfined(rel, `${at}.${what}`));
         return null;
@@ -125,6 +135,7 @@ function loadFilm(file) {
   });
   const total = out.reduce((s, c) => s + c.seconds, 0);
   if (total > 90) problems.push(`the film would last ${total.toFixed(1)} s; keep it under 90`);
+  if (![undefined, null, true, false].includes(film.sfx)) problems.push(`"sfx" must be true or false (it is ${shown(film.sfx)})`);
   const music = musicOf(film.music, dir, problems);
   return { film, dir, brand, clips: out, bar, music, seconds: total, problems };
 }
