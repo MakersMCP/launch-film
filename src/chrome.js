@@ -32,6 +32,14 @@ function late(what) {
   return Object.assign(new Error(`${what}, most often because the machine is too busy: run again once it is less busy`), { slow: true });
 }
 
+// Chrome or its page ended part way, as the system ends a process when
+// memory runs out, said with what to do. A render of more than one clip at
+// once adds that one at a time needs less (film.js): in a container of 2 GB
+// two clips at once ran out of it some of the time.
+function starved(what) {
+  return Object.assign(new Error(`${what}, most often because the system ran out of memory: run again once more of it is free`), { memory: true });
+}
+
 // The first program by `name` on PATH that the system would start: past a
 // folder, a file it may not run and a script or a program whose interpreter
 // or loader is not there, as programs.js looks. `passed`, when given, keeps
@@ -90,7 +98,8 @@ function stoppedWhy(code, signal, stderr) {
     const said = fatal[1].split(/(?<=!)\s|\.\s/)[0].replace(/!$/, "").slice(0, 160);
     return `Chrome could not start its sandbox (${said}). Run launch-film where Chrome's sandbox can start: Google Chrome's own package sets it up, and a container needs --security-opt seccomp=unconfined`;
   }
-  if (signal) return `Chrome was stopped by ${signal}${signal === "SIGKILL" ? ", most often because the system ran out of memory" : ""}`;
+  if (signal === "SIGKILL") return starved("Chrome was stopped by SIGKILL").message;
+  if (signal) return `Chrome was stopped by ${signal}`;
   return `Chrome stopped (exit ${code})${stderr ? `: ${stderr.trim().split("\n").slice(-2).join(" | ")}` : ""}`;
 }
 
@@ -334,7 +343,7 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
     const tell = () => {
       if (told) return;
       told = true;
-      end(new Error(stoppedWhy(code, signal, stderr)));
+      end(Object.assign(new Error(stoppedWhy(code, signal, stderr)), { memory: signal === "SIGKILL" }));
     };
     if (child.stderr.readableEnded) return tell();
     child.stderr.once("end", tell);
@@ -575,8 +584,17 @@ function serve(browser, page, dir, fail = () => {}) {
 async function openPage(browser, dir, { W, H, scale = 1 }) {
   const page = await browser.page();
   const exceptions = [];
+  // A page whose process the system ended, as it does when memory runs out,
+  // answers no call again: Chrome says so once, and every call that waits
+  // on the page fails then, where it failed after 60 s as a busy machine.
+  let crash = null;
+  const crashed = new Promise((resolve, reject) => (crash = reject));
+  crashed.catch(() => {});
+  const call = page.call;
+  page.call = (method, params) => Promise.race([call(method, params), crashed]);
   browser.on((msg) => {
     if (msg.sessionId !== page.sessionId) return;
+    if (msg.method === "Inspector.targetCrashed") crash(starved("Chrome's page crashed"));
     if (msg.method === "Runtime.exceptionThrown" && exceptions.length < 20) {
       const d = msg.params.exceptionDetails || {};
       exceptions.push(String((d.exception && d.exception.description) || d.text || "error").split("\n")[0].slice(0, 300));
@@ -603,7 +621,7 @@ async function openPage(browser, dir, { W, H, scale = 1 }) {
   const url = serve(browser, page, dir, (err) => fail(err));
   await page.call("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await page.call("Page.navigate", { url });
-  if (!(await Promise.race([loaded, failed]))) throw late("the page did not load within 30 s");
+  if (!(await Promise.race([loaded, failed, crashed]))) throw late("the page did not load within 30 s");
   const failedFonts = await evaluate(page, `Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode().catch(() => {}))])
     .then(() => document.fonts.ready).then(() => [...document.fonts].filter((f) => f.status === "error").map((f) => f.family))`);
   return { page, exceptions, failedFonts: failedFonts || [] };
@@ -627,7 +645,10 @@ async function renderPage({ html, files = {}, output, seconds, W = 1920, H = 108
     const frames = Math.round(seconds * fps);
     for (let f = 0; f < frames; f++) {
       await evaluate(page, `__lfAdvance(${((f * 1000) / fps).toFixed(3)})`);
-      const shot = await page.call("Page.captureScreenshot", { format: "jpeg", quality: 92, optimizeForSpeed: true });
+      // Chrome refused a frame of a page it had drawn others of: the page is
+      // fine, and what failed was Chrome, short of memory in the runs seen.
+      const shot = await page.call("Page.captureScreenshot", { format: "jpeg", quality: 92, optimizeForSpeed: true })
+        .catch((err) => Promise.reject(f > 0 && err.answered ? starved(`Chrome could not capture frame ${f + 1} (${err.message})`) : err));
       await enc.write(Buffer.from(shot.data, "base64"));
       if (onFrame) onFrame(f + 1, frames);
     }

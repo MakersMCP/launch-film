@@ -628,11 +628,12 @@ async function renderInto(job, file, { film, brand, clips }, { out, track, jobs,
       const mp4 = path.join(work, `clip-${String(clip.index).padStart(2, "0")}.mp4`);
       const started = Date.now();
       // A failure says which clip it stopped, as ffmpeg's and Chrome's own
-      // words do not, and a Chrome too slow to answer, when more than one
-      // clip renders at once (pool), that one at a time eases the machine.
-      // A system short of file descriptors or processes is no clip's.
+      // words do not, and a Chrome too slow to answer or short of memory,
+      // when more than one clip renders at once (pool), that one at a time
+      // eases the machine. A system short of file descriptors or processes
+      // is no clip's.
       const r = await renderPage({ html: page.html, files: page.files, output: mp4, seconds: clip.render, W: page.W, H: page.H, fps: FPS })
-        .catch((err) => Promise.reject(err.short ? err : new Error(`rendering clip ${clip.index + 1}: ${err.message}${err.slow && Math.min(jobs, clips.length) > 1 ? ", or with --jobs 1 to render one clip at a time" : ""}`)));
+        .catch((err) => Promise.reject(err.short ? err : new Error(`rendering clip ${clip.index + 1}: ${err.message}${(err.slow || err.memory) && Math.min(jobs, clips.length) > 1 ? ", or with --jobs 1 to render one clip at a time" : ""}`)));
       done++;
       log(`clip ${clip.index + 1}/${clips.length} (${clip.kind}${clip.parsed ? ` ${clip.parsed.type}` : ""}, ${clip.seconds.toFixed(1)} s) rendered in ${((Date.now() - started) / 1000).toFixed(1)} s [${done}/${clips.length}]\n`);
       if (r.errors.length) notes.push(`clip ${clip.index + 1}: the page reported ${r.errors.slice(0, 2).join("; ")}`);

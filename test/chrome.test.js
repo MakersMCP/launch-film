@@ -201,6 +201,51 @@ test("a page file larger than Chrome takes in one go fails the page at once, by 
   }
 });
 
+// The system ends Chrome's page process when memory runs out, as a container
+// of 2 GB did with two clips at once. The page then answers nothing more, and
+// the clip failed after 60 s as one on a machine too busy.
+test("a page whose process the system ends part way through a clip fails at once, as Chrome short of memory", { skip: (!findChrome() && "Chrome not found") || (!available() && "ffmpeg not found") || (process.platform !== "linux" && "/proc tells which processes are Chrome's pages"), timeout: 120_000 }, async () => {
+  const { renderPage } = require("../src/chrome");
+  // The page processes below this one, as Chrome runs them.
+  const pages = () => {
+    const kids = new Map();
+    for (const name of fs.readdirSync("/proc").filter((n) => /^\d+$/.test(n))) {
+      try {
+        const stat = fs.readFileSync(`/proc/${name}/stat`, "utf8");
+        const parent = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1];
+        kids.set(parent, [...(kids.get(parent) || []), name]);
+      } catch {
+        // Gone meanwhile.
+      }
+    }
+    const found = [];
+    for (const queue = [String(process.pid)]; queue.length; ) {
+      for (const kid of kids.get(queue.shift()) || []) {
+        queue.push(kid);
+        try {
+          if (fs.readFileSync(`/proc/${kid}/cmdline`, "utf8").includes("--type=renderer")) found.push(Number(kid));
+        } catch {
+          // Gone meanwhile.
+        }
+      }
+    }
+    return found;
+  };
+  const html = '<!doctype html><html><body style="margin:0;background:#123"><div id="b" style="width:80px;height:80px;background:#fc0"></div>' +
+    '<script>window.__seek = (ms) => { document.getElementById("b").style.transform = "translateX(" + ms / 10 + "px)"; };</script></body></html>';
+  let killed = 0;
+  const started = Date.now();
+  await assert.rejects(renderPage({ html, output: path.join(tmp(), "clip.mp4"), seconds: 2, W: 320, H: 180, onFrame: (n) => {
+    if (n !== 5) return;
+    for (const pid of pages()) {
+      process.kill(pid, "SIGKILL");
+      killed++;
+    }
+  } }), { message: "Chrome's page crashed, most often because the system ran out of memory: run again once more of it is free", memory: true });
+  assert.ok(killed > 0, "no page process was found");
+  assert.ok(Date.now() - started < 30_000, `it took ${Date.now() - started} ms`);
+});
+
 // A Chrome that answers every call, and when the page is opened asks for its
 // index.html and refuses the file it is given, as Chrome does a fulfilment
 // it cannot take.

@@ -581,12 +581,18 @@ test("a render whose ffmpeg cannot be started says so in a line of its own befor
 // A stand-in Chrome on the DevTools pipe. It answers every call, but leaves
 // Target.createTarget unanswered with STAND_IN=no-tab, as a Chrome too busy
 // to answer, or is killed there with STAND_IN=killed, as by the system when
-// it runs out of memory; and it never says that a page has loaded.
+// it runs out of memory; and it never says that a page has loaded. With
+// STAND_IN=crash it says the page's process crashed as the page is opened,
+// as when the system ends that process; with STAND_IN=capture the page loads
+// and Chrome refuses its second frame, as Chrome short of memory did.
 function pipeChrome() {
   const dir = tmp();
   const script = path.join(dir, "chrome.js");
+  const frame = spawnSync(FFMPEG, ["-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x36", "-frames:v", "1", "-f", "mjpeg", "-"]).stdout.toString("base64");
   fs.writeFileSync(script, `const fs = require("fs");
+const say = (msg) => fs.writeSync(4, JSON.stringify(msg) + "\\0");
 let buf = Buffer.alloc(0);
+let shots = 0;
 fs.createReadStream(null, { fd: 3 }).on("data", (chunk) => {
   buf = Buffer.concat([buf, chunk]);
   for (let i; (i = buf.indexOf(0)) >= 0; ) {
@@ -595,8 +601,15 @@ fs.createReadStream(null, { fd: 3 }).on("data", (chunk) => {
     if (msg.method === "Browser.close") process.exit(0);
     if (msg.method === "Target.createTarget" && process.env.STAND_IN === "no-tab") continue;
     if (msg.method === "Target.createTarget" && process.env.STAND_IN === "killed") process.kill(process.pid, "SIGKILL");
-    const result = msg.method === "Target.createTarget" ? { targetId: "t" } : msg.method === "Target.attachToTarget" ? { sessionId: "s" } : {};
-    fs.writeSync(4, JSON.stringify({ id: msg.id, result }) + "\\0");
+    if (msg.method === "Page.captureScreenshot" && ++shots === 2) {
+      say({ id: msg.id, error: { code: -32000, message: "Unable to capture screenshot" } });
+      continue;
+    }
+    const result = msg.method === "Target.createTarget" ? { targetId: "t" } : msg.method === "Target.attachToTarget" ? { sessionId: "s" }
+      : msg.method === "Runtime.evaluate" ? { result: { value: [] } } : msg.method === "Page.captureScreenshot" ? { data: "${frame}" } : {};
+    say({ id: msg.id, result });
+    if (msg.method === "Page.navigate" && process.env.STAND_IN === "crash") say({ method: "Inspector.targetCrashed", params: {}, sessionId: "s" });
+    if (msg.method === "Page.navigate" && process.env.STAND_IN === "capture") say({ method: "Page.loadEventFired", params: { timestamp: 1 }, sessionId: "s" });
   }
 });
 ${WAITS}`);
@@ -617,7 +630,7 @@ ${WAITS}`);
   return { chrome, env: { LAUNCH_FILM_CHROME: chrome, NODE_OPTIONS: `--require ${stub}` } };
 }
 
-test("a Chrome too slow to answer, or one that cannot be started, ends the render with what did not answer and what to do", { skip: process.platform === "win32" ? "the stand-in Chrome is a shell script" : !available() && "ffmpeg not found", timeout: 180_000 }, () => {
+test("a Chrome too slow to answer, short of memory or that cannot be started ends the render with what happened and what to do", { skip: process.platform === "win32" ? "the stand-in Chrome is a shell script" : !available() && "ffmpeg not found", timeout: 180_000 }, () => {
   const dir = filmFolder({ clips: [FILM.clips[0]] });
   const two = filmFolder();
   const before = snap(dir);
@@ -641,11 +654,20 @@ test("a Chrome too slow to answer, or one that cannot be started, ends the rende
   const load = renderOf(two)({}, "--jobs", "1");
   assert.equal(load.status, 1, load.stderr);
   assert.equal(load.stderr, `launch-film: rendering clip 1: the page did not load within 30 s, ${busy}\nlaunch-film: ${two} is as it was.\n`);
-  // One killed by a signal says which, where it said "exit null", and was
-  // not too slow: two clips at once add nothing.
+  // One killed by a signal says which, where it said "exit null", and so
+  // does one whose page's process crashed, or that refused a frame part way
+  // through a clip, where it waited 60 s and said the machine was too busy:
+  // most often memory ran out, which one clip at a time needs less of.
+  const memory = "most often because the system ran out of memory: run again once more of it is free";
   const killed = renderOf(two)({ STAND_IN: "killed" });
   assert.equal(killed.status, 1, killed.stderr);
-  assert.match(killed.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome was stopped by SIGKILL, most often because the system ran out of memory\nlaunch-film: ${two} is as it was.\n`)}$`));
+  assert.match(killed.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome was stopped by SIGKILL, ${memory}, or with --jobs 1 to render one clip at a time\nlaunch-film: ${two} is as it was.\n`)}$`));
+  const crash = renderOf(two)({ STAND_IN: "crash" });
+  assert.equal(crash.status, 1, crash.stderr);
+  assert.match(crash.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape(`Chrome's page crashed, ${memory}, or with --jobs 1 to render one clip at a time\nlaunch-film: ${two} is as it was.\n`)}$`));
+  const capture = renderOf(two)({ STAND_IN: "capture" }, "--jobs", "1");
+  assert.equal(capture.status, 1, capture.stderr);
+  assert.equal(capture.stderr, `launch-film: rendering clip 1: Chrome could not capture frame 2 (Unable to capture screenshot), ${memory}\nlaunch-film: ${two} is as it was.\n`);
   // One that cannot be run failed nothing, and the run ended with 0 and no
   // word, as if the film had been made. It is refused before any work.
   fs.chmodSync(chrome, 0o644);
@@ -655,7 +677,7 @@ test("a Chrome too slow to answer, or one that cannot be started, ends the rende
     "Set LAUNCH_FILM_CHROME to the Chrome program itself, or unset it and install Google Chrome or Chromium.\n");
   assert.deepEqual(snap(dir), before);
   assert.deepEqual(snap(two), beforeTwo);
-  for (const r of [tab, both, load, killed, none]) assert.deepEqual(leftBy(r.pid), []);
+  for (const r of [tab, both, load, killed, crash, capture, none]) assert.deepEqual(leftBy(r.pid), []);
 });
 
 test("a page script that Chrome ends at its time limit is told of as that, not as Chrome's \"Internal error\"", async () => {
