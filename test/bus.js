@@ -8,9 +8,10 @@
 // the stand-in opens nothing: it takes the portal's names, writes down each
 // call it gets and answers it with an error.
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { tmp, busPath } = require("./tmp");
+const { tmp, root, busPath } = require("./tmp");
 
 const PORTAL = `import sys
 import gi
@@ -30,10 +31,20 @@ print("owned", flush=True)
 GLib.MainLoop().run()
 `;
 
+// dbus-daemon makes no bus at a path longer than 99 bytes ("Socket name too
+// long"), and the bus's path is as long as this one, in a folder of tmp().
+const BUS_ROOM = 99;
+const BUS_AT = path.join(root, "bus-XXXXXX", "bus");
+
 // Why there can be no such bus here, or "".
 function noBus() {
   if (process.platform !== "linux") return "the desktop's portal is Linux's";
   if (spawnSync("dbus-daemon", ["--version"], { stdio: "ignore" }).status !== 0) return "no dbus-daemon to make a bus with";
+  if (Buffer.byteLength(BUS_AT) > BUS_ROOM) {
+    const below = Buffer.byteLength(BUS_AT) - Buffer.byteLength(os.tmpdir());
+    return `dbus-daemon makes no bus at a path longer than ${BUS_ROOM} bytes, and the tests' bus in ${root} would have one of ${Buffer.byteLength(BUS_AT)}: ` +
+      `run the tests with a TMPDIR whose path takes at most ${BUS_ROOM - below} bytes (this one takes ${Buffer.byteLength(os.tmpdir())})`;
+  }
   const python = spawnSync("python3", ["-I", "-c", "import gi; gi.require_version('Gio', '2.0'); from gi.repository import Gio"], { stdio: "ignore" });
   return python.status !== 0 ? "no Python with Gio for the stand-in portal" : "";
 }

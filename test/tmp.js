@@ -229,4 +229,4 @@ function noisePicture(dir, name, W, H, { alpha = false } = {}) {
   return file;
 }
 
-module.exports = { tmp, tooLongForChrome, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture, busPath };
+module.exports = { tmp, root, tooLongForChrome, shortTmp, stillRunning, WAITS, pidOf, alive, end, SAVES_PID, pidIn, bigPicture, noisePicture, busPath };
