@@ -10,7 +10,7 @@ const { spawn } = require("child_process");
 const { findChrome, chromeArgs, opened, OPENERS } = require("../src/chrome");
 const { runEasybrandkit } = require("../src/brand");
 // Ends what the tests start and removes their temp folders: Chrome's too.
-const { tmp, tooLongForChrome } = require("./tmp");
+const { tmp, tooLongForChrome, shortTmp } = require("./tmp");
 const { noBus, privateBus } = require("./bus");
 
 const PAGE = `<!doctype html><html lang="en-US"><head>
@@ -253,6 +253,53 @@ for (let i = 0; i < 10; i++) window.open(${JSON.stringify(long)} + i);
     assert.ok(notes.length >= 2 && notes.length <= 6, notes.join("\n"));
     assert.ok(notes.every((line) => line.length < 300), "a note is cut short");
     assert.match(notes[notes.length - 1], /^note: The page tried to open such an address \d+ more times?: none was opened\.$/);
+    assert.equal(rec.said(), "", "a program on PATH was started");
+  } finally {
+    process.env.PATH = saved;
+    server.close();
+  }
+});
+
+// A Chrome with network access fetches a component in its first seconds,
+// into folders it makes in its TMPDIR, and the one that reads this page for
+// a plan was often asked to close before that was done. Under a TMPDIR of
+// 33 bytes, with a pid of seven digits, the profile it is given as its
+// TMPDIR takes a shorter name to leave room for Chrome's socket, and under
+// one of 66 Chrome is given TMPDIR itself (chrome.js, launch): a plan leaves
+// either as it found it.
+test("a plan that reads a page in Chrome leaves a TMPDIR of 33 or 66 bytes as it found it", { skip: (!findChrome() && "Chrome not found") || (process.platform !== "linux" && "the temp folder is left as it is elsewhere"), timeout: 180_000 }, async () => {
+  const rec = recorders();
+  const saved = process.env.PATH;
+  process.env.PATH = `${rec.dir}${path.delimiter}${saved}`;
+  const long = `mailto:${"x".repeat(20000)}@acme-notes.example`;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html lang="en"><title>Acme Notes</title><h1>Notes that think with you</h1><p>Write once and find it anywhere.</p><script>
+for (let i = 0; i < 40; i++) { const f = document.createElement("iframe"); f.src = "mailto:a" + i + "@acme-notes.example"; document.body.appendChild(f); }
+for (let i = 0; i < 10; i++) window.open(${JSON.stringify(long)} + i);
+</script>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const kit = path.join(tmp(), "kit");
+    fs.cpSync(path.join(__dirname, "fixtures", "acme"), kit, { recursive: true });
+    const brandFile = path.join(kit, "brand.json");
+    fs.writeFileSync(brandFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(brandFile, "utf8")), url: `http://127.0.0.1:${server.address().port}/` }));
+    for (const bytes of [33, 66]) {
+      const base = shortTmp();
+      const temp = path.join(base, "x".repeat(bytes - base.length - 1));
+      fs.mkdirSync(temp);
+      const out = tmp();
+      const plan = await new Promise((resolve) => {
+        const child = spawn(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "plan", "https://acme-notes.example", "--brand", kit, "--out", out], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TMPDIR: temp } });
+        let said = "";
+        child.stderr.on("data", (d) => (said += d));
+        child.on("close", (code) => resolve({ code, said }));
+      });
+      assert.equal(plan.code, 0, plan.said);
+      assert.match(plan.said, /^note: The page tried to open mailto:/m, "the page was read in Chrome");
+      assert.deepEqual(fs.readdirSync(temp), [], `left in a TMPDIR of ${bytes} bytes`);
+    }
     assert.equal(rec.said(), "", "a program on PATH was started");
   } finally {
     process.env.PATH = saved;

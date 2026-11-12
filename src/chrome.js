@@ -23,7 +23,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { encoder } = require("./ffmpeg");
 const { getSystemErrorMap } = require("util");
-const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save, socketFits, SOCKET_ROOM } = require("./out");
+const { tempDir, tempEnv, release, track, socketFolder, closeProfile, save, socketFits, fetching, SOCKET_ROOM } = require("./out");
 
 // A wait on Chrome that ran out, said with what to do: a machine too busy for
 // Chrome is what made it this slow in the runs seen. A render of more than
@@ -296,16 +296,31 @@ async function launch({ W = 1920, H = 1080, network = false } = {}) {
   // Removed with the socket folder Chrome links from it, however the run
   // ends: Chrome killed by a stop leaves that folder in the temp folder.
   let socket = null;
-  const profile = tempDir("launch-film-chrome-", (dir) => closeProfile(dir, socket));
+  // A Chrome with network access fetches a component in its first seconds,
+  // into folders it makes in its TMPDIR, and one that ends before that is
+  // done leaves them there (out.js, fetching). On Linux it is given its
+  // profile as its TMPDIR, so they go with the profile, and the socket
+  // Chrome makes in a folder there has to fit under it too (socketFits).
+  // Where TMPDIR leaves no room for that under the profile's usual name, the
+  // profile takes a shorter one where that leaves room for Chromium's socket
+  // as well, in a folder whose name is four bytes longer
+  // (org.chromium.Chromium.XXXXXX). Where it leaves none, as past 44 bytes
+  // with a pid of seven digits, Chrome is given TMPDIR itself, and the
+  // folders of that kind that came there while it ran go once it has ended
+  // (closeProfile).
+  const named = (prefix) => path.join(os.tmpdir(), `${prefix}${process.pid}-XXXXXX`);
+  const linux = network && process.platform === "linux";
+  const short = linux && !socketFits(named("launch-film-chrome-")) && Buffer.byteLength(named("lf-")) + 4 <= SOCKET_ROOM;
+  let fetched = null;
+  const profile = tempDir(short ? "lf-" : "launch-film-chrome-", (dir) => closeProfile(dir, socket, fetched));
   // Downloads, should Chrome save one in spite of the refusal below, go in
   // the profile, which goes with the run.
   fs.mkdirSync(path.join(profile, "Default"));
   save(path.join(profile, "Default", "Preferences"), JSON.stringify({ download: { default_directory: path.join(profile, "Downloads"), prompt_for_download: false } }));
   const args = chromeArgs({ W, H, network, profile });
-  // A Chrome with network access, stopped as it starts, leaves a
-  // com.google.Chrome.chrome_chrome_url_fetcher_ folder in its TMPDIR: given
-  // its profile as TMPDIR, that goes with the profile.
-  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(offTheDesktop(network ? tempEnv(profile) : process.env, profile)) }));
+  const env = network ? tempEnv(profile) : process.env;
+  if (linux && env === process.env) fetched = fetching();
+  const child = track(spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: withoutOpeners(offTheDesktop(env, profile)) }));
   // One the system had no file descriptor for comes back with no pipes, and
   // its error comes next (ffmpeg.js run): that is all there is to wait for.
   if (!child.stdio) {

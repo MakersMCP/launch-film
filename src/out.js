@@ -1020,16 +1020,41 @@ function socketFolder(profile) {
   return null;
 }
 
+// The folders Chrome's component updater downloads and unpacks into, which
+// Chrome makes in its TMPDIR in its first seconds when it may use the
+// network (com.google.Chrome.chrome_chrome_url_fetcher_.XXXXXX and
+// com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.XXXXXX, or the
+// same after org.chromium.Chromium. for Chromium): a Chrome that ends
+// before it is done leaves them, empty or with what it fetched. Those in
+// the folder `dir`, as { dir, names }, or null where it cannot be read.
+const FETCHING = /^\.?(com\.google\.Chrome|org\.chromium\.Chromium)\.\w*(url_fetcher_|Unpacker_BeginUnzipping)\.\w+$/;
+function fetching(dir = os.tmpdir()) {
+  try {
+    return { dir, names: new Set(fs.readdirSync(dir).filter((name) => FETCHING.test(name))) };
+  } catch {
+    return null;
+  }
+}
+
 // Run just before a profile is removed: what still uses it is ended first,
 // since Chrome's helpers, still closing or left by a Chrome killed outright,
 // wrote into it after it was removed and so kept it, and the socket folder
-// Chrome made for it (`socket`, else read from its link) goes with it.
-function closeProfile(profile, socket = null) {
+// Chrome made for it (`socket`, else read from its link) goes with it. For a
+// Chrome that had the system's temp folder as its own, `fetched` is what
+// fetching() found there as it started: the folders of that kind of this
+// user's that came since go too, with what is in them. Another Chrome that
+// fetched a component there at that moment loses only that download.
+function closeProfile(profile, socket = null, fetched = null) {
   const pids = usersOf(profile);
   for (const pid of pids) kill(pid);
   for (let i = 0; i < 100 && pids.some(alive); i++) pause(10);
   const folder = socket || socketFolder(profile);
   if (folder) remove(folder);
+  const now = fetched && fetching(fetched.dir);
+  for (const name of now ? now.names : []) {
+    const at = path.join(now.dir, name);
+    if (!fetched.names.has(name) && mine(at)) remove(at);
+  }
 }
 
 // The processes below `pids`, all the way down: [{ pid, start }]. Read from
@@ -1330,4 +1355,4 @@ function noticed() {
 }
 
 module.exports = { begin, within, heldBackIn, shown, said, aftermath, noticed, tempDir, tempEnv, release, track, listen, exit, stopping: () => stopping, sweep, reason, full, save, copyPlain,
-  socketFolder, closeProfile, socketFits, STALE, LOCK, SOCKET_ROOM };
+  socketFolder, closeProfile, fetching, socketFits, STALE, LOCK, SOCKET_ROOM };

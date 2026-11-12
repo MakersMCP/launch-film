@@ -1617,7 +1617,11 @@ launch({ W: 100, H: 100 }).catch(() => {});
 // command line, as Chrome's helpers do, lets SIGTERM go and writes into the
 // profile; its pid is saved in the file STAND_IN_PID. "closing": on Ctrl-C it
 // starts to close, its link going first, and then lingers until it is
-// killed.
+// killed. "fetching": it makes in its TMPDIR the folders a Chrome with
+// network access fetches a component into in its first seconds, one of them
+// with what it fetched, writes that TMPDIR in the file STAND_IN_SAW, and
+// quits when it is asked to close, leaving them, as Chrome does when it is
+// asked before the fetch is done.
 function standInChrome(dir) {
   const file = path.join(dir, "chrome");
   fs.writeFileSync(file, `#!${process.execPath}
@@ -1638,10 +1642,20 @@ if (process.env.STAND_IN === "closing") {
   process.on("SIGINT", () => fs.rmSync(path.join(profile, "SingletonSocket"), { force: true }));
   process.on("SIGTERM", () => {});
 }
+if (process.env.STAND_IN === "fetching") {
+  fs.writeFileSync(process.env.STAND_IN_SAW, process.env.TMPDIR);
+  const fetched = fs.mkdtempSync(path.join(process.env.TMPDIR, "com.google.Chrome.chrome_chrome_url_fetcher_."));
+  fs.writeFileSync(path.join(fetched, "decoded_xz"), "half a component");
+  fs.mkdtempSync(path.join(process.env.TMPDIR, "com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping."));
+}
 let buf = "";
 fs.createReadStream("", { fd: 3 }).on("data", (d) => {
   buf += d;
-  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) fs.writeSync(4, JSON.stringify({ id: JSON.parse(buf.slice(0, i)).id, result: {} }) + "\\0");
+  for (let i; (i = buf.indexOf("\\0")) >= 0; buf = buf.slice(i + 1)) {
+    const { id, method } = JSON.parse(buf.slice(0, i));
+    fs.writeSync(4, JSON.stringify({ id, result: {} }) + "\\0");
+    if (method === "Browser.close" && process.env.STAND_IN === "fetching") process.exit(0);
+  }
 });
 ${WAITS}
 `, { mode: 0o755 });
@@ -1713,6 +1727,62 @@ ${WAITS}
   child.kill("SIGTERM");
   assert.equal(await ended, "SIGTERM");
   assert.deepEqual(fs.readdirSync(temp), [], "neither the profile nor anything its Chrome made is left");
+});
+
+// The socket Chrome makes in a folder of its TMPDIR has to fit under the
+// profile it is given as its TMPDIR. Where TMPDIR leaves no room for that
+// under the profile's usual name, launch-film-chrome-<pid>-XXXXXX, the
+// profile takes a shorter one, lf-<pid>-XXXXXX, while that leaves room for
+// Chromium's socket, whose folder's name is four bytes longer, and past
+// that Chrome is given TMPDIR itself. Either way TMPDIR is left as it was
+// found, whether Chrome quits once a page is read or a stop ends it: a
+// folder of that kind that was there before Chrome started stays. The edges
+// of the shorter name move with the digits of the pid of the process that
+// starts Chrome, which works them out.
+test("a Chrome with network access leaves any TMPDIR it can start from as it found it, however long its path", { skip: process.platform !== "linux" && "the temp folder is left as it is elsewhere" }, async () => {
+  const file = standInChrome(tmp());
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const [base, length, how] = process.argv.slice(1);
+const digits = String(process.pid).length;
+const bytes = { last: 51 - digits, past: 52 - digits }[length] || Number(length);
+const temp = path.join(base, "x".repeat(bytes - base.length - 1));
+fs.mkdirSync(temp);
+fs.mkdirSync(path.join(temp, "com.google.Chrome.chrome_chrome_url_fetcher_.Before"));
+process.env.TMPDIR = temp;
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const { launch } = require(${JSON.stringify(path.join(__dirname, "..", "src", "chrome.js"))});
+out.listen();
+launch({ W: 100, H: 100, network: true }).then((browser) => {
+  process.stdout.write(JSON.stringify({ temp, pid: process.pid }));
+  if (how !== "close") return;
+  browser.close();
+  setInterval(() => fs.readdirSync(temp).some((name) => /^(launch-film-chrome|lf)-/.test(name)) || process.exit(0), 20);
+});
+${WAITS}
+`;
+  for (const how of ["close", "stop"]) {
+    for (const length of ["33", "last", "past", "66"]) {
+      const saw = path.join(tmp(), "saw");
+      const child = spawn(process.execPath, ["-e", script, shortTmp(), length, how], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LAUNCH_FILM_CHROME: file, STAND_IN: "fetching", STAND_IN_SAW: saw } });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+      const { temp, pid } = JSON.parse(await new Promise((resolve) => child.stdout.once("data", resolve)));
+      const bytes = Buffer.byteLength(temp);
+      if (how === "stop") child.kill("SIGTERM");
+      assert.deepEqual(await ended, how === "stop" ? { code: null, signal: "SIGTERM" } : { code: 0, signal: null }, `${how}, ${bytes} bytes: ${said}`);
+      assert.deepEqual(fs.readdirSync(temp), ["com.google.Chrome.chrome_chrome_url_fetcher_.Before"], `${how}, ${bytes} bytes: left in TMPDIR`);
+      const given = fs.readFileSync(saw, "utf8");
+      const digits = String(pid).length;
+      const profile = bytes <= 39 - digits ? `launch-film-chrome-${pid}-` : bytes <= 51 - digits ? `lf-${pid}-` : null;
+      if (profile) {
+        assert.equal(path.dirname(given), temp, `${how}, ${bytes} bytes: Chrome's TMPDIR`);
+        assert.ok(path.basename(given).startsWith(profile), `${how}, ${bytes} bytes: Chrome's TMPDIR was ${given}`);
+      } else assert.equal(given, temp, `${how}, ${bytes} bytes: Chrome's TMPDIR`);
+    }
+  }
 });
 
 test("a run removes the temp folders of runs that are gone", () => {
