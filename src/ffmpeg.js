@@ -381,7 +381,14 @@ function encoder({ output, fps = 25, crf = 15 }) {
   if (child.stderr) child.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
   if (child.stdin) child.stdin.on("error", () => {});
   const closed = new Promise((resolve) => child.on("close", (code, signal) => resolve((ended = { code, signal }))));
-  const failed = () => Object.assign(new Error(unstarted || why({ ...ended, stderr: err }, { lines: 2 })), { short: Boolean(unstarted) });
+  // One the system killed without a word, as it kills one when memory runs
+  // out with two clips at once, is said with what to do, as Chrome is then
+  // (chrome.js starved): film.js adds that one clip at a time needs less.
+  const failed = () => {
+    if (unstarted) return Object.assign(new Error(unstarted), { short: true });
+    const killed = ended.signal === "SIGKILL" && !err.trim();
+    return Object.assign(new Error(`${why({ ...ended, stderr: err }, { lines: 2 })}${killed ? ": run again once more of it is free" : ""}`), { memory: killed });
+  };
   return {
     // An ffmpeg that has stopped (a full disk, an output it cannot write)
     // takes no more frames: its error, not a wait for room in the pipe.

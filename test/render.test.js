@@ -559,6 +559,20 @@ test("a render whose clip encoder stops ends with its words and keeps the earlie
   assert.deepEqual(leftBy(r.pid), []);
 });
 
+// The system kills a clip's encoder when memory runs out, as it did with two
+// clips at once in a container of 2 GB, and the render said only that.
+test("a render whose clip encoder the system kills says to render one clip at a time", { skip: noShell, timeout: 240_000 }, async () => {
+  const dir = await renderedFolder();
+  const before = snap(dir);
+  const ffmpeg = standIn(`case "$*" in *image2pipe*) kill -9 $$;; esac`);
+  const r = spawnSync(process.execPath, [cli, "render", path.join(dir, "film.json")], { encoding: "utf8", timeout: 120_000, env: { ...process.env, LAUNCH_FILM_FFMPEG: ffmpeg } });
+  assert.equal(r.status, 1, `${r.signal || r.status}: ${r.stderr}`);
+  assert.match(r.stderr, new RegExp(`^launch-film: rendering clip [12]: ${escape("ffmpeg was stopped by SIGKILL, most often because the system ran out of memory: run again once more of it is free, or with --jobs 1 to render one clip at a time")}\n`, "m"));
+  assert.ok(r.stderr.endsWith(`\nlaunch-film: ${dir} is as it was.\n`), r.stderr);
+  assert.deepEqual(snap(dir), before);
+  assert.deepEqual(leftBy(r.pid), []);
+});
+
 test("a render whose ffmpeg stops reading its frames and then fails says so, and does not wait forever", { skip: noShell, timeout: 240_000 }, async () => {
   const dir = await renderedFolder();
   const before = snap(dir);
