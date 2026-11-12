@@ -517,6 +517,20 @@ async function lock(dir, base = dir) {
   }
 }
 
+// Whether this user may not move what other users own in the folder `dir`:
+// it has the sticky bit, as /tmp has, and is not this user's, so only the
+// owner of a file in it may move it, or root.
+function sticky(dir) {
+  const me = uid();
+  if (me === null || me === 0) return false;
+  try {
+    const s = fs.statSync(dir);
+    return Boolean(s.mode & 0o1000) && s.uid !== me;
+  } catch {
+    return false;
+  }
+}
+
 // Why the earlier file `to`, whose lstat is `there`, is not replaced: it is
 // this user's own and this user may not write it, as a file the user made
 // read-only, which a rename would replace without a word where writing it
@@ -524,10 +538,16 @@ async function lock(dir, base = dir) {
 // this one may not write is replaced as the folder allows, when the folder
 // lets this user write in it: makersmcp's worker copies an earlier job's
 // files into a new job's folder as its own, which the job's user may read
-// and not write, and a render there failed once its clips had rendered.
-// null when it is replaced.
+// and not write, and a render there failed once its clips had rendered. In
+// a folder with the sticky bit no rename of this user's moves it (sticky),
+// and the commit failed at the move, once all the work was done. null when
+// it is replaced.
 function heldBack(to, there, would = "so it was not replaced") {
-  if (!there.isFile() || (uid() !== null && there.uid !== uid())) return null;
+  if (!there.isFile()) return null;
+  if (uid() !== null && there.uid !== uid()) {
+    if (!sticky(path.dirname(to))) return null;
+    return Object.assign(new Error(`${shown(to)} is another user's file in a folder with the sticky bit, ${would}: have that user remove it, or write the new files in another folder, and run again`), { at: null });
+  }
   try {
     fs.accessSync(to, fs.constants.W_OK);
     return null;

@@ -1295,6 +1295,44 @@ out.within(dir, async (run) => {
     `${path.join(dir, "film.mp4")} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again`);
 });
 
+// In a folder with the sticky bit, as /tmp has, a file of another user's is
+// moved by its owner alone: the commit failed at the move, once all the work
+// was done, and told the user to close the file. Here lstat calls the film
+// another user's, and stat the folder another user's with the sticky bit.
+test("an earlier file of another user's in a folder with the sticky bit is refused before the run's work and at its commit", { skip: process.platform === "win32" && "no users to tell apart" }, (t) => {
+  if (process.getuid() === 0) return t.skip("root may move any file");
+  const dir = tmp();
+  write(dir, { "film.mp4": "their film", "notes.txt": "mine" });
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const dir = process.argv[1];
+const lstat = fs.lstatSync;
+fs.lstatSync = (at, ...rest) => {
+  const s = lstat(at, ...rest);
+  if (s && at === path.join(dir, "film.mp4")) s.uid += 1;
+  return s;
+};
+const stat = fs.statSync;
+fs.statSync = (at, ...rest) => {
+  const s = stat(at, ...rest);
+  if (s && at === dir) {
+    s.mode |= 0o1000;
+    s.uid += 1;
+  }
+  return s;
+};
+process.stdout.write(out.heldBackIn(dir, ["film.mp4"]) + "\\n");
+out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "the new film")).then(() => process.stdout.write("put in"), (err) => process.stdout.write(err.message));
+`;
+  const r = spawnSync(process.execPath, ["-e", script, dir], { encoding: "utf8", timeout: 20_000 });
+  const theirs = `${path.join(dir, "film.mp4")} is another user's file in a folder with the sticky bit`;
+  const instead = "have that user remove it, or write the new files in another folder, and run again";
+  assert.equal(r.stdout, `${theirs}, so the run would not replace it: ${instead}\ncould not put the new files in ${dir}: ${theirs}, so it was not replaced: ${instead}. ${dir} is as it was.`, r.stderr);
+  assert.deepEqual(snap(dir), { "film.mp4": "their film", "notes.txt": "mine" });
+});
+
 // The look before a run's work threw Node's own error for a folder this
 // user may not search, or a loop of links: what it cannot reach is left to
 // the run, which says why in its own words as it begins.
