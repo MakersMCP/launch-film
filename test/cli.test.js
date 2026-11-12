@@ -317,7 +317,11 @@ test("a plan refuses a kit whose address is a file of the machine's, before anyt
   const before = snap(dir);
   const r = cli("plan", "https://acme-notes.example", "--out", dir, "--brand", file);
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, new RegExp(`^launch-film: brand\\.html gives the site's address as "${escape(`file://${file}`)}", which is not an http or https address: ` +
+  // An address of more than 120 characters is said cut in the middle, as
+  // this one is where TMPDIR's path has more than 64.
+  const url = `file://${file}`;
+  const shown = url.length > 120 ? `${url.slice(0, 60)}...${url.slice(-50)}` : url;
+  assert.match(r.stderr, new RegExp(`^launch-film: brand\\.html gives the site's address as "${escape(shown)}", which is not an http or https address: ` +
     `give a kit made from the site, or the page's words with --words\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
   assert.deepEqual(snap(dir), before);
   // An address with a line break in it, after which the rest read as a line
