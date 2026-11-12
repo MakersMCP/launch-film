@@ -179,6 +179,25 @@ test("a run that has no file descriptor left to start ffmpeg says so and what to
   refused(r, "launch-film could not start ffmpeg: too many files are open (EMFILE). Raise the limit on open files, as ulimit -n does, and run it again.", "EMFILE");
 });
 
+// A program is given two minutes to say its version, as the other kits give
+// it: a machine busy with other work took more than the 20 s it once had.
+test("a program that does not answer within two minutes when asked its version is told of as a machine too busy", { skip }, () => {
+  const asked = path.join(tmp(), "asked");
+  const stub = path.join(tmp(), "late.js");
+  fs.writeFileSync(stub, `const fs = require("fs");
+const cp = require("child_process");
+const real = cp.spawnSync;
+cp.spawnSync = (file, args, opts = {}) => {
+  if (!(Array.isArray(args) && args.includes("-version"))) return real(file, args, opts);
+  fs.writeFileSync(${JSON.stringify(asked)}, String(opts.timeout));
+  return { error: Object.assign(new Error(\`spawnSync \${file} ETIMEDOUT\`), { code: "ETIMEDOUT", errno: -110 }), status: null, signal: "SIGTERM", stdout: "", stderr: "" };
+};
+`);
+  const r = run("ffmpeg", { NODE_OPTIONS: `--require ${stub}` });
+  refused(r, "launch-film could not start ffmpeg: it did not answer within two minutes when asked its version, most often because the machine is too busy. Run it again once it is less busy.", "a late ffmpeg");
+  assert.equal(fs.readFileSync(asked, "utf8"), "120000");
+});
+
 test("doctor says what is wrong with each program on its line, and exits with 1", { skip }, () => {
   const { cases } = where();
   const file = (name) => cases.find((k) => k.name === name).file;

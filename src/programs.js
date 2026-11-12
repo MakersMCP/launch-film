@@ -291,16 +291,21 @@ const SHORT = {
   ENOMEM: "the system has not enough memory to start it (ENOMEM). Run it again once more is free",
 };
 
+// The longest a program is given to say its version: two minutes, as the
+// other kits give it. A machine busy with other work, or a container of
+// 2 GB running every test file at once, took more than 20 s.
+const ASK = 120_000;
+
 // What running `file` with `args` shows of it: "" when it runs, said its
 // version (`said`, a pattern for its first line) when asked, else what is
 // wrong with it, or { short } when the system is short of something.
 function tryRun(file, args, said, name) {
-  const r = spawnSync(file, args, { encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] });
+  const r = spawnSync(file, args, { encoding: "utf8", timeout: ASK, stdio: ["ignore", "pipe", "pipe"] });
   if (r.error) {
     if (Object.hasOwn(SHORT, r.error.code)) return { short: SHORT[r.error.code] };
-    // On a machine too busy for it to start in a minute, as a program that
-    // hangs is rare.
-    if (r.error.code === "ETIMEDOUT") return { short: "it did not answer within 60 s when asked its version, most often because the machine is too busy. Run it again once it is less busy" };
+    // On a machine too busy for it to start in that time, as a program
+    // that hangs is rare.
+    if (r.error.code === "ETIMEDOUT") return { short: "it did not answer within two minutes when asked its version, most often because the machine is too busy. Run it again once it is less busy" };
     return { trouble: `cannot be started: ${worded(r.error)}` };
   }
   const err = String(r.stderr || "");
