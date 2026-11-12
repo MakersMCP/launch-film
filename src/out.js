@@ -994,9 +994,12 @@ function below(pids) {
   return found;
 }
 
-// easybrandkit runs a Chrome of its own, and (0.4.0) on a stop neither ends
+// easybrandkit runs a Chrome of its own, and 0.4.0 on a stop neither ends
 // it nor removes its profile: a stop sent to launch-film alone left that
 // Chrome running for good, and Ctrl-C left its profile in the temp folder.
+// 0.4.1, which launch-film runs through npx, ends its own on a stop, but one
+// on PATH or named by LAUNCH_FILM_EASYBRANDKIT can be older, and a stop
+// ends easybrandkit once STOP_WAIT has passed, whatever it is doing.
 // So the processes below one started with { watch: true } are looked at
 // while it runs, four times a second, and again as a stop or a failure
 // begins, and the profiles in the temp folder that the Chromes among them

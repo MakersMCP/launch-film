@@ -40,7 +40,7 @@ const normHex = (v) => {
 // The commands that may run easybrandkit, in the order they are tried: the
 // one given (a command, or the path of easybrandkit's script), else
 // LAUNCH_FILM_EASYBRANDKIT, else an easybrandkit installed on PATH, else
-// easybrandkit 0.4.0 from npm through npx, then the same release from its
+// easybrandkit 0.4.1 from npm through npx, then the same release from its
 // GitHub repository when npm cannot give it. The version is pinned, so a run
 // never picks up a newer easybrandkit on its own.
 function easybrandkitCommands(given = "") {
@@ -53,7 +53,7 @@ function easybrandkitCommands(given = "") {
   const installed = onPath(windows ? "easybrandkit.cmd" : "easybrandkit");
   if (installed) return [windows ? scriptOfInstalled(installed) : [installed]];
   const npx = windows ? scriptOfNpx() : ["npx"];
-  return [[...npx, "-y", "easybrandkit@0.4.0"], [...npx, "-y", "github:EminBudak/easybrandkit#v0.4.0"]];
+  return [[...npx, "-y", "easybrandkit@0.4.1"], [...npx, "-y", "github:EminBudak/easybrandkit#v0.4.1"]];
 }
 
 // On Windows npx and an installed easybrandkit are .cmd files. Node starts
@@ -95,9 +95,11 @@ async function runEasybrandkit(url, dir, { log = () => {}, command = "" } = {}) 
   }
 }
 
-// The Chrome of easybrandkit 0.4.0 saves a file a page makes it download, of
-// any size, into the Downloads folder of the user it runs as, where nothing
-// removes it, as launch-film's own Chrome no longer does (chrome.js). On Linux
+// The Chrome of easybrandkit 0.4.0 and older saves a file a page makes it
+// download, of any size, into the Downloads folder of the user it runs as,
+// where nothing removes it, as launch-film's own Chrome no longer does
+// (chrome.js). 0.4.1, which launch-film runs through npx, refuses downloads,
+// but one on PATH or named by LAUNCH_FILM_EASYBRANDKIT can be older. On Linux
 // Chrome finds that folder in $XDG_CONFIG_HOME/user-dirs.dirs, so easybrandkit
 // is given such a folder in the run's temp folder, `temp`, that names one
 // there: a download goes with the run. The user's own fontconfig settings,

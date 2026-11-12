@@ -447,7 +447,8 @@ test("a Ctrl-C that ends ffprobe as launch-film waits on it is told of as a stop
 });
 
 // A stand-in easybrandkit that starts a stand-in Chrome and waits, with no
-// handler for a signal, as easybrandkit 0.4.0. Its Chrome makes its profile
+// handler for a signal, as easybrandkit 0.4.0, which an easybrandkit on PATH
+// can still be. Its Chrome makes its profile
 // and its socket folder in the temp folder, as Chrome does, saves its pid
 // in STAND_IN_PID, lets SIGTERM go, and on Ctrl-C removes its socket folder
 // and ends a moment later.

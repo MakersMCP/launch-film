@@ -45,7 +45,7 @@ test("the easybrandkit to run: a script path, a command, one on PATH, else npm a
   assert.deepEqual(easybrandkitCommands("my-easybrandkit --flag"), [["my-easybrandkit", "--flag"]]);
   await withPath(dir, () => {
     const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-    assert.deepEqual(easybrandkitCommands(), [[npx, "-y", "easybrandkit@0.4.0"], [npx, "-y", "github:EminBudak/easybrandkit#v0.4.0"]]);
+    assert.deepEqual(easybrandkitCommands(), [[npx, "-y", "easybrandkit@0.4.1"], [npx, "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
     const installed = path.join(dir, process.platform === "win32" ? "easybrandkit.cmd" : "easybrandkit");
     fs.writeFileSync(installed, "", { mode: 0o755 });
     assert.deepEqual(easybrandkitCommands(), [[installed]]);
@@ -53,19 +53,19 @@ test("the easybrandkit to run: a script path, a command, one on PATH, else npm a
 });
 
 test("when npx cannot fetch easybrandkit from npm, it is fetched from GitHub", { skip: noShell }, async () => {
-  await withFakeNpx({ "easybrandkit@0.4.0": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.0": WRITES_KIT }, async (dir, asked) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
     assert.equal(await runEasybrandkit("https://example.com", path.join(dir, "out")), path.join(dir, "out", "brand.json"));
-    assert.deepEqual(asked(), ["easybrandkit@0.4.0", "github:EminBudak/easybrandkit#v0.4.0"]);
+    assert.deepEqual(asked(), ["easybrandkit@0.4.1", "github:EminBudak/easybrandkit#v0.4.1"]);
   });
-  await withFakeNpx({ "easybrandkit@0.4.0": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.0": NOT_ON_NPM }, async (dir) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": NOT_ON_NPM, "github:EminBudak/easybrandkit#v0.4.1": NOT_ON_NPM }, async (dir) => {
     await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")), /could not be fetched \(npm error code E404\)\. Install easybrandkit \(npm install -g easybrandkit\)/);
   });
 });
 
 test("an easybrandkit that ran and failed is not run again", { skip: noShell }, async () => {
-  await withFakeNpx({ "easybrandkit@0.4.0": CANNOT_OPEN, "github:EminBudak/easybrandkit#v0.4.0": WRITES_KIT }, async (dir, asked) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": CANNOT_OPEN, "github:EminBudak/easybrandkit#v0.4.1": WRITES_KIT }, async (dir, asked) => {
     await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")), /easybrandkit failed \(exit 1\).*Could not open https:\/\/example\.com/);
-    assert.deepEqual(asked(), ["easybrandkit@0.4.0"]);
+    assert.deepEqual(asked(), ["easybrandkit@0.4.1"]);
   });
 });
 
@@ -75,9 +75,9 @@ test("an easybrandkit that ran and failed is not run again", { skip: noShell }, 
 test("npm's notices and warnings are not given as the reason easybrandkit failed", { skip: noShell }, async () => {
   const notice = ["npm notice", "npm notice New major version of npm available! 10.9.9 -> 12.2.2", "npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2",
     "npm notice To update run: npm install -g npm@12.2.2", "npm notice"].map((line) => `echo "${line}" >&2`).join("; ");
-  const fails = `echo "npm warn exec The following package was not found and will be installed: easybrandkit@0.4.0" >&2; echo "Opening $3..." >&2; ` +
+  const fails = `echo "npm warn exec The following package was not found and will be installed: easybrandkit@0.4.1" >&2; echo "Opening $3..." >&2; ` +
     `echo "easybrandkit: Could not open $3: net::ERR_CONNECTION_REFUSED" >&2; ${notice}; exit 1`;
-  await withFakeNpx({ "easybrandkit@0.4.0": fails }, async (dir) => {
+  await withFakeNpx({ "easybrandkit@0.4.1": fails }, async (dir) => {
     await assert.rejects(runEasybrandkit("https://example.com", path.join(dir, "out")),
       { message: "easybrandkit failed (exit 1): Opening https://example.com... easybrandkit: Could not open https://example.com: net::ERR_CONNECTION_REFUSED" });
   });
@@ -116,10 +116,10 @@ test("on Windows the script behind npx.cmd and easybrandkit.cmd is run with Node
     fs.writeFileSync(file, text, { mode: 0o755 });
     return file;
   };
-  assert.deepEqual(commandsOnWindows(dir), [["npx.cmd", "-y", "easybrandkit@0.4.0"], ["npx.cmd", "-y", "github:EminBudak/easybrandkit#v0.4.0"]]);
+  assert.deepEqual(commandsOnWindows(dir), [["npx.cmd", "-y", "easybrandkit@0.4.1"], ["npx.cmd", "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
   put("npx.cmd");
   const cli = put(path.join("node_modules", "npm", "bin", "npx-cli.js"));
-  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, cli, "-y", "easybrandkit@0.4.0"], [process.execPath, cli, "-y", "github:EminBudak/easybrandkit#v0.4.0"]]);
+  assert.deepEqual(commandsOnWindows(dir), [[process.execPath, cli, "-y", "easybrandkit@0.4.1"], [process.execPath, cli, "-y", "github:EminBudak/easybrandkit#v0.4.1"]]);
   const installed = put("easybrandkit.cmd");
   assert.deepEqual(commandsOnWindows(dir), [[installed]]);
   put(path.join("node_modules", "easybrandkit", "package.json"), JSON.stringify({ bin: { easybrandkit: "skills/easybrandkit/scripts/easybrandkit.js" } }));
@@ -169,7 +169,7 @@ test("a temp folder too long for Chrome's socket is not given", { skip: process.
   assert.equal(tempEnv(null).TMPDIR, process.env.TMPDIR);
 });
 
-// easybrandkit 0.4.0 starts a Chrome of its own with its own environment, so
+// easybrandkit starts a Chrome of its own with its own environment, so
 // the stand-ins that keep a page from starting a program (chrome.js) reach
 // that Chrome through easybrandkit's PATH, the rest of PATH as it was.
 test("easybrandkit runs with the stand-ins for xdg-open and the like first on its PATH, on Linux", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, async () => {
@@ -192,7 +192,8 @@ fs.writeFileSync(out + "/brand.json", "{}");`);
   }
 });
 
-// easybrandkit 0.4.0's Chrome saves a file a page makes it download into the
+// The Chrome of easybrandkit 0.4.0 and older, which one on PATH can still
+// be, saves a file a page makes it download into the
 // Downloads folder of the user it runs as, where nothing removes it. This
 // stand-in starts the machine's Chrome as easybrandkit does, with the
 // environment it was given, on a page that makes it save one.
