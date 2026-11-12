@@ -857,13 +857,20 @@ test("an earlier film or plan the user made read-only refuses a render or a plan
 // The one-go film saves its frames, and stills of an address their pictures,
 // in folders of the film's, and an earlier one the user made read-only was
 // named only once the plan, the render and the frames were done. One the run
-// would not replace is no reason to stop it.
-test("an earlier frame or still the user made read-only refuses the one-go film or stills of an address before any work, and one they would not replace does not", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not write, and ffmpeg" }, () => {
+// would not replace is no reason to stop it, as a frame of a clip or a
+// gallery picture of an earlier, longer film is not: how many of those a run
+// makes is its plan's, so they are looked at once the plan is made, and the
+// sheet, STILLS.md and the other pictures before any work.
+test("an earlier frame or still the user made read-only refuses the one-go film or stills of an address before the render or the stills, and one they would not replace does not", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not write, and ffmpeg" }, () => {
   const given = ["--brand", fixture, "--words", path.join(fixture, "words.json")];
   const film = ["https://acme-notes.example"];
   const stills = ["stills", "https://acme-notes.example", "--for", "og,ph"];
-  for (const [args, file, refused] of [[film, "frames/sheet.jpg", true], [film, "frames/clip-12-b.jpg", true], [film, "frames/notes.txt", false],
-    [stills, "stills/og.png", true], [stills, "stills/ph-4.png", true], [stills, "stills/STILLS.md", true], [stills, "stills/x.png", false]]) {
+  // Refused before any work, once the plan is made, or not at all. The test
+  // brand's plan has 7 clips, and at 20 s 5: Product Hunt's gallery then
+  // ends at ph-6.png, and at ph-4.png.
+  for (const [args, file, refused] of [[film, "frames/sheet.jpg", "first"], [film, "frames/clip-7-b.jpg", "planned"], [film, "frames/clip-9-a.jpg", false], [film, "frames/notes.txt", false],
+    [stills, "stills/og.png", "first"], [stills, "stills/STILLS.md", "first"], [stills, "stills/ph-6.png", "planned"], [[...stills, "--seconds", "20"], "stills/ph-6.png", false],
+    [stills, "stills/x.png", false]]) {
     const dir = filmFolder();
     const earlier = path.join(dir, file);
     fs.mkdirSync(path.dirname(earlier), { recursive: true });
@@ -872,11 +879,14 @@ test("an earlier frame or still the user made read-only refuses the one-go film 
     const before = snap(dir);
     const chrome = noteChrome();
     const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, ...args, "--out", dir, ...given);
+    const named = `${args.join(" ")}: ${file}`;
     assert.equal(r.status, 1, r.stderr);
-    if (refused) assert.equal(r.stderr, `launch-film: ${earlier} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again\n`, file);
-    else assert.doesNotMatch(r.stderr, /may not be written/, file);
-    assert.equal(chrome.started(), !refused, file);
-    assert.deepEqual(snap(dir), before, file);
+    const line = `launch-film: ${earlier} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again\n`;
+    if (refused === "first") assert.equal(r.stderr, line, named);
+    else if (refused) assert.ok(r.stderr.endsWith(`\n${line}launch-film: ${dir} is as it was.\n`), `${named}: ${r.stderr}`);
+    else assert.doesNotMatch(r.stderr, /may not be written/, named);
+    assert.equal(chrome.started(), !refused, named);
+    assert.deepEqual(snap(dir), before, named);
   }
 });
 

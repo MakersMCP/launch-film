@@ -292,21 +292,10 @@ function planArgs(flags, url, outputs) {
   return { words, brandFile };
 }
 
-// The earlier files in the folder `name` of the film's folder `dir` that a
-// run would replace there, those `made` takes, by their paths from `dir`:
-// the frames the one-go film saves, the stills of an address. One that
-// cannot be read is left to the run.
-function earlierIn(dir, name, made) {
-  try {
-    return fs.readdirSync(path.join(dir, name)).filter(made).map((file) => path.join(name, file));
-  } catch {
-    return [];
-  }
-}
-
 // Reads the brand and the page and plans the film, in the run's part
 // folder: brand/, words.json and film.json take the place of the folder's
-// own when the run ends well. `inputs` is what planArgs read.
+// own when the run ends well. `inputs` is what planArgs read. Returns the
+// film.json and the film it holds.
 async function makePlan(url, flags, run, inputs) {
   const { runEasybrandkit, readBrand } = require("../src/brand");
   const { readWords, webPage } = require("../src/words");
@@ -405,7 +394,7 @@ async function makePlan(url, flags, run, inputs) {
   if (more) tried.push(`The page tried to open such an address ${more} more time${more > 1 ? "s" : ""}: ${linux ? "none was opened." : "Chrome hands each to the system, which may have opened a program for it."}`);
   for (const note of [...brand.notes, ...tried]) say(`note: ${note}\n`);
   say(`Planned ${film.clips.length} clips in the ${film.look} look: ${where(filmFile)}\n`);
-  return { filmFile };
+  return { filmFile, film };
 }
 
 async function render(filmFile, flags) {
@@ -564,11 +553,15 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      const inputs = planArgs(flags, url, [...PLANNED, "stills", ...earlierIn(folderFor(url, flags), "stills", stillsMade(flags.for))]);
+      const inputs = planArgs(flags, url, [...PLANNED, "stills", ...stillsMade(flags.for).map((name) => path.join("stills", name))]);
       ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
-        const { filmFile } = await makePlan(url, flags, run, inputs);
+        const { filmFile, film } = await makePlan(url, flags, run, inputs);
+        // How many pictures Product Hunt's gallery has is the plan's, so
+        // its earlier ones are looked at once the plan is made.
+        const held = heldBackIn(path.join(run.dir, "stills"), stillsMade(flags.for, film.clips));
+        if (held) throw new Error(held);
         return makeStills(filmFile, { targets: flags.for, log: say });
       });
     }
@@ -579,14 +572,18 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
-  const { SHOT_STILLS } = require("../src/frames");
-  const film = isPlan ? [] : ["film.mp4", "film.timeline.json", "frames", ...earlierIn(folderFor(url, flags), "frames", (name) => SHOT_STILLS.test(name))];
-  const inputs = planArgs(flags, url, [...PLANNED, ...film]);
+  const { framesMade } = require("../src/frames");
+  const made = isPlan ? [] : ["film.mp4", "film.timeline.json", "frames", ...framesMade().map((name) => path.join("frames", name))];
+  const inputs = planArgs(flags, url, [...PLANNED, ...made]);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {
-    const { filmFile } = await makePlan(url, flags, run, inputs);
+    const { filmFile, film } = await makePlan(url, flags, run, inputs);
     if (isPlan) return;
+    // Two frames for each of the plan's clips, looked at once the plan is
+    // made, before the render.
+    const held = heldBackIn(path.join(run.dir, "frames"), framesMade(film.clips.length));
+    if (held) throw new Error(held);
     const result = await render(filmFile, flags);
     await frames(result.output, { out: path.join(run.part, "frames") });
   });

@@ -46,19 +46,25 @@ function parseTargets(text) {
   return [...new Set(list)];
 }
 
-// Whether a file's name is one of those the stills of `targets` make: their
-// pictures, the gallery's numbered ones whatever their number, and
-// STILLS.md. What a run of them replaces in a stills folder there.
-function stillsMade(targets) {
-  const names = new Set(["STILLS.md"]);
-  const numbered = [];
+// The files the stills of `targets` make, what a run of them replaces in a
+// stills folder there: STILLS.md and the pictures, Product Hunt's gallery
+// after its first picture numbered from 2, one for each clip galleryClips
+// keeps of the film's `clips`, as drawStills draws them. Without `clips`,
+// the files every film gets: stills of an address know how many the gallery
+// has only once their plan is made.
+function stillsMade(targets, clips = null) {
+  const names = ["STILLS.md"];
   for (const key of parseTargets(targets)) {
     for (const t of TARGETS[key]) {
-      if (t.kind === "frames") numbered.push(new RegExp(`^${t.name}-\\d+\\.png$`));
-      else names.add(`${t.name}.png`);
+      if (t.kind !== "frames") names.push(`${t.name}.png`);
+      else if (clips) {
+        // The first picture shows the site's screen when the film has one.
+        const count = galleryClips(clips, { heroScreen: clips.some((c) => c.kind === "screen") }).length;
+        for (let n = 2; n < 2 + count; n++) names.push(`${t.name}-${n}.png`);
+      }
     }
   }
-  return (name) => names.has(name) || numbered.some((re) => re.test(name));
+  return names;
 }
 
 // The film's clips for the gallery after its first picture: all but the
