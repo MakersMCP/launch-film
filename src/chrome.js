@@ -177,12 +177,19 @@ function openerFolder() {
   const dir = tempDir("launch-film-bin-");
   for (const name of OPENERS) save(path.join(dir, name), name === "xdg-settings" ? "#!/bin/sh\nexit 0\n" : STAND_IN);
   for (const name of OPENERS) fs.chmodSync(path.join(dir, name), 0o700);
-  const tried = require("child_process").spawnSync(path.join(dir, OPENERS[0]), [], { timeout: 10_000 });
+  // As long as a program is given to say its version (programs.js): a busy
+  // machine took more than 20 s to start one.
+  const { ASK, short: shortOf } = require("./programs");
+  const tried = require("child_process").spawnSync(path.join(dir, OPENERS[0]), [], { timeout: ASK });
   if (tried.error || tried.status !== 0) {
     release(dir);
-    // The system short of a file descriptor or a process is not the disk.
-    const short = require("./programs").short(tried.error, "its stand-ins for xdg-open");
+    // The system short of a file descriptor or a process is not the disk,
+    // and neither is a machine too busy to start the stand-in in that time.
+    const short = shortOf(tried.error, "its stand-ins for xdg-open");
     if (short) throw Object.assign(new Error(short), { short: true });
+    if (tried.error && tried.error.code === "ETIMEDOUT") {
+      throw Object.assign(new Error("launch-film could not run its stand-ins for xdg-open: they did not answer within two minutes, most often because the machine is too busy. Run it again once it is less busy."), { short: true });
+    }
     const why = tried.error && `${(getSystemErrorMap().get(tried.error.errno) || [])[1] || tried.error.code}, ${tried.error.code}`;
     throw new Error(`launch-film could not run its stand-ins for xdg-open in ${dir}${why ? ` (${why})` : ""}, which keep a page from starting a program of the machine's: ` +
       "set TMPDIR to a folder on a disk where programs may run, as one mounted noexec runs none");

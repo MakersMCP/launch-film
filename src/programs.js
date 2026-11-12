@@ -419,4 +419,4 @@ function unstartable(names) {
   return null;
 }
 
-module.exports = { check, unstartable, short, look, named, thereOf, PROGRAMS };
+module.exports = { check, unstartable, short, look, named, thereOf, PROGRAMS, ASK };

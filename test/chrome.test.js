@@ -535,6 +535,35 @@ test("no Chrome starts where the temp folder's path is too long for Chrome's soc
   assert.deepEqual(fs.readdirSync(letters), []);
 });
 
+// The stand-ins are tried for as long as a program is given to say its
+// version. Given 10 s, a machine too busy to start one in that time was told
+// that its temp folder runs no programs.
+test("stand-ins that do not answer within two minutes are told of as a machine too busy, not as a temp folder that runs no programs", { skip: process.platform !== "linux" && "the stand-ins are Linux's" }, () => {
+  const asked = path.join(tmp(), "asked");
+  const stub = path.join(tmp(), "late.js");
+  fs.writeFileSync(stub, `const fs = require("fs");
+const cp = require("child_process");
+const real = cp.spawnSync;
+cp.spawnSync = (file, args, opts = {}) => {
+  if (!/\\/launch-film-bin-[^/]+\\/xdg-open$/.test(String(file))) return real(file, args, opts);
+  fs.writeFileSync(${JSON.stringify(asked)}, String(opts.timeout));
+  return { error: Object.assign(new Error(\`spawnSync \${file} ETIMEDOUT\`), { code: "ETIMEDOUT", errno: -110 }), status: null, signal: "SIGTERM", stdout: null, stderr: null };
+};
+`);
+  const chrome = path.join(tmp(), "chrome");
+  fs.writeFileSync(chrome, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ look: "launch", clips: [{ kind: "scene", seconds: 3, scene: { type: "headline", title: "A title" } }] }));
+  const temp = tmp();
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bin", "launch-film.js"), "render", path.join(dir, "film.json")],
+    { encoding: "utf8", timeout: 60_000, env: { ...process.env, TMPDIR: temp, LAUNCH_FILM_CHROME: chrome, NODE_OPTIONS: `--require ${stub}` } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, "launch-film could not run its stand-ins for xdg-open: they did not answer within two minutes, most often because the machine is too busy. Run it again once it is less busy.\n");
+  assert.equal(fs.readFileSync(asked, "utf8"), "120000");
+  assert.deepEqual(fs.readdirSync(dir), ["film.json"]);
+  assert.deepEqual(fs.readdirSync(temp), []);
+});
+
 // A temp folder on a disk mounted noexec runs none of the stand-ins, and
 // the system then starts the real xdg-open past them: no Chrome starts.
 test("no Chrome starts where the stand-ins for xdg-open and the like cannot be run, and a render says so before any work", { skip: (process.platform !== "linux" && "the stand-ins are Linux's") || (spawnSync("unshare", ["-rm", "true"]).status !== 0 && "unshare -rm cannot make a mount namespace here") }, () => {
