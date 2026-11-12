@@ -75,9 +75,10 @@ Stills options (the pictures and STILLS.md go to stills/ next to film.json):
 
 A run that fails or is stopped leaves the folder it writes to as it was.
 Set LAUNCH_FILM_CONFINE=1 when others give launch-film their film.json,
-brand.json or kit: each may then name only files in its own folder, none
-of them a list of other files for ffmpeg to open, such as an HLS playlist,
-and a kit may hold no link out of it.
+brand.json, kit or film: each may then name only files in its own folder,
+none of them a list of other files for ffmpeg to open, such as an HLS
+playlist, a kit may hold no link out of it, and check and frames refuse a
+film that is such a list.
 Everything renders on this machine with Chrome and ffmpeg. No account or key.
 `;
 

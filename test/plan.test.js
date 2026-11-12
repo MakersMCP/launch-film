@@ -333,6 +333,74 @@ test("with LAUNCH_FILM_CONFINE set, a track or a picture that is a list of other
   }
 });
 
+// ffmpeg skips an ID3v2 tag at a file's start before it looks for its kind,
+// and reads past every tag there before it reads a list: ffmpeg 4.4.2 read
+// an HLS playlist behind a tag of 10 bytes, whose header has a NUL byte, and
+// 4.4.2 and 8.0.1 a DASH manifest so, each naming a sound outside the folder.
+// ffmpeg's probe looks past the first tag only, where a second tag with no
+// NUL in its header can hold the manifest's mark, while the manifest past it
+// names its root with a prefix, as <d:MPD.
+test("with LAUNCH_FILM_CONFINE set, a list of other files behind ID3v2 tags is refused as the track or a picture", async () => {
+  const { dir } = filmWithMusic();
+  const outside = path.join(tmp(), "other-job.m4a");
+  fs.writeFileSync(outside, "");
+  // A tag of `size` bytes after its header, or, given `mark`, one with no NUL
+  // in its header and the mark in its body, as ffmpeg's probe reads it.
+  const tag = (size = 0, mark = null) => {
+    if (mark === null) return Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, (size >> 21) & 0x7f, (size >> 14) & 0x7f, (size >> 7) & 0x7f, size & 0x7f, ...Buffer.alloc(size)]);
+    const body = Buffer.alloc(2 ** 21 + 2 ** 14 + 2 ** 7 + 1, 0x20);
+    body.write(mark);
+    return Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 3, 1, 1, 1, 1, 1, 1]), body]);
+  };
+  const hls = `#EXTM3U\n#EXT-X-TARGETDURATION:12\n#EXTINF:12,\n${outside}\n#EXT-X-ENDLIST\n`;
+  const mpd = (p = "") => `<?xml version="1.0"?>\n<${p}MPD xmlns${p ? `:${p.slice(0, -1)}` : ""}="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static">` +
+    `<${p}Period><${p}AdaptationSet mimeType="audio/mp4"><${p}Representation id="a" bandwidth="1"><${p}BaseURL>${outside}</${p}BaseURL></${p}Representation></${p}AdaptationSet></${p}Period></${p}MPD>\n`;
+  const files = {
+    "music/hls.wav": [tag(), hls],
+    "music/dash.wav": [tag(), mpd()],
+    "music/footer.wav": [Buffer.from([0x49, 0x44, 0x33, 4, 0, 0x10, 0, 0, 0, 2]), Buffer.alloc(12), mpd()],
+    "music/two.wav": [tag(), tag(20), hls],
+    "music/marked.wav": [tag(), tag(0, "<MPD "), mpd("d:")],
+    "brand/hls.png": [tag(), hls],
+    "brand/dash.png": [tag(), mpd()],
+  };
+  fs.mkdirSync(path.join(dir, "music"));
+  for (const [name, parts] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), Buffer.concat(parts.map((p) => Buffer.from(p))));
+  // A track whose tag holds such a mark only in a frame past a NUL is a track.
+  const song = new Bus(6);
+  for (let i = 0; i < song.length; i++) song.L[i] = song.R[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR);
+  writeWav(path.join(dir, "music", "song.wav"), song);
+  fs.writeFileSync(path.join(dir, "music", "tagged.wav"), Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 20]), Buffer.from("TIT2\0\0\0\x0a\0\0\0<MPD>#EXT", "latin1"),
+    fs.readFileSync(path.join(dir, "music", "song.wav"))]));
+  const file = path.join(dir, "film.json");
+  const film = (music, image) => fs.writeFileSync(file, JSON.stringify({ look: "launch", music, clips: [
+    { kind: "screen", seconds: 2.5, image }, { kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }));
+  const saved = process.env.LAUNCH_FILM_CONFINE;
+  const rule = "whose files ffmpeg would open wherever they are, and LAUNCH_FILM_CONFINE allows only files in film.json's folder";
+  try {
+    process.env.LAUNCH_FILM_CONFINE = "1";
+    for (const [track, list] of [["hls", "an HLS playlist"], ["dash", "a DASH manifest"], ["footer", "a DASH manifest"], ["two", "an HLS playlist"], ["marked", "a DASH manifest"]]) {
+      film(`music/${track}.wav`, "brand/screenshot-1.png");
+      const loaded = loadFilm(file);
+      assert.deepEqual(loaded.problems, [], track);
+      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "music/${track}.wav" is ${list}, ${rule}: give the track itself`], track);
+    }
+    for (const [picture, list] of [["hls", "an HLS playlist"], ["dash", "a DASH manifest"]]) {
+      film(false, `brand/${picture}.png`);
+      assert.deepEqual(loadFilm(file).problems, [`clips[0].image "brand/${picture}.png" is ${list}, ${rule}: give the picture itself`], picture);
+    }
+    film("music/tagged.wav", "brand/screenshot-1.png");
+    assert.deepEqual(loadFilm(file).problems, []);
+    if (available()) assert.deepEqual((await checkMusic(loadFilm(file))).problems, []);
+    delete process.env.LAUNCH_FILM_CONFINE;
+    film("music/dash.wav", "brand/dash.png");
+    assert.deepEqual(loadFilm(file).problems, []);
+  } finally {
+    if (saved === undefined) delete process.env.LAUNCH_FILM_CONFINE;
+    else process.env.LAUNCH_FILM_CONFINE = saved;
+  }
+});
+
 test("a path goes into a command line as one word the shell takes as it is", () => {
   assert.equal(shellWord("/films/acme-notes/music", "linux"), "/films/acme-notes/music");
   assert.equal(shellWord("/films/Emin's films `touch PWNED` $HOME/music", "darwin"), "'/films/Emin'\\''s films `touch PWNED` $HOME/music'");

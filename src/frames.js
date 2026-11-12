@@ -14,6 +14,7 @@ const path = require("path");
 const { input, writePicture, mustRun, probe, readPixels, writePng } = require("./ffmpeg");
 const draw = require("./draw");
 const { within } = require("./out");
+const { filmListed } = require("./confine");
 
 // A path as one value inside an ffmpeg filter graph. ffmpeg unquotes the
 // graph twice: once to split it into filters, where '...' is taken as it is
@@ -245,6 +246,9 @@ async function contactSheet(stills, file, { title = "", cols = 4 } = {}) {
 // the same names once all are made (out.js).
 async function saveFrames(file, { out = null } = {}) {
   const film = path.resolve(file);
+  // A list of other files, with LAUNCH_FILM_CONFINE set, as check refuses it.
+  const listed = filmListed(film, file);
+  if (listed) throw new Error(listed);
   const info = probe(film);
   if (!info.duration) throw new Error(`${file} could not be read as a video${info.failed ? ` (${info.failed})` : ""}`);
   const dir = path.resolve(out || path.join(path.dirname(film), "frames"));

@@ -770,6 +770,31 @@ test("check and frames say why ffprobe would not read a film, as a guard that op
   }
 });
 
+// A film given to check or frames is read by ffprobe and ffmpeg as a track
+// or a picture is: a DASH manifest behind an ID3v2 tag, named film.mp4, made
+// both open a film of another job's.
+test("with LAUNCH_FILM_CONFINE set, check and frames refuse a film that is a list of other files before ffprobe opens it", { skip: (process.platform === "win32" && "the stand-in is a shell script") || (!available() && "ffmpeg not found") }, () => {
+  const { FFPROBE } = require("../src/ffmpeg");
+  const dir = tmp();
+  const outside = path.join(tmp(), "other-job.mp4");
+  const made = spawnSync(FFMPEG, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=25:d=1", "-pix_fmt", "yuv420p", outside], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const film = path.join(dir, "film.mp4");
+  fs.writeFileSync(film, Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 0]), Buffer.from(`<?xml version="1.0"?>\n<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" ` +
+    `profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" mediaPresentationDuration="PT1S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">` +
+    `<BaseURL>${outside}</BaseURL></Representation></AdaptationSet></Period></MPD>\n`)]));
+  const opened = path.join(dir, "opened");
+  const probe = path.join(tmp(), "ffprobe");
+  fs.writeFileSync(probe, `#!/bin/sh\ncase " $* " in *" ${film} "*) : > '${opened}';; esac\nexec ${JSON.stringify(FFPROBE)} "$@"\n`, { mode: 0o755 });
+  for (const command of ["check", "frames"]) {
+    const r = cliWith({ LAUNCH_FILM_CONFINE: "1", LAUNCH_FILM_FFPROBE: probe }, command, film, "--out", path.join(dir, command));
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stderr, `launch-film: ${film} is a DASH manifest, whose files ffmpeg would open wherever they are, which LAUNCH_FILM_CONFINE does not allow: give the film itself\n`, command);
+    assert.ok(!fs.existsSync(path.join(dir, command)), `${command}: its folder was made`);
+    assert.ok(!fs.existsSync(opened), `${command}: ffprobe opened the film`);
+  }
+});
+
 // A Chrome that notes it was started and fails, in place of the real one.
 function noteChrome() {
   const started = path.join(tmp(), "chrome-started");

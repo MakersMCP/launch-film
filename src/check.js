@@ -21,6 +21,7 @@ const frames = require("./frames");
 const { readCues } = require("./cues");
 const draw = require("./draw");
 const { within, save } = require("./out");
+const { filmListed } = require("./confine");
 
 const RULES = {
   // What a film may hold at its start and its end (a fade in, an end card).
@@ -197,6 +198,10 @@ async function checkFilm(file, opts = {}) {
   const allow = parseAllow(opts.allow);
   const film = path.resolve(file);
   if (!fs.existsSync(film)) throw new Error(`${file} is not a file`);
+  // With LAUNCH_FILM_CONFINE set, a film that is a list of other files is
+  // refused before ffprobe, which would open them, reads it (confine.js).
+  const listed = filmListed(film, file);
+  if (listed) throw new Error(listed);
   const info = probe(film);
   // ffprobe's own words when it would not read the film, as a guard that
   // opens no name with a % in it, or a film the user may not read.
