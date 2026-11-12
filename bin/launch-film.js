@@ -82,6 +82,10 @@ film that is such a list.
 Everything renders on this machine with Chrome and ffmpeg. No account or key.
 `;
 
+// What a plan puts in the film's folder: words.json and film.json, and
+// brand/, which takes the place of the folder's own whole.
+const PLANNED = ["words.json", "film.json", "brand"];
+
 // The options each command takes, as they are written. Any other is refused
 // by name: an option dropped without a word reads as one that worked.
 const PLANS = ["out", "brand", "words", "easybrandkit", "look", "seconds", "aspect", "no-music", "no-sfx", "verbose"];
@@ -254,7 +258,8 @@ function folderFor(url, flags) {
 // left to makePlan, and so is a plan of an App Store page, which is read
 // from the store when easybrandkit cannot read it. An earlier file of the
 // folder's that the run would not replace, among `outputs`, refuses it too,
-// before the site is read (out.js heldBack).
+// before the site is read (out.js heldBack), and so does a folder among them
+// this user may not write in.
 function planArgs(flags, url, outputs) {
   if (!flags.brand && !require("../src/store").appStoreId(url)) {
     const own = path.join(folderFor(url, flags), "brand");
@@ -547,7 +552,7 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      const inputs = planArgs(flags, url, ["words.json", "film.json"]);
+      const inputs = planArgs(flags, url, [...PLANNED, "stills"]);
       ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
@@ -562,7 +567,7 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
-  const inputs = planArgs(flags, url, ["words.json", "film.json", ...(isPlan ? [] : ["film.mp4", "film.timeline.json"])]);
+  const inputs = planArgs(flags, url, [...PLANNED, ...(isPlan ? [] : ["film.mp4", "film.timeline.json", "frames"])]);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {

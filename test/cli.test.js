@@ -851,6 +851,31 @@ test("an earlier film or plan the user made read-only refuses a render or a plan
   assert.ok(!chrome.started(), "a Chrome was started");
 });
 
+// A folder a plan moves aside whole (brand/), or that the one-go film or
+// stills of an address put their files in (frames/, stills/), that the user
+// may not write in was refused only once all the work was done, as held open
+// by another program.
+test("a brand, frames or stills folder the user may not write in refuses a plan, the one-go film or stills of an address before any work", { skip: (process.platform === "win32" || process.getuid() === 0) && "a folder its user may not write in" }, () => {
+  const chrome = noteChrome();
+  const given = ["--brand", fixture, "--words", path.join(fixture, "words.json")];
+  for (const [args, name] of [[["plan", "https://acme-notes.example"], "brand"], [["https://acme-notes.example"], "frames"], [["stills", "https://acme-notes.example", "--for", "og"], "stills"]]) {
+    const dir = filmFolder();
+    const folder = path.join(dir, name);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.chmodSync(folder, 0o555);
+    try {
+      const before = snap(dir);
+      const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, ...args, "--out", dir, ...given);
+      assert.equal(r.status, 1, r.stderr);
+      assert.equal(r.stderr, `launch-film: ${folder} may not be written in (EACCES), so the run would not change it: make it writable, and run again\n`, name);
+      assert.deepEqual(snap(dir), before, name);
+    } finally {
+      fs.chmodSync(folder, 0o755);
+    }
+  }
+  assert.ok(!chrome.started(), "a Chrome was started");
+});
+
 // The look for such a file before any work ended a render or a plan into a
 // folder this user may not search in Node's own words ("EACCES: permission
 // denied, lstat '<file>'"): what it cannot look at is left to the run, which

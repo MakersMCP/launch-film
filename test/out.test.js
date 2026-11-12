@@ -1189,6 +1189,70 @@ test("an earlier file the user made read-only is refused by name before anything
   assert.equal(fs.readFileSync(theirs, "utf8"), "the user's own");
 });
 
+// A folder the run adds its files to, or moves aside whole, that the user
+// may not write in was said to be held open by another program, named by
+// the run's own lock in it, and the user was told to close a file.
+test("a folder the user may not write in is named as that, before a run's work and at its commit", { skip: (process.platform === "win32" || process.getuid() === 0) && "a folder its user may not write in" }, async () => {
+  for (const name of ["frames", "brand"]) {
+    const dir = tmp();
+    write(dir, EARLIER);
+    const folder = path.join(dir, name);
+    fs.chmodSync(folder, 0o555);
+    try {
+      const before = snap(dir);
+      assert.equal(out.heldBackIn(dir, ["film.mp4", name]), `${folder} may not be written in (EACCES), so the run would not change it: make it writable, and run again`);
+      const err = await out.within(dir, async (run) => make(run)).catch((e) => e);
+      assert.equal(err.message, `could not put the new files in ${dir}: ${folder} may not be written in (EACCES): make it writable, and run again. ${dir} is as it was.`, name);
+      assert.deepEqual(snap(dir), before, name);
+    } finally {
+      fs.chmodSync(folder, 0o755);
+    }
+  }
+  // Another reason the system gives for a move is said in its words.
+  const dir = tmp();
+  write(dir, EARLIER);
+  const before = snap(dir);
+  const real = fs.renameSync;
+  let refused = false;
+  fs.renameSync = (from, to) => {
+    if (!refused && to === path.join(dir, "film.mp4")) {
+      refused = true;
+      throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: "EPERM" });
+    }
+    return real(from, to);
+  };
+  try {
+    const err = await out.within(dir, async (run) => make(run)).catch((e) => e);
+    assert.equal(err.message, `could not put the new files in ${dir}: ${path.join(dir, "film.mp4")}: operation not permitted (EPERM). ${dir} is as it was.`);
+  } finally {
+    fs.renameSync = real;
+  }
+  assert.deepEqual(snap(dir), before);
+});
+
+// On Windows a file another program holds open, as a virus scanner may, is
+// not moved: there the refusal says to close it.
+test("on Windows a file another program holds open is said to be, with what to do", () => {
+  const dir = tmp();
+  write(dir, { "film.mp4": "old film" });
+  const script = `
+const fs = require("fs");
+const path = require("path");
+Object.defineProperty(process, "platform", { value: "win32" });
+const out = require(${JSON.stringify(path.join(__dirname, "..", "src", "out.js"))});
+const dir = process.argv[1];
+const real = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (from === path.join(dir, "film.mp4")) throw Object.assign(new Error("EBUSY: resource busy or locked, rename"), { code: "EBUSY" });
+  return real(from, to);
+};
+out.within(dir, async (run) => fs.writeFileSync(run.out("film.mp4"), "new film")).then(() => process.stdout.write("put in"), (err) => process.stdout.write(err.message));
+`;
+  const r = spawnSync(process.execPath, ["-e", script, dir], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.stdout, `could not put the new files in ${dir}: ${path.join(dir, "film.mp4")} is held open by another program, or may not be changed (EBUSY). ${dir} is as it was; close the file and run again.`, r.stderr);
+  assert.deepEqual(snap(dir), { "film.mp4": "old film" });
+});
+
 // makersmcp's worker copies an earlier job's files into a new job's folder
 // as its own, and the job's user may read them and not write them, while
 // it may write in the folder. A render there was refused as if the user had

@@ -552,10 +552,12 @@ function survey(from, to, whole, found) {
 }
 
 // The refusal the commit would give for an earlier file of `names` in the
-// folder `dir` (heldBack), or null: asked before a run's long work, as a
-// render's clips or a plan's read of the site, so that it comes first. What
-// cannot be looked at, in a folder this user may not search or through a
-// loop of links, is left to the run, which says why as it begins (begin).
+// folder `dir` (heldBack), or for one of them that is a folder this user may
+// not write in, as the run puts its files in it or moves it aside whole; or
+// null. Asked before a run's long work, as a render's clips or a plan's read
+// of the site, so that it comes first. What cannot be looked at, in a folder
+// this user may not search or through a loop of links, is left to the run,
+// which says why as it begins (begin).
 function heldBackIn(dir, names) {
   for (const name of names) {
     const to = path.join(path.resolve(dir), name);
@@ -565,7 +567,16 @@ function heldBackIn(dir, names) {
     } catch {
       return null;
     }
-    const held = there && heldBack(to, there, "so the run would not replace it");
+    if (!there) continue;
+    if (there.isDirectory()) {
+      try {
+        fs.accessSync(to, fs.constants.W_OK);
+      } catch (err) {
+        return `${shown(to)} may not be written in (${err.code}), so the run would not change it: make it writable, and run again`;
+      }
+      continue;
+    }
+    const held = heldBack(to, there, "so the run would not replace it");
     if (held) return held.message;
   }
   return null;
@@ -658,14 +669,29 @@ async function commit(run) {
   finish(run, names);
 }
 
-// Why a commit failed, said for the person who runs it again.
+// The folder a lock or a move refused with EACCES needed to write in: the
+// folder the lock is in, a folder moved aside whole, or the folder a file is
+// in, by `rel`, its path from the run's folder `dir`.
+function writtenIn(dir, rel) {
+  const at = path.join(dir, rel);
+  if (path.basename(rel) === LOCK) return path.dirname(at);
+  const s = lstat(at);
+  return s && s.isDirectory() ? at : path.dirname(at);
+}
+
+// Why a commit failed, said for the person who runs it again. On Windows a
+// file another program holds open, as a virus scanner may, is not moved
+// until that program lets go of it. Elsewhere EACCES is a folder this user
+// may not write in, named as the user's own (writtenIn), and any other
+// reason is the system's.
 function failed(run, err, stuck, left) {
   run.said = true;
   const at = shown(path.join(run.dir, err.at || ""));
-  const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
+  const held = process.platform === "win32" && ["EBUSY", "EPERM", "EACCES"].includes(err.code);
   // A message that names its own paths (a lock another run holds) is said
   // as it is.
-  const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})` : `${at}: ${reason(err)}`;
+  const why = err.at === null ? err.message : held ? `${at} is held open by another program, or may not be changed (${err.code})`
+    : err.code === "EACCES" ? `${shown(writtenIn(run.dir, err.at || ""))} may not be written in (EACCES): make it writable, and run again` : `${at}: ${reason(err)}`;
   const start = `could not put the new files in ${shown(run.dir)}: ${why}.`;
   if (!stuck.length && !left.length) {
     // Told of again by a stop that comes before this failure is: a commit
