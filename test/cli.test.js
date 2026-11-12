@@ -851,6 +851,30 @@ test("an earlier film or plan the user made read-only refuses a render or a plan
   assert.ok(!chrome.started(), "a Chrome was started");
 });
 
+// The look for such a file before any work ended a render or a plan into a
+// folder this user may not search in Node's own words ("EACCES: permission
+// denied, lstat '<file>'"): what it cannot look at is left to the run, which
+// names the folder and the reason as it begins.
+test("a render or a plan into a folder this user may not search says so as it begins, in its own words", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a folder its user may not search, and ffmpeg" }, () => {
+  const dir = filmFolder();
+  const chrome = noteChrome();
+  const locked = path.join(tmp(), "locked");
+  fs.mkdirSync(locked);
+  fs.chmodSync(locked, 0o600);
+  try {
+    const render = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "render", path.join(dir, "film.json"), "--output", path.join(locked, "film.mp4"));
+    assert.equal(render.status, 1, render.stderr);
+    assert.equal(render.stderr, `launch-film: cannot write in ${locked}: permission denied (EACCES)\n`);
+    const plan = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, "plan", "https://acme-notes.example", "--out", locked, "--brand", fixture, "--words", path.join(fixture, "words.json"));
+    assert.equal(plan.status, 1, plan.stderr);
+    assert.equal(plan.stderr, `launch-film: cannot write in ${locked}: permission denied (EACCES)\n`);
+  } finally {
+    fs.chmodSync(locked, 0o755);
+  }
+  assert.deepEqual(fs.readdirSync(locked), []);
+  assert.ok(!chrome.started(), "a Chrome was started");
+});
+
 test("a render refuses an --output it could not write the film to before any Chrome is started", { skip: (process.platform === "win32" && "the stand-in Chrome is a shell script") || (!available() && "ffmpeg not found") }, () => {
   const dir = filmFolder();
   fs.rmSync(path.join(dir, "film.mp4"));

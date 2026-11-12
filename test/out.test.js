@@ -1231,6 +1231,24 @@ out.within(dir, async (run) => {
     `${path.join(dir, "film.mp4")} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again`);
 });
 
+// The look before a run's work threw Node's own error for a folder this
+// user may not search, or a loop of links: what it cannot reach is left to
+// the run, which says why in its own words as it begins.
+test("what the look before a run's work cannot reach is left to the run", { skip: process.platform === "win32" && "links and modes" }, async () => {
+  const loop = path.join(tmp(), "loop");
+  fs.symlinkSync(loop, loop);
+  assert.equal(out.heldBackIn(loop, ["film.mp4"]), null);
+  if (process.getuid() === 0) return;
+  const locked = tmp();
+  fs.chmodSync(locked, 0o600);
+  try {
+    assert.equal(out.heldBackIn(locked, ["film.mp4", "film.timeline.json"]), null);
+    await assert.rejects(out.within(locked, async () => {}), { message: `cannot write in ${locked}: permission denied (EACCES)` });
+  } finally {
+    fs.chmodSync(locked, 0o755);
+  }
+});
+
 test("a commit waits for a run that holds the folder, and takes over from one that is gone", async () => {
   const dir = tmp();
   write(dir, { "film.mp4": "old film" });

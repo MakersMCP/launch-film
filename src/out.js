@@ -553,11 +553,18 @@ function survey(from, to, whole, found) {
 
 // The refusal the commit would give for an earlier file of `names` in the
 // folder `dir` (heldBack), or null: asked before a run's long work, as a
-// render's clips or a plan's read of the site, so that it comes first.
+// render's clips or a plan's read of the site, so that it comes first. What
+// cannot be looked at, in a folder this user may not search or through a
+// loop of links, is left to the run, which says why as it begins (begin).
 function heldBackIn(dir, names) {
   for (const name of names) {
     const to = path.join(path.resolve(dir), name);
-    const there = lstat(to);
+    let there;
+    try {
+      there = lstat(to);
+    } catch {
+      return null;
+    }
     const held = there && heldBack(to, there, "so the run would not replace it");
     if (held) return held.message;
   }
