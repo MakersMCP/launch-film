@@ -17,6 +17,9 @@ const { probe, pictureSize, coverPng } = require("./ffmpeg");
 const { prepareIcon, prepareLogo } = require("./logo");
 const { markEnd } = require("./plan");
 const { within, reason, save } = require("./out");
+// A name film.json gives, and a path made from one, on one line and cut when
+// long (confine.js).
+const { said, saidPath } = require("./confine");
 
 // What each target makes. kind: hero (mark, promise and screen), tile (the
 // mark alone) or frames (the film's scenes, for the rest of a gallery).
@@ -79,7 +82,7 @@ function windowPart(w, h) {
 // the window drew several times wider than it was.
 async function stillPictures({ screen = null, shots = [], work }) {
   const files = {};
-  const copy = (s, opts) => pagePicture(s.src, { ...opts, out: path.join(work, s.file), what: `making a copy of ${s.src}`, named: s.named });
+  const copy = (s, opts) => pagePicture(s.src, { ...opts, out: path.join(work, s.file), what: `making a copy of ${saidPath(s.src)}`, named: s.named });
   if (screen) files[screen.file] = await copy(screen, { maxW: 2400, part: windowPart });
   for (const s of shots) files[s.file] = await copy(s, { maxW: 2400, maxH: 2400 });
   return files;
@@ -159,9 +162,9 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   };
   const screenClip = clips.find((c) => c.kind === "screen");
   const shotsClip = clips.find((c) => c.kind === "shots") || clips.find((c) => c.kind === "phone");
-  const screen = screenClip ? serve(screenClip.imageFile, "screen", `clips[${screenClip.index}].image ${JSON.stringify(String(screenClip.image))}`) : null;
-  const shots = !shotsClip ? [] : shotsClip.imageFiles ? shotsClip.imageFiles.map((f, k) => serve(f, `shot-${k}`, `clips[${shotsClip.index}].images[${k}] ${JSON.stringify(String(shotsClip.images[k]))}`))
-    : [serve(shotsClip.imageFile, "shot-0", `clips[${shotsClip.index}].image ${JSON.stringify(String(shotsClip.image))}`)];
+  const screen = screenClip ? serve(screenClip.imageFile, "screen", `clips[${screenClip.index}].image "${said(screenClip.image)}"`) : null;
+  const shots = !shotsClip ? [] : shotsClip.imageFiles ? shotsClip.imageFiles.map((f, k) => serve(f, `shot-${k}`, `clips[${shotsClip.index}].images[${k}] "${said(shotsClip.images[k])}"`))
+    : [serve(shotsClip.imageFile, "shot-0", `clips[${shotsClip.index}].image "${said(shotsClip.image)}"`)];
   const files = {
     ...(mark.file ? { "mark.png": fs.readFileSync(mark.file) } : {}),
     ...(square ? { "square.png": fs.readFileSync(square.file) } : {}),

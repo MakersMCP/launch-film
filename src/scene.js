@@ -12,6 +12,8 @@ const path = require("path");
 const zlib = require("zlib");
 const { LOOKS } = require("./motion");
 const { loadFont } = require("./fonts");
+// A name film.json gives, on one line and cut when long (confine.js).
+const { said } = require("./confine");
 
 // ─── icons ─────────────────────────────────────────────────────────────────
 // Phosphor Icons (MIT): name → { fill, bold } SVG bodies on a 256 grid.
@@ -117,7 +119,7 @@ function parseScene(spec, { look = "launch", portrait = false, brand = {} } = {}
     const name = String(value).toLowerCase().trim();
     if (!Object.hasOwn(icons(), name)) {
       const near = iconSearch(name.split("-")[0]).slice(0, 8);
-      problems.push(`${where} "${name}" is not an icon${near.length ? ` (near: ${near.join(", ")})` : ""}; search with: launch-film icons <word>`);
+      problems.push(`${where} "${said(name)}" is not an icon${near.length ? ` (near: ${near.join(", ")})` : ""}; search with: launch-film icons <word>`);
       return "";
     }
     return name;

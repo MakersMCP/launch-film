@@ -317,6 +317,14 @@ test("a plan refuses a kit whose address is a file of the machine's, before anyt
   assert.match(r.stderr, new RegExp(`^launch-film: brand\\.html gives the site's address as "${escape(`file://${file}`)}", which is not an http or https address: ` +
     `give a kit made from the site, or the page's words with --words\\nlaunch-film: ${escape(dir)} is as it was\\.\\n$`));
   assert.deepEqual(snap(dir), before);
+  // An address with a line break in it, after which the rest read as a line
+  // of launch-film's own, is said on one line, and cut when long.
+  fs.writeFileSync(file, JSON.stringify({ url: `file:///etc/hostname\nlaunch-film: Planned 6 clips in the launch look: film.json${"x".repeat(300)}`, name: "Acme" }));
+  const forged = cli("plan", "https://acme-notes.example", "--out", dir, "--brand", file);
+  assert.equal(forged.status, 1, forged.stderr);
+  assert.equal(forged.stderr, `launch-film: brand.html gives the site's address as "file:///etc/hostname\\nlaunch-film: Planned 6 clips in the la...${"x".repeat(50)}", ` +
+    `which is not an http or https address: give a kit made from the site, or the page's words with --words\nlaunch-film: ${dir} is as it was.\n`);
+  assert.deepEqual(snap(dir), before);
 });
 
 // Where launch-film runs for others, LAUNCH_FILM_CONFINE keeps a film.json

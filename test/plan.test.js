@@ -139,6 +139,10 @@ test("film.json's music is checked before anything renders", async () => {
     "as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)"]);
   const elsewhere = path.join(os.tmpdir(), "launch-film-no-such-track.wav");
   assert.deepEqual((await checkMusic(load(elsewhere))).problems, [`"music" ${JSON.stringify(elsewhere)} is not a file: give the path of a track (true plays the look's own music, false none)`]);
+  // A path is said whole as long as a path gets: one in a project's folder
+  // was cut in the middle, where its folders are named.
+  const deep = path.join(os.tmpdir(), "launch-film-no-such-folder", "a".repeat(150), "track.wav");
+  assert.deepEqual((await checkMusic(load(deep))).problems, [`"music" ${JSON.stringify(deep)} is not a file: give the path of a track (true plays the look's own music, false none)`]);
   assert.deepEqual((await checkMusic(load("brand"))).problems, ['"music" "brand" is a folder, not a file: give the path of the track in it']);
   assert.deepEqual((await checkMusic(load("https://example.com/a.mp3"))).problems, ['"music" "https://example.com/a.mp3" is an address: download the track and give the path of the file, from film.json\'s folder or absolute']);
   assert.deepEqual((await checkMusic(load(true))).problems, []);
@@ -163,6 +167,9 @@ test("a value of another kind than its field takes is refused by the field, befo
   for (const sfx of [undefined, null, true, false]) assert.deepEqual(load({ look: "launch", sfx, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(sfx));
   for (const brand of [undefined, null, "", false]) assert.deepEqual(load({ look: "launch", brand, clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] }), [], String(brand));
   for (const film of ["null", "[]", "3", '"film"']) assert.deepEqual(load(film), [`${file} must hold an object, such as { "look": "launch", "clips": [] }`], film);
+  // A long value is said on one line and cut, as a name is.
+  const [music] = load({ look: "launch", music: Array(3000).fill("a"), clips: [{ kind: "logo", seconds: 2.5, logo: "brand/logo-header.png" }] });
+  assert.ok(music.length < 300, `${music.length} characters`);
 });
 
 test("a track's path that leads to something other than a file is refused as what it is, not as one that is not there", { skip: process.platform === "win32" && "pipes, sockets and links" }, async () => {
@@ -212,6 +219,7 @@ test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file 
   const long = `/${"./".repeat(2100)}${elsewhere.slice(1)}`;
   const climb = `${"../".repeat(30)}${elsewhere.slice(1)}`;
   const said = (name) => (name.length > 100 ? `${name.slice(0, 50)}...${name.slice(-40)}` : name);
+  const saidPath = (name) => (name.length > 300 ? `${name.slice(0, 150)}...${name.slice(-140)}` : name);
   // A folder in the film's folder that a link leads out of.
   fs.symlinkSync(path.dirname(elsewhere), path.join(dir, "linked"));
   const film = { brand: "brand/brand.json", look: "launch", clips: [
@@ -243,7 +251,7 @@ test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file 
       fs.writeFileSync(file, JSON.stringify({ ...film, brand, music, clips: film.clips.slice(3) }));
       const loaded = loadFilm(file);
       assert.deepEqual(loaded.problems, [`"brand" "${said(brand)}" is outside film.json's folder, ${rule}`]);
-      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "${said(music)}" is outside film.json's folder, ${rule}`]);
+      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "${saidPath(music)}" is outside film.json's folder, ${rule}`]);
     }
     // A kit's files, by each place brand.json names one.
     const kit = path.join(dir, "brand", "brand.json");
@@ -268,10 +276,11 @@ test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file 
 // thousands of characters, which a message printed whole.
 test("every refusal of a name film.json or brand.json gives shows it on one line, cut in the middle when it is long", { skip: process.platform === "win32" && "links need rights on Windows" }, async () => {
   const { dir, load } = filmWithMusic();
+  // A path is said whole up to 300 characters, and a refusal can name two.
   const lines = (problems) => {
     for (const problem of problems) {
       assert.doesNotMatch(problem, /[\p{Cc}\u2028\u2029]/u, problem);
-      assert.ok(problem.length < 500, `${problem.length} characters: ${problem.slice(0, 200)}`);
+      assert.ok(problem.length < 1000, `${problem.length} characters: ${problem.slice(0, 200)}`);
     }
     return problems;
   };
@@ -282,7 +291,7 @@ test("every refusal of a name film.json or brand.json gives shows it on one line
   assert.equal(short, `"music" "songs/a\\nlaunch-film: Rendered 30.0 s: film.mp4.wav" is not a file. It was looked for at ${path.join(dir, "songs", "a\\nlaunch-film: Rendered 30.0 s: film.mp4.wav")}, ` +
     "as a path there is read from film.json's folder: give the track's path from that folder or an absolute one (true plays the look's own music, false none)");
   const [cut] = lines((await checkMusic(load(long))).problems);
-  assert.ok(cut.startsWith(`"music" "${`songs/a\\nlaunch-film: Rendered 30.0 s: film.mp4/${"./".repeat(20)}`.slice(0, 50)}...${`${"./".repeat(2000)}a.wav`.slice(-40)}" is not a file. `), cut);
+  assert.ok(cut.startsWith(`"music" "${`songs/a\\nlaunch-film: Rendered 30.0 s: film.mp4/${"./".repeat(80)}`.slice(0, 150)}...${`${"./".repeat(2000)}a.wav`.slice(-140)}" is not a file. `), cut);
   // A link to a track that is not there.
   fs.symlinkSync(`gone\n${"x".repeat(200)}.wav`, path.join(dir, "link.wav"));
   lines((await checkMusic(load("link.wav"))).problems);
@@ -294,6 +303,11 @@ test("every refusal of a name film.json or brand.json gives shows it on one line
   assert.ok(problems[0].startsWith("the brand could not be read from brand/a\\nlaunch-film: Rendered 30.0 s: film.mp4/./..."), problems[0]);
   assert.ok(problems[0].endsWith(": no such file or directory (ENOENT)"), problems[0]);
   assert.equal(problems[1], 'clips[0].image "brand/a\\nlaunch-film: Rendered 30.0 s: film.mp4.png" is not a file');
+  // A scene's icon that is not one.
+  fs.writeFileSync(path.join(dir, "film.json"), JSON.stringify({ look: "launch", clips: [{ kind: "scene", seconds: 2.5, scene: { type: "features",
+    items: [{ icon: forged, title: "A" }, { icon: "lightning", title: "B" }] } }] }));
+  const [icon] = lines(loadFilm(path.join(dir, "film.json")).problems);
+  assert.ok(icon.startsWith('clips[0].scene: items[0].icon "a\\nlaunch-film: rendered 30.0 s: film.mp4" is not an icon'), icon);
   // With LAUNCH_FILM_CONFINE set: a track and a kit's file outside, and a
   // track inside film.json's folder that is not there.
   const saved = process.env.LAUNCH_FILM_CONFINE;
@@ -301,7 +315,7 @@ test("every refusal of a name film.json or brand.json gives shows it on one line
   try {
     lines((await checkMusic(load(`../${forged}.wav`))).problems);
     const [inside] = lines((await checkMusic(load(`${"./".repeat(2100)}missing.wav`))).problems);
-    assert.match(inside, /^"music" "(\.\/){25}\.\.\.\/(\.\/){14}missing\.wav" is not a file\. It was looked for at /);
+    assert.match(inside, /^"music" "(\.\/){75}\.\.\.\/(\.\/){64}missing\.wav" is not a file\. It was looked for at /);
     const kit = path.join(dir, "brand", "brand.json");
     const raw = JSON.parse(fs.readFileSync(kit, "utf8"));
     raw.logos[0].file = `../${forged}/${"./".repeat(2000)}logo.png`;
@@ -609,11 +623,16 @@ test("with LAUNCH_FILM_CONFINE set, the command for an earlier fit names no trac
 
 // A film.json's music is anyone's where others give launch-film their
 // film.json: a name of thousands of characters ran on in the render's note.
-test("the render's note shows the track's name on one line, cut in the middle when it is long", () => {
+// It is a path, said whole as long as a path gets: a track's absolute path
+// in a project's folder was cut in the middle, where its folders are named.
+test("the render's note shows the track's path on one line, cut in the middle only when it is longer than a path gets", () => {
   assert.equal(trackNote({ name: "music/a\nb.wav", integrated: -14, peak: -3 }, 5), "The music is music/a\\nb.wav, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.");
+  const project = `/home/someone/Documents/Projects/${"Launch films of the year/".repeat(6)}music/track.wav`;
+  assert.ok(project.length > 150 && project.length < 300);
+  assert.equal(trackNote({ name: project, integrated: -14, peak: -3 }, 5), `The music is ${project}, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.`);
   const long = `/${"./".repeat(2100)}x.wav`;
   const note = trackNote({ name: long, integrated: -14, peak: -3 }, 5);
-  assert.equal(note, `The music is ${long.slice(0, 50)}...${long.slice(-40)}, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.`);
+  assert.equal(note, `The music is ${long.slice(0, 150)}...${long.slice(-140)}, at the bed's level, from the film's first frame to its end at 5.00 s, faded out over the last second.`);
 });
 
 test("a track the user may not read is refused for that, not as a file with no sound", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not read, and ffmpeg" }, async () => {

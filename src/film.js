@@ -151,10 +151,10 @@ function musicOf(value, dir, problems) {
   if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((k) => k === "volume")) {
     const v = value.volume;
     const n = typeof v === "number" || (typeof v === "string" && v.trim()) ? Number(v) : NaN;
-    if (v !== undefined && !(n >= 0 && n <= 2)) problems.push(`"music" "volume" must be a number from 0 to 2 (it is ${JSON.stringify(v)})`);
+    if (v !== undefined && !(n >= 0 && n <= 2)) problems.push(`"music" "volume" must be a number from 0 to 2 (it is ${confine.said(JSON.stringify(v))})`);
     return { bed: true };
   }
-  problems.push(`"music" must be true, false, { "volume": 0.55 } or the path of an audio file (it is ${JSON.stringify(value)})`);
+  problems.push(`"music" must be true, false, { "volume": 0.55 } or the path of an audio file (it is ${confine.said(JSON.stringify(value))})`);
   return { bed: true };
 }
 
@@ -265,8 +265,9 @@ function earlierFit(track, folder, dir) {
 async function checkMusic(loaded) {
   const { music, seconds: total, clips, dir } = loaded;
   if (!music || !music.track) return { track: null, problems: [] };
-  // The name on one line, and cut when long, in every refusal (confine.js).
-  const at = `"music" "${confine.said(music.name)}"`;
+  // The path on one line, and cut when long, in every refusal (confine.js):
+  // as a path, so that a track's folder is said whole.
+  const at = `"music" "${confine.saidPath(music.name)}"`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
   const outside = confine.outside(dir, music.name, "film.json");
@@ -333,11 +334,12 @@ async function checkMusic(loaded) {
 }
 
 // What the render's note says of the user's track (checkMusic's), in a film
-// `seconds` long. Its name is shown on one line, and cut in the middle when
-// it is long, as one made to run to thousands of characters is.
+// `seconds` long. Its path is shown on one line, and cut in the middle when
+// it is longer than a path gets, as one made to run to thousands of
+// characters is.
 function trackNote(track, seconds) {
   const under = (audio.TRACK_LUFS - track.integrated) - 20 * Math.log10(audio.trackGain(track));
-  return `The music is ${confine.said(track.name)}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, ` +
+  return `The music is ${confine.saidPath(track.name)}${under > 0.05 ? `, ${under.toFixed(1)} dB under the bed's level so its peaks stay under full scale` : ", at the bed's level"}, ` +
     `from the film's first frame to its end at ${seconds.toFixed(2)} s, faded out over the last second.`;
 }
 

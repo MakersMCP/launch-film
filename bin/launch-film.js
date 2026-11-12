@@ -364,7 +364,7 @@ async function makePlan(url, flags, run, inputs) {
     // address is not a web page's (a file: one, which Chrome would open with
     // this machine's files in reach) is refused as the kit's.
     if (brand.url && !webPage(brand.url)) {
-      throw new Error(`${path.basename(brandFile)} gives the site's address as "${brand.url.length > 120 ? `${brand.url.slice(0, 120)}...` : brand.url}", which is not an http or https address: give a kit made from the site, or the page's words with --words`);
+      throw new Error(`${path.basename(brandFile)} gives the site's address as "${confine.said(brand.url, 120)}", which is not an http or https address: give a kit made from the site, or the page's words with --words`);
     }
     say(`Reading the words on the page...\n`);
     words = await readWords(brand.url || url, { log: say });
