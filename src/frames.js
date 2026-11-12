@@ -240,6 +240,11 @@ async function contactSheet(stills, file, { title = "", cols = 4 } = {}) {
   return file;
 }
 
+// The names of the stills frames saves of a film of more than one shot, as
+// every film launch-film plans is, and of its contact sheet: what it replaces
+// in a frames folder there.
+const SHOT_STILLS = /^(?:clip-\d+-[ab]|sheet)\.jpg$/;
+
 // The frames command: two stills a shot (once its entrance has played, and
 // near its end) and a contact sheet of them all. A film with one shot gets
 // twelve stills spread evenly. They take the place of the earlier ones of
@@ -274,4 +279,4 @@ async function saveFrames(file, { out = null } = {}) {
   });
 }
 
-module.exports = { saveFrames, scanVideo, detectCuts, findCuts, givenCuts, stillSpan, shotsOf, settled, grabFrames, contactSheet, readTimeline, joinStretches, filterPath };
+module.exports = { saveFrames, SHOT_STILLS, scanVideo, detectCuts, findCuts, givenCuts, stillSpan, shotsOf, settled, grabFrames, contactSheet, readTimeline, joinStretches, filterPath };

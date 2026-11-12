@@ -292,6 +292,18 @@ function planArgs(flags, url, outputs) {
   return { words, brandFile };
 }
 
+// The earlier files in the folder `name` of the film's folder `dir` that a
+// run would replace there, those `made` takes, by their paths from `dir`:
+// the frames the one-go film saves, the stills of an address. One that
+// cannot be read is left to the run.
+function earlierIn(dir, name, made) {
+  try {
+    return fs.readdirSync(path.join(dir, name)).filter(made).map((file) => path.join(name, file));
+  } catch {
+    return [];
+  }
+}
+
 // Reads the brand and the page and plans the film, in the run's part
 // folder: brand/, words.json and film.json take the place of the folder's
 // own when the run ends well. `inputs` is what planArgs read.
@@ -541,7 +553,7 @@ async function main() {
   }
   if (command === "stills") {
     if (!rest[0]) fail("give the site's address or a film.json, e.g. launch-film stills example.com --for ph,og");
-    const { makeStills, parseTargets } = require("../src/stills");
+    const { makeStills, parseTargets, stillsMade } = require("../src/stills");
     parseTargets(flags.for);
     let r;
     if (/\.json$/i.test(rest[0])) {
@@ -552,7 +564,7 @@ async function main() {
     } else {
       const url = normaliseUrl(rest[0]);
       if (!url) return fail(`"${rest[0]}" is not an address or a film.json`);
-      const inputs = planArgs(flags, url, [...PLANNED, "stills"]);
+      const inputs = planArgs(flags, url, [...PLANNED, "stills", ...earlierIn(folderFor(url, flags), "stills", stillsMade(flags.for))]);
       ready(url);
       // The plan and the stills are one run: both go in, or neither.
       r = await within(folderFor(url, flags), async (run) => {
@@ -567,7 +579,9 @@ async function main() {
   const isPlan = command === "plan";
   const url = normaliseUrl(isPlan ? rest[0] : command);
   if (!url) return fail(isPlan ? "give the site's address, e.g. launch-film plan example.com" : `"${command}" is not a command or an address. Run launch-film --help.`);
-  const inputs = planArgs(flags, url, [...PLANNED, ...(isPlan ? [] : ["film.mp4", "film.timeline.json", "frames"])]);
+  const { SHOT_STILLS } = require("../src/frames");
+  const film = isPlan ? [] : ["film.mp4", "film.timeline.json", "frames", ...earlierIn(folderFor(url, flags), "frames", (name) => SHOT_STILLS.test(name))];
+  const inputs = planArgs(flags, url, [...PLANNED, ...film]);
   ready(url);
   // The plan, the film and its frames are one run: all go in, or none.
   await within(folderFor(url, flags), async (run) => {

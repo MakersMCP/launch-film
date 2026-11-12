@@ -851,6 +851,32 @@ test("an earlier film or plan the user made read-only refuses a render or a plan
   assert.ok(!chrome.started(), "a Chrome was started");
 });
 
+// The one-go film saves its frames, and stills of an address their pictures,
+// in folders of the film's, and an earlier one the user made read-only was
+// named only once the plan, the render and the frames were done. One the run
+// would not replace is no reason to stop it.
+test("an earlier frame or still the user made read-only refuses the one-go film or stills of an address before any work, and one they would not replace does not", { skip: (process.platform === "win32" || process.getuid() === 0 || !available()) && "a file its user may not write, and ffmpeg" }, () => {
+  const given = ["--brand", fixture, "--words", path.join(fixture, "words.json")];
+  const film = ["https://acme-notes.example"];
+  const stills = ["stills", "https://acme-notes.example", "--for", "og,ph"];
+  for (const [args, file, refused] of [[film, "frames/sheet.jpg", true], [film, "frames/clip-12-b.jpg", true], [film, "frames/notes.txt", false],
+    [stills, "stills/og.png", true], [stills, "stills/ph-4.png", true], [stills, "stills/STILLS.md", true], [stills, "stills/x.png", false]]) {
+    const dir = filmFolder();
+    const earlier = path.join(dir, file);
+    fs.mkdirSync(path.dirname(earlier), { recursive: true });
+    fs.writeFileSync(earlier, "an earlier one");
+    fs.chmodSync(earlier, 0o444);
+    const before = snap(dir);
+    const chrome = noteChrome();
+    const r = cliWith({ LAUNCH_FILM_CHROME: chrome.chrome }, ...args, "--out", dir, ...given);
+    assert.equal(r.status, 1, r.stderr);
+    if (refused) assert.equal(r.stderr, `launch-film: ${earlier} may not be written (EACCES), so the run would not replace it: make it writable or remove it, and run again\n`, file);
+    else assert.doesNotMatch(r.stderr, /may not be written/, file);
+    assert.equal(chrome.started(), !refused, file);
+    assert.deepEqual(snap(dir), before, file);
+  }
+});
+
 // A folder a plan moves aside whole (brand/), or that the one-go film or
 // stills of an address put their files in (frames/, stills/), that the user
 // may not write in was refused only once all the work was done, as held open

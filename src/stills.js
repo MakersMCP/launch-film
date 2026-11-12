@@ -46,6 +46,21 @@ function parseTargets(text) {
   return [...new Set(list)];
 }
 
+// Whether a file's name is one of those the stills of `targets` make: their
+// pictures, the gallery's numbered ones whatever their number, and
+// STILLS.md. What a run of them replaces in a stills folder there.
+function stillsMade(targets) {
+  const names = new Set(["STILLS.md"]);
+  const numbered = [];
+  for (const key of parseTargets(targets)) {
+    for (const t of TARGETS[key]) {
+      if (t.kind === "frames") numbered.push(new RegExp(`^${t.name}-\\d+\\.png$`));
+      else names.add(`${t.name}.png`);
+    }
+  }
+  return (name) => names.has(name) || numbered.some((re) => re.test(name));
+}
+
 // The film's clips for the gallery after its first picture: all but the
 // opener (the first picture says what it says) and the screen the first
 // picture shows; at most five, the close kept last.
@@ -220,4 +235,4 @@ async function drawStills(filmFile, { film, brand, clips }, { chosen, outDir, ru
   return { dir: outDir, files: made, notes };
 }
 
-module.exports = { makeStills, parseTargets, galleryClips, windowPart, stillPictures, TARGETS };
+module.exports = { makeStills, parseTargets, stillsMade, galleryClips, windowPart, stillPictures, TARGETS };
