@@ -183,7 +183,8 @@ const { CONTROL, oneLine } = confine;
 // The musicfit command that fits a track to the film, `seconds` long with
 // its hit at `hit`, into `folder`, as the refusal of a short track gives it:
 // `from` is the track to fit, by its path, or null when it was not found,
-// and `name` the name of that track, when known. Each path is one word the
+// and `name` the name of that track, when known, else `of` says which track
+// the word in its place stands for. Each path is one word the
 // shell takes as it is (shellWord). In the place of a path that was not
 // found, or that no quoting holds, goes a word in angle brackets, quoted
 // the same way, so a shell that runs the command reads no quote, ; or $( )
@@ -191,13 +192,13 @@ const { CONTROL, oneLine } = confine;
 // after the command. A name no quoting holds either goes in the sentence
 // alone, after the plain word <track>. A name is shown on one line, and cut
 // in the middle when it is long.
-function musicfitCommand({ from, name = "", folder, seconds, hit }, platform = process.platform) {
+function musicfitCommand({ from, name = "", of = "the track it was made from", folder, seconds, hit }, platform = process.platform) {
   const shown = name ? confine.said(name) : "";
   const stand = shellWord(`<${shown || "track"}>`, platform) ? `<${shown || "track"}>` : "<track>";
-  const words = [[from, stand, shown || "the track it was made from"], [folder, "<folder>"]].map(([file, word, of]) => {
+  const words = [[from, stand, shown || of], [folder, "<folder>"]].map(([file, word, which]) => {
     const quoted = file && shellWord(file, platform);
     if (quoted) return { text: quoted };
-    return { text: shellWord(word, platform), said: file ? `${word} being ${oneLine(file)} quoted for your shell` : `${word} being the path of ${of}` };
+    return { text: shellWord(word, platform), said: file ? `${word} being ${oneLine(file)} quoted for your shell` : `${word} being the path of ${which}` };
   });
   const said = words.filter((w) => w.said).map((w) => w.said);
   return `npx musicfit@latest ${words[0].text} --length ${+seconds.toFixed(3)} --hit ${+hit.toFixed(3)} --fps ${FPS} --out ${words[1].text}${said.length ? `, ${said.join(" and ")}` : ""}`;
@@ -270,8 +271,16 @@ async function checkMusic(loaded) {
   const at = `"music" "${confine.saidPath(music.name)}"`;
   const refuse = (problem) => ({ track: null, problems: [problem] });
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(music.name)) return refuse(`${at} is an address: download the track and give the path of the file, from film.json's folder or absolute`);
+  // In the folder, the track named from there, or fitted there: a fit made
+  // next to the film's folder, as makersmcp's fit_music makes one by
+  // default, is outside it. The track is not looked at, nor named in the
+  // command, as it may be any file of the machine (earlierFit).
+  const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
   const outside = confine.outside(dir, music.name, "film.json");
-  if (outside) return refuse(`${at} ${outside}, and LAUNCH_FILM_CONFINE allows only files in it`);
+  if (outside) {
+    return refuse(`${at} ${outside}, and LAUNCH_FILM_CONFINE allows only files in it: copy the track into that folder and give its path from there, or fit it into that folder with ` +
+      `${musicfitCommand({ from: null, of: "the track to fit", folder: path.join(dir, "music"), seconds: total, hit: close })}, then set "music" in film.json to "music/fitted.wav"`);
+  }
   const instead = "give the path of a track (true plays the look's own music, false none)";
   let kind = null;
   let missed = null;
@@ -313,7 +322,6 @@ async function checkMusic(loaded) {
   if (sound.failed) return refuse(`${at} could not be read: ${sound.failed}`);
   // musicfit gives a length to the millisecond: half a frame short is whole.
   if (sound.seconds < total - 0.5 / FPS) {
-    const close = clips.length ? total - clips[clips.length - 1].seconds : 0;
     // In a folder of its own in the film's: the path set in film.json stays
     // good, whatever else musicfit is asked to do next to the film. The
     // command is written to be run as it is, from any folder

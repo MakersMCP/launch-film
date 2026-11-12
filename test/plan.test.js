@@ -247,11 +247,15 @@ test("with LAUNCH_FILM_CONFINE set, a film.json or brand.json that names a file 
     // The brand and the track, which only a render reads, whether or not a
     // file is there.
     const brand = `${"../".repeat(30)}${path.join(path.dirname(elsewhere), "brand.json").slice(1)}`;
-    for (const music of [long, "../no-such-track.wav"]) {
+    // The refusal of the track says what to do: a fit made next to the
+    // film's folder, as makersmcp's fit_music makes one, is outside it.
+    const fit = `npx musicfit@latest '<track>' --length 2.5 --hit 0 --fps 25 --out ${shellWord(path.join(dir, "music"))}, <track> being the path of the track to fit`;
+    for (const music of [long, "../no-such-track.wav", "../musicfit-track/fitted.wav"]) {
       fs.writeFileSync(file, JSON.stringify({ ...film, brand, music, clips: film.clips.slice(3) }));
       const loaded = loadFilm(file);
       assert.deepEqual(loaded.problems, [`"brand" "${said(brand)}" is outside film.json's folder, ${rule}`]);
-      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "${saidPath(music)}" is outside film.json's folder, ${rule}`]);
+      assert.deepEqual((await checkMusic(loaded)).problems, [`"music" "${saidPath(music)}" is outside film.json's folder, ${rule}: copy the track into that folder and give its path from there, ` +
+        `or fit it into that folder with ${fit}, then set "music" in film.json to "music/fitted.wav"`]);
     }
     // A kit's files, by each place brand.json names one.
     const kit = path.join(dir, "brand", "brand.json");
